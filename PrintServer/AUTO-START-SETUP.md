@@ -13,6 +13,9 @@ This guide explains how to ensure your print server starts automatically when yo
    - Start the service now
    - Verify everything is configured correctly
 
+
+
+
 **That's it!** After this, the service will start automatically on every boot.
 
 ### Option 2: Detailed Setup Script
