@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.deleteHoldSaleController = exports.retrieveHoldSaleController = exports.createHoldSaleController = exports.getHoldSalesController = exports.getRecentSaleItemProductNameAndPrice = exports.getTodaySalesController = exports.refundSaleController = exports.createSaleController = exports.getSaleByIdController = exports.getSalesForReturnsController = exports.getSalesController = void 0;
+exports.deleteHoldSaleController = exports.retrieveHoldSaleController = exports.createHoldSaleController = exports.getHoldSalesController = exports.getRecentSaleItemProductNameAndPrice = exports.getTodaySalesController = exports.updateSaleController = exports.refundSaleController = exports.createSaleController = exports.getSaleByIdController = exports.getSalesForReturnsController = exports.getSalesController = void 0;
 const asyncHandler_1 = __importDefault(require("../middleware/asyncHandler"));
 const sales_service_1 = require("../services/sales.service");
 const apiResponse_1 = require("../utils/apiResponse");
@@ -124,6 +124,16 @@ const refundSaleController = (0, asyncHandler_1.default)(async (req, res) => {
     new apiResponse_1.ApiResponse(sale, "Sale refunded/exchanged successfully").send(res);
 });
 exports.refundSaleController = refundSaleController;
+const updateSaleController = (0, asyncHandler_1.default)(async (req, res) => {
+    const saleId = req.params.saleId;
+    const createdBy = req.user.id;
+    const sale = await saleService.updateSale(saleId, {
+        ...req.body,
+        createdBy
+    });
+    new apiResponse_1.ApiResponse(sale, "Sale updated successfully").send(res);
+});
+exports.updateSaleController = updateSaleController;
 const getTodaySalesController = (0, asyncHandler_1.default)(async (req, res) => {
     const sales = await saleService.getTodaySales({ branchId: req.user?.branch_id });
     new apiResponse_1.ApiResponse(sales, "Today's sales fetched successfully").send(res);

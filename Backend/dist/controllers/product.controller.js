@@ -284,25 +284,32 @@ exports.getBestSellingProducts = (0, asyncHandler_1.default)(async (req, res) =>
     new apiResponse_1.ApiResponse(bestSellingProducts, 'Best selling products retrieved successfully', 200).send(res);
 });
 exports.bulkUploadProducts = (0, asyncHandler_1.default)(async (req, res) => {
-    if (!req.file) {
-        return new apiResponse_1.ApiResponse(null, 'No file uploaded', 400).send(res);
-    }
-    const ext = path_1.default.extname(req.file.originalname).toLowerCase();
     let products = [];
-    if (ext === '.csv') {
-        const csvString = req.file.buffer.toString('utf-8');
-        products = (0, sync_1.parse)(csvString, {
-            columns: true,
-            skip_empty_lines: true,
-        });
-    }
-    else if (ext === '.xlsx' || ext === '.xls') {
-        const workbook = xlsx_1.default.read(req.file.buffer, { type: 'buffer' });
-        const sheetName = workbook.SheetNames[0];
-        products = xlsx_1.default.utils.sheet_to_json(workbook.Sheets[sheetName]);
+    // Check if we already have the products in the request body (Staging Commit)
+    if (req.body && req.body.products && Array.isArray(req.body.products)) {
+        products = req.body.products;
     }
     else {
-        return new apiResponse_1.ApiResponse(null, 'Unsupported file type', 400).send(res);
+        // Fallback to file processing (Legacy/Immediate Upload)
+        if (!req.file) {
+            return new apiResponse_1.ApiResponse(null, 'No file or products data provided', 400).send(res);
+        }
+        const ext = path_1.default.extname(req.file.originalname).toLowerCase();
+        if (ext === '.csv') {
+            const csvString = req.file.buffer.toString('utf-8');
+            products = (0, sync_1.parse)(csvString, {
+                columns: true,
+                skip_empty_lines: true,
+            });
+        }
+        else if (ext === '.xlsx' || ext === '.xls') {
+            const workbook = xlsx_1.default.read(req.file.buffer, { type: 'buffer' });
+            const sheetName = workbook.SheetNames[0];
+            products = xlsx_1.default.utils.sheet_to_json(workbook.Sheets[sheetName]);
+        }
+        else {
+            return new apiResponse_1.ApiResponse(null, 'Unsupported file type', 400).send(res);
+        }
     }
     // Validate and create/update products
     const results = [];

@@ -128,7 +128,7 @@ const WebsiteOrders: React.FC = () => {
     const orderTotal = Number(order.total_amount) || subtotal;
 
     return {
-      storeName: "MANPASAND GENERAL STORE",
+      storeName: "SARWAT TRADERS",
       tagline: "Quality • Service • Value",
       address: "Karachi",
       transactionId: order.order_number,

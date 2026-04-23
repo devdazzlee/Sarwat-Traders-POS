@@ -30,6 +30,7 @@ import {
   Printer,
   CalendarIcon,
   Eye,
+  Edit3,
   Loader2,
   ChevronLeft,
   ChevronRight,
@@ -51,6 +52,7 @@ import {
 } from "@/components/ui/dialog";
 import { printReceiptViaServer, type ReceiptData } from "@/lib/print-server";
 import { usePrinterSettings } from "@/hooks/use-printer-settings";
+import { SaleEditor } from "./sale-editor";
 
 interface SaleItem {
   id: string;
@@ -125,7 +127,7 @@ const buildReceiptBranchLine = (
 ): string => {
   const name = typeof storeName === "string" ? storeName.trim() : "";
   
-  if (!name || ["ADMIN", "MANPASAND GENERAL STORE"].includes(name.toUpperCase())) {
+  if (!name || ["ADMIN", "SARWAT TRADERS"].includes(name.toUpperCase())) {
     return "Karachi, Pakistan";
   }
 
@@ -138,9 +140,10 @@ export function SalesHistory() {
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(false);
   const [viewSale, setViewSale] = useState<Sale | null>(null);
+  const [editSale, setEditSale] = useState<Sale | null>(null);
   const [viewLoading, setViewLoading] = useState(false);
   const [branchInfo, setBranchInfo] = useState<BranchInfo>({
-    name: "MANPASAND GENERAL STORE",
+    name: "SARWAT TRADERS",
     address: "Karachi",
   });
   const [receiptHtml, setReceiptHtml] = useState<string>("");
@@ -287,7 +290,7 @@ export function SalesHistory() {
         
         setBranchInfo((prev) => ({
           ...prev,
-          name: branchStr,
+          name: branchInfo.name, // Keep existing if error, though we use state here
         }));
         const branchRes = await apiClient.get(`/branches/${branchStr}`);
         setBranchInfo({
@@ -379,7 +382,7 @@ export function SalesHistory() {
       };
     });
 
-    const storeName = sale.branch?.name || branch.name || "MANPASAND GENERAL STORE";
+    const storeName = sale.branch?.name || branch.name || "SARWAT TRADERS";
     const storeAddress = sale.branch?.address || branch.address || "";
 
     return {
@@ -414,7 +417,6 @@ export function SalesHistory() {
     const change = data.changeAmount ?? 0;
     const timestamp = data.timestamp ? new Date(data.timestamp) : new Date();
     
-    // Format money like PrintServer (with commas, no currency symbol in number)
     const money = (n: number) => {
       return Number(n).toLocaleString('en-US', {
         minimumFractionDigits: 2,
@@ -438,16 +440,14 @@ export function SalesHistory() {
     const promoHtml = data.promo ? `<div class="promo">Promo: ${data.promo}</div>` : "";
     const branchLine = buildReceiptBranchLine(data.storeName, data.address);
     
-    // Footer lines matching PrintServer
     const footerLines = [
       'Branch: 021 34892110',
       'Delivery Hotline WhatsApp: +92 342 3344040',
-      'Website: Manpasandstore.com'
+      'Website: sarwattraders.com'
     ];
     
     const footerHtml = footerLines.map(line => `<div class="footer-line">${line}</div>`).join('');
     
-    // Ace Studios section matching PrintServer
     const aceHtml = `
 <div class="divider-thin"></div>
 <div class="powered-by">Powered by Ace Studios</div>
@@ -1096,13 +1096,23 @@ ${aceHtml}
                             {s.status}
                           </Badge>
                         </TableCell>
-                        <TableCell>
+                        <TableCell className="flex gap-1">
                           <Button
                             size="sm"
                             variant="ghost"
                             onClick={() => handleViewSale(s.id)}
+                            title="View Receipt"
                           >
                             <Eye className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setEditSale(s)}
+                            title="Edit Sale"
+                            className="text-amber-600 hover:text-amber-700 hover:bg-amber-50"
+                          >
+                            <Edit3 className="h-4 w-4" />
                           </Button>
                         </TableCell>
                       </TableRow>
@@ -1316,6 +1326,12 @@ ${aceHtml}
           ) : null}
         </DialogContent>
       </Dialog>
+      <SaleEditor 
+        sale={editSale as any} 
+        open={!!editSale} 
+        onOpenChange={(open) => !open && setEditSale(null)} 
+        onSuccess={fetchSales}
+      />
     </div>
   );
 }

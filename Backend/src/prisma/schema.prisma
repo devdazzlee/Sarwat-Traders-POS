@@ -390,6 +390,8 @@ model Purchase {
   sale_price         Decimal
   purchase_date      DateTime               @default(now())
   invoice_ref        String?
+  batch_no           String?
+  expiry_date        DateTime?
   notes              String?
   delivery_status    PurchaseDeliveryStatus  @default(COMPLETE)
   created_by         String
@@ -622,10 +624,17 @@ model Customer {
   is_active          Boolean         @default(true)
   ref_by             String?
   ref_contact_number String?
+
+  // Credit Management
+  credit_limit       Decimal         @default(0)
+  outstanding_balance Decimal        @default(0)
+  whatsapp_number    String?
+
   orders             Order[]
   sales              Sale[] // NEW: Link to sales
   hold_sales         HoldSale[]
   device             DeviceIdentity?
+  ledger_entries     CustomerLedger[]
   created_at         DateTime        @default(now())
   updated_at         DateTime        @default(now()) @updatedAt
 
@@ -882,3 +891,28 @@ model Salary {
   @@index([employee_id])
 }
 
+// Customer Credit Ledger
+model CustomerLedger {
+  id              String              @id @default(uuid())
+  customer_id     String
+  customer        Customer            @relation(fields: [customer_id], references: [id])
+  entry_type      LedgerEntryType
+  amount          Decimal
+  description     String?
+  sale_id         String?             // Reference to sale if entry is from a credit sale
+  reference_no    String?
+  balance_after   Decimal             // Running balance after this entry
+  created_by      String?
+  created_at      DateTime            @default(now())
+
+  @@index([customer_id])
+  @@index([created_at])
+  @@index([entry_type])
+}
+
+enum LedgerEntryType {
+  CREDIT_SALE     // Customer bought on credit (balance increases)
+  PAYMENT_RECEIVED // Customer paid (balance decreases)
+  ADJUSTMENT      // Manual adjustment
+  REFUND          // Refund issued (balance decreases)
+}

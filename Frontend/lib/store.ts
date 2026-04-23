@@ -74,6 +74,8 @@ interface Customer {
   phone?: string
   email?: string
   is_active?: boolean
+  credit_limit?: string | number
+  outstanding_balance?: string | number
 }
 
 interface StoreState {

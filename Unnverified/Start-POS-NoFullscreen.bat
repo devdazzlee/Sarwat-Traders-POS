@@ -1,12 +1,12 @@
 @echo off
 REM ============================================
-REM MANPASAND POS - Silent Printing Only
+REM SARWAT TRADERS POS - Silent Printing Only
 REM (No Fullscreen - Normal Window Mode)
 REM ============================================
 
 echo.
 echo ============================================
-echo   MANPASAND POS - Starting...
+echo   SARWAT TRADERS POS - Starting...
 echo   Mode: Silent Printing (No Fullscreen)
 echo ============================================
 echo.

@@ -17,14 +17,16 @@ const customerLoginSchema = zod_1.z.object({
 exports.customerLoginSchema = customerLoginSchema;
 const customerUpdateSchema = zod_1.z.object({
     body: zod_1.z.object({
-        name: zod_1.z.string().min(1, 'Name is required').optional(),
+        email: zod_1.z.string().email('Invalid email address').optional(),
+        name: zod_1.z.string().optional().nullish(),
         phone_number: zod_1.z
             .string()
-            .min(10, 'Phone number must be at least 10 digits')
             .max(15, 'Phone number must be at most 15 digits')
-            .optional(),
-        address: zod_1.z.string().min(1, 'Address is required').optional(),
-        billing_address: zod_1.z.string().min(1, 'Billing address is required').optional(),
+            .optional()
+            .nullish(),
+        address: zod_1.z.string().optional().nullish(),
+        billing_address: zod_1.z.string().optional().nullish(),
+        credit_limit: zod_1.z.number().optional().nullish(),
     }),
 });
 exports.customerUpdateSchema = customerUpdateSchema;

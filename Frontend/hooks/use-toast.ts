@@ -134,18 +134,29 @@ function dispatch(action: Action) {
 
 type Toast = Omit<ToasterToast, "id">
 
-// No-op toast function - POS system doesn't show toasts
-function toast({ ...props }: Toast) {
-  // Do nothing - POS system doesn't display toasts
+import { toast as sonnerToast } from "sonner"
+
+function toast({ title, description, variant, ...props }: Toast) {
+  const message = title ? `${title}: ${description}` : description;
+  
+  if (variant === "destructive") {
+    sonnerToast.error(title || "Error", {
+      description: description,
+    });
+  } else {
+    sonnerToast.success(title || "Info", {
+      description: description,
+    });
+  }
+
   return {
-    id: '',
+    id: genId(),
     dismiss: () => {},
     update: () => {},
   }
 }
 
 function useToast() {
-  // Return empty state - POS system doesn't show toasts
   return {
     toasts: [],
     toast,

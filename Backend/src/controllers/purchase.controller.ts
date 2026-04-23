@@ -7,15 +7,13 @@ const purchaseService = new PurchaseService();
 
 export const createPurchase = asyncHandler(async (req: Request, res: Response) => {
   const body = req.body;
-  const purchaseDate = body.purchaseDate
-    ? new Date(body.purchaseDate)
-    : undefined;
-  const purchase = await purchaseService.createPurchase({
+  const purchaseDate = body.purchaseDate ? new Date(body.purchaseDate) : new Date();
+  const purchases = await purchaseService.createBulkPurchase({
     ...body,
     purchaseDate,
     createdBy: req.user!.id,
   });
-  new ApiResponse(purchase, 'Purchase logged successfully', 201).send(res);
+  new ApiResponse(purchases, 'Purchases logged successfully', 201).send(res);
 });
 
 export const listPurchases = asyncHandler(async (req: Request, res: Response) => {

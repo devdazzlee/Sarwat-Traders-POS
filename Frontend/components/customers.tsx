@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -48,12 +49,15 @@ import {
   Loader2,
   DollarSign,
   UserCheck,
+  FileText,
+  ArrowUpCircle,
 } from "lucide-react";
 import apiClient from "@/lib/apiClient";
 import { API_BASE } from "@/config/constants";
 import { useToast } from "@/hooks/use-toast";
 import { PageLoader } from "@/components/ui/page-loader";
 import { StatCardSkeleton } from "@/components/ui/stat-card-skeleton";
+import { CustomerLedger } from "./customer-ledger";
 
 interface Customer {
   id: string;
@@ -62,10 +66,16 @@ interface Customer {
   phone_number: string | null;
   address: string | null;
   is_active: boolean;
+  outstanding_balance: number | string;
+  credit_limit: number | string;
   created_at: string;
 }
 
-export function Customers() {
+interface CustomersProps {
+  onViewLedger: (customerId: string) => void;
+}
+
+export function Customers({ onViewLedger }: CustomersProps) {
   const { toast } = useToast();
   
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -79,6 +89,9 @@ export function Customers() {
   const [editingCustomer, setEditingCustomer] = useState<(Customer & { billing_address?: string }) | null>(null);
   const [deleteTargetCustomer, setDeleteTargetCustomer] = useState<Customer | null>(null);
   const [isDeletingCustomer, setIsDeletingCustomer] = useState(false);
+  const [creditSummary, setCreditSummary] = useState({ totalOutstanding: 0, totalPayable: 0 });
+  const [isSummaryLoading, setIsSummaryLoading] = useState(false);
+  const [ledgerCustomerId, setLedgerCustomerId] = useState<string | null>(null);
 
   // 1) Fetch customers
   const fetchCustomers = async () => {
@@ -87,10 +100,6 @@ export function Customers() {
       const res = await apiClient.get(`${API_BASE}/customer`);
       // API shape: { success, message, data: Customer[] }
       setCustomers(res.data.data);
-      toast({
-        title: "Success",
-        description: "Customers loaded successfully",
-      });
     } catch (err: any) {
       console.log(err);
       let errorMessage = "Failed to load customers";
@@ -106,11 +115,26 @@ export function Customers() {
     }
   };
 
+  const fetchCreditSummary = async () => {
+    setIsSummaryLoading(true);
+    try {
+      const res = await apiClient.get(`${API_BASE}/customer-ledger/summary`);
+      setCreditSummary({
+        totalOutstanding: res.data.data?.totalOutstanding || 0,
+        totalPayable: res.data.data?.totalPayable || 0
+      });
+    } catch (err) {
+      console.error("Summary fetch error:", err);
+    } finally {
+      setIsSummaryLoading(false);
+    }
+  };
+
   useEffect(() => {
     const loadData = async () => {
       setIsInitialLoading(true);
       try {
-        await fetchCustomers();
+        await Promise.all([fetchCustomers(), fetchCreditSummary()]);
       } finally {
         setIsInitialLoading(false);
       }
@@ -125,10 +149,11 @@ export function Customers() {
     try {
       await apiClient.post(`${API_BASE}/customer`, {
         email: newCustomer.email,
-        name: newCustomer.name,
-        phone_number: newCustomer.phone_number,
-        address: newCustomer.address,
-        billing_address: newCustomer.billing_address,
+        name: newCustomer.name || "",
+        phone_number: newCustomer.phone_number || "",
+        address: newCustomer.address || "",
+        billing_address: newCustomer.billing_address || "",
+        credit_limit: newCustomer.credit_limit ? Number(newCustomer.credit_limit) : 0,
       });
       setNewCustomer({});
       setIsAddDialogOpen(false);
@@ -159,10 +184,11 @@ export function Customers() {
     try {
       await apiClient.put(`${API_BASE}/customer/${editingCustomer.id}`, {
         email: editingCustomer.email,
-        name: editingCustomer.name,
-        phone_number: editingCustomer.phone_number,
-        address: editingCustomer.address,
-        billing_address: editingCustomer.billing_address,
+        name: editingCustomer.name || "",
+        phone_number: editingCustomer.phone_number || "",
+        address: editingCustomer.address || "",
+        billing_address: editingCustomer.billing_address || "",
+        credit_limit: editingCustomer.credit_limit ? Number(editingCustomer.credit_limit) : 0,
       });
       setEditingCustomer(null);
       toast({
@@ -328,6 +354,21 @@ export function Customers() {
                   placeholder="Enter billing address"
                 />
               </div>
+              <div>
+                <Label htmlFor="credit_limit">Credit Limit (Rs)</Label>
+                <Input
+                  id="credit_limit"
+                  type="number"
+                  value={newCustomer.credit_limit || ""}
+                  onChange={(e) =>
+                    setNewCustomer({
+                      ...newCustomer,
+                      credit_limit: e.target.value,
+                    })
+                  }
+                  placeholder="Enter credit limit (0 for unlimited)"
+                />
+              </div>
               <Button
                 onClick={handleAddCustomer}
                 className="w-full"
@@ -357,43 +398,48 @@ export function Customers() {
           </>
         ) : (
           <>
-            <Card>
+            <Card className="bg-slate-900 border-slate-800 shadow-xl">
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">
-                  Total Customers
+                <CardTitle className="text-xs font-black uppercase tracking-widest text-slate-400">
+                  Total Market Credit
                 </CardTitle>
-                <Users className="h-4 w-4 text-muted-foreground" />
+                <ArrowUpCircle className="h-4 w-4 text-amber-500" />
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">
-                  {customers.length}
+                <div className="text-3xl font-black text-white">
+                  Rs {creditSummary.totalOutstanding.toLocaleString()}
                 </div>
+                <p className="text-[10px] text-slate-500 mt-1 uppercase font-bold italic tracking-tighter">Sum of all outstanding receivables</p>
               </CardContent>
             </Card>
-            <Card>
+
+            <Card className="bg-emerald-50 border-emerald-100 shadow-sm">
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">
-                  Active Customers
+                <CardTitle className="text-xs font-black uppercase tracking-widest text-emerald-600">
+                  Customer Collections
                 </CardTitle>
-                <UserCheck className="h-4 w-4 text-green-600" />
+                <DollarSign className="h-4 w-4 text-emerald-600" />
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold text-green-600">
+                <div className="text-3xl font-black text-emerald-700">
+                   {customers.length}
+                </div>
+                <p className="text-[10px] text-emerald-500 mt-1 uppercase font-bold italic tracking-tighter">Active wholesale profiles</p>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-slate-50 border-slate-200">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-xs font-black uppercase tracking-widest text-slate-500">
+                  Active Reach
+                </CardTitle>
+                <UserCheck className="h-4 w-4 text-blue-600" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-3xl font-black text-blue-700">
                   {activeCount}
                 </div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">
-                  Total Revenue
-                </CardTitle>
-                {/* <DollarSign className="h-4 w-4 text-blue-600" /> */}
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-blue-600">
-                  Rs {totalRevenue.toFixed(2)}
-                </div>
+                <p className="text-[10px] text-slate-400 mt-1 uppercase font-bold italic tracking-tighter">Network utilization index</p>
               </CardContent>
             </Card>
           </>
@@ -431,7 +477,8 @@ export function Customers() {
                   <TableHeader>
                     <TableRow>
                       <TableHead className="min-w-[200px]">Contact</TableHead>
-                      <TableHead className="min-w-[120px]">Last Visit</TableHead>
+                      <TableHead className="min-w-[120px]">Balance</TableHead>
+                      <TableHead className="min-w-[120px]">Limit</TableHead>
                       <TableHead className="min-w-[100px]">Status</TableHead>
                       <TableHead className="min-w-[120px]">Actions</TableHead>
                     </TableRow>
@@ -460,7 +507,12 @@ export function Customers() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      {customer.created_at.split("T")[0]}
+                      <span className={`font-bold ${Number(customer.outstanding_balance || 0) > 0 ? "text-red-600" : "text-green-600"}`}>
+                        Rs {Number(customer.outstanding_balance || 0).toLocaleString()}
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-gray-600 font-medium whitespace-nowrap">
+                      Rs {Number(customer.credit_limit || 0).toLocaleString()}
                     </TableCell>
                     <TableCell>
                       <Badge
@@ -478,6 +530,14 @@ export function Customers() {
                     </TableCell>
                     <TableCell>
                       <div className="flex space-x-2">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="bg-indigo-50 text-indigo-700 hover:bg-indigo-100 h-8 px-2 font-black text-[10px] uppercase tracking-wider gap-2 rounded-lg border border-indigo-100"
+                          onClick={() => setLedgerCustomerId(customer.id)}
+                        >
+                          <FileText className="h-3 w-3" /> Ledger
+                        </Button>
                         <Button
                           size="sm"
                           variant="outline"
@@ -598,6 +658,21 @@ export function Customers() {
                   placeholder="Enter billing address"
                 />
               </div>
+              <div>
+                <Label htmlFor="edit-credit-limit">Credit Limit (Rs)</Label>
+                <Input
+                  id="edit-credit-limit"
+                  type="number"
+                  value={editingCustomer.credit_limit || ""}
+                  onChange={(e) =>
+                    setEditingCustomer({
+                      ...editingCustomer,
+                      credit_limit: e.target.value,
+                    })
+                  }
+                  placeholder="Enter credit limit"
+                />
+              </div>
               <Button
                 onClick={handleEditCustomer}
                 className="w-full"
@@ -658,6 +733,26 @@ export function Customers() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      {/* Ledger Modal */}
+      <Dialog 
+        open={!!ledgerCustomerId} 
+        onOpenChange={(open) => !open && setLedgerCustomerId(null)}
+      >
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto p-0 border-none bg-transparent shadow-none">
+          <DialogHeader className="sr-only">
+            <DialogTitle>Customer Ledger History</DialogTitle>
+            <DialogDescription>View transaction and payment history for this customer.</DialogDescription>
+          </DialogHeader>
+          {ledgerCustomerId && (
+            <div className="bg-white rounded-xl shadow-2xl p-1 overflow-hidden">
+               <CustomerLedger 
+                customerId={ledgerCustomerId} 
+                onBack={() => setLedgerCustomerId(null)} 
+              />
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -43,7 +43,7 @@ export class EmailService {
    */
   static async sendOrderConfirmationToCustomer(orderData: OrderEmailData): Promise<void> {
     const mailOptions = {
-      from: `"Manpasand Store" <${EMAIL_USER}>`,
+      from: `"Sarwat Traders" <${EMAIL_USER}>`,
       to: orderData.customerEmail,
       subject: `Order Confirmation - ${orderData.orderNumber}`,
       html: `
@@ -116,7 +116,7 @@ export class EmailService {
 
               <div class="footer">
                 <p>We'll send you another email when your order ships.</p>
-                <p>If you have any questions, please contact us at info@manpasand.com</p>
+                <p>If you have any questions, please contact us at info@sarwattraders.com</p>
               </div>
             </div>
           </div>
@@ -139,7 +139,7 @@ export class EmailService {
    */
   static async sendOrderNotificationToAdmin(orderData: OrderEmailData): Promise<void> {
     const mailOptions = {
-      from: `"Manpasand Store" <${EMAIL_USER}>`,
+      from: `"Sarwat Traders" <${EMAIL_USER}>`,
       to: ADMIN_EMAIL,
       subject: `New Order Received - ${orderData.orderNumber}`,
       html: `

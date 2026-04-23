@@ -140,6 +140,16 @@ const refundSaleController = asyncHandler(async (req: Request, res: Response) =>
     new ApiResponse(sale, "Sale refunded/exchanged successfully").send(res);
 });
 
+const updateSaleController = asyncHandler(async (req: Request, res: Response) => {
+    const saleId = req.params.saleId;
+    const createdBy = req.user!.id;
+    const sale = await saleService.updateSale(saleId, {
+        ...req.body,
+        createdBy
+    });
+    new ApiResponse(sale, "Sale updated successfully").send(res);
+});
+
 const getTodaySalesController = asyncHandler(async (req: Request, res: Response) => {
     const sales = await saleService.getTodaySales({ branchId: req.user?.branch_id as string as string });
     new ApiResponse(sales, "Today's sales fetched successfully").send(res);
@@ -211,6 +221,7 @@ export {
     getSaleByIdController,
     createSaleController,
     refundSaleController,
+    updateSaleController,
     getTodaySalesController,
     getRecentSaleItemProductNameAndPrice,
     getHoldSalesController,

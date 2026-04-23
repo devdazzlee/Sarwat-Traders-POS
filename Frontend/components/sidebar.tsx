@@ -32,7 +32,6 @@ import {
   Barcode,
   X,
   Warehouse,
-  Globe,
   Printer as PrinterIcon,
   Download,
   type LucideIcon,
@@ -121,12 +120,6 @@ const menuSections: SidebarMenuSection[] = [
         roles: SALES_ROLES,
       },
       { id: "orders", label: "Orders", icon: ListOrdered, roles: ADMIN_ROLES },
-      {
-        id: "website-orders",
-        label: "Website Orders",
-        icon: Globe,
-        roles: STAFF_ROLES,
-      },
       {
         id: "returns",
         label: "Returns & Exchange",
@@ -393,11 +386,9 @@ export function Sidebar({
 
         <div className="border-b border-gray-200 p-6">
           <div className="flex items-center space-x-3">
-            <div className="rounded-xl bg-gradient-to-br from-blue-600 to-blue-700 p-2.5 shadow-lg">
-              <Store className="h-6 w-6 text-white" />
-            </div>
+            <img src="/logo.png" alt="Logo" className="h-10 w-auto" />
             <div>
-              <h1 className="text-xl font-bold text-gray-900">MANPASAND</h1>
+              <h1 className="text-xl font-bold text-gray-900">Sarwat Traders</h1>
               <p className="text-sm text-gray-500">Enterprise POS</p>
             </div>
           </div>

@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.logReturnSchema = exports.logStockOutSchema = void 0;
+exports.bulkStockOutSchema = exports.logReturnSchema = exports.logStockOutSchema = void 0;
 const zod_1 = require("zod");
 exports.logStockOutSchema = zod_1.z.object({
     body: zod_1.z.object({
@@ -17,6 +17,19 @@ exports.logReturnSchema = zod_1.z.object({
         branchId: zod_1.z.string().min(1, 'Branch is required'),
         quantity: zod_1.z.number().positive('Quantity must be positive'),
         notes: zod_1.z.string().optional(),
+    }),
+});
+exports.bulkStockOutSchema = zod_1.z.object({
+    body: zod_1.z.object({
+        branchId: zod_1.z.string().min(1, 'Branch is required'),
+        reason: zod_1.z.enum(['SALE', 'DAMAGE', 'LOSS', 'RETURN', 'EXPIRED']),
+        notes: zod_1.z.string().optional(),
+        customerId: zod_1.z.string().optional(),
+        items: zod_1.z.array(zod_1.z.object({
+            productId: zod_1.z.string().min(1, 'Product is required'),
+            quantity: zod_1.z.number().positive('Quantity must be positive'),
+            notes: zod_1.z.string().optional(),
+        })).min(1, 'At least one item is required'),
     }),
 });
 //# sourceMappingURL=stock-out.validation.js.map

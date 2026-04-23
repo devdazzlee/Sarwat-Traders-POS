@@ -4,102 +4,97 @@ import { addDecimal, asNumber } from '../utils/helpers';
 import { Prisma } from '@prisma/client';
 
 export class PurchaseService {
-  async createPurchase(data: {
-    productId: string;
+  async createBulkPurchase(data: {
     supplierId: string;
     warehouseBranchId: string;
-    quantity: number;
-    costPrice: number;
-    salePrice: number;
-    purchaseDate?: Date;
+    purchaseDate: Date;
     invoiceRef?: string;
     notes?: string;
-    deliveryStatus?: 'PARTIAL' | 'COMPLETE';
+    deliveryStatus: "PARTIAL" | "COMPLETE";
+    items: Array<{
+      productId: string;
+      quantity: number;
+      costPrice: number;
+      salePrice: number;
+      batchNo?: string;
+      expiryDate?: string;
+    }>;
     createdBy: string;
   }) {
-    const warehouse = await prisma.branch.findFirst({
-      where: { id: data.warehouseBranchId, branch_type: 'WAREHOUSE' },
-    });
-    if (!warehouse) {
-      const anyBranch = await prisma.branch.findUnique({
-        where: { id: data.warehouseBranchId },
-      });
-      if (!anyBranch) throw new AppError(404, 'Warehouse branch not found');
-    }
-
     return prisma.$transaction(async (tx) => {
-      const purchase = await tx.purchase.create({
-        data: {
-          product_id: data.productId,
-          supplier_id: data.supplierId,
-          warehouse_branch_id: data.warehouseBranchId,
-          quantity: data.quantity,
-          cost_price: data.costPrice,
-          sale_price: data.salePrice,
-          purchase_date: data.purchaseDate || new Date(),
-          invoice_ref: data.invoiceRef,
-          notes: data.notes,
-          delivery_status: data.deliveryStatus || 'COMPLETE',
-          created_by: data.createdBy,
-        },
-        include: {
-          product: true,
-          supplier: true,
-          warehouse_branch: true,
-          user: { select: { email: true } },
-        },
-      });
-
-      let stock = await tx.stock.findUnique({
-        where: {
-          product_id_branch_id: {
-            product_id: data.productId,
-            branch_id: data.warehouseBranchId,
-          },
-        },
-      });
-
-      const qty = data.quantity;
-      const previousQty = stock ? asNumber(stock.current_quantity) : 0;
-      const newQty = stock ? addDecimal(stock.current_quantity, qty) : qty;
-
-      if (stock) {
-        await tx.stock.update({
-          where: {
-            product_id_branch_id: {
-              product_id: data.productId,
-              branch_id: data.warehouseBranchId,
-            },
-          },
-          data: { current_quantity: newQty },
-        });
-      } else {
-        await tx.stock.create({
+      const results = [];
+      for (const item of data.items) {
+        const purchase = await tx.purchase.create({
           data: {
-            product_id: data.productId,
-            branch_id: data.warehouseBranchId,
-            current_quantity: qty,
+            product_id: item.productId,
+            supplier_id: data.supplierId,
+            warehouse_branch_id: data.warehouseBranchId,
+            quantity: item.quantity,
+            cost_price: item.costPrice,
+            sale_price: item.salePrice,
+            purchase_date: data.purchaseDate,
+            invoice_ref: data.invoiceRef,
+            batch_no: item.batchNo,
+            expiry_date: item.expiryDate ? new Date(item.expiryDate) : null,
+            notes: data.notes,
+            delivery_status: data.deliveryStatus,
+            created_by: data.createdBy,
           },
         });
+
+        // Update Stock
+        let stock = await tx.stock.findUnique({
+          where: { product_id_branch_id: { product_id: item.productId, branch_id: data.warehouseBranchId } },
+        });
+
+        const qty = item.quantity;
+        const previousQty = stock ? asNumber(stock.current_quantity) : 0;
+        const newQty = stock ? addDecimal(stock.current_quantity, qty) : qty;
+
+        if (stock) {
+          await tx.stock.update({
+            where: { product_id_branch_id: { product_id: item.productId, branch_id: data.warehouseBranchId } },
+            data: { current_quantity: newQty },
+          });
+        } else {
+          await tx.stock.create({
+            data: {
+              product_id: item.productId,
+              branch_id: data.warehouseBranchId,
+              current_quantity: qty,
+            },
+          });
+        }
+
+        // Create Stock Movement
+        await tx.stockMovement.create({
+          data: {
+            product_id: item.productId,
+            branch_id: data.warehouseBranchId,
+            movement_type: "PURCHASE",
+            reference_id: purchase.id,
+            reference_type: "purchase",
+            quantity_change: qty,
+            previous_qty: previousQty,
+            new_qty: typeof newQty === "number" ? newQty : asNumber(newQty as Prisma.Decimal),
+            unit_cost: item.costPrice,
+            notes: data.notes,
+            created_by: data.createdBy,
+          },
+        });
+
+        // Update Product Cost Rate
+        await tx.product.update({
+          where: { id: item.productId },
+          data: { 
+            purchase_rate: item.costPrice,
+            sales_rate_exc_dis_and_tax: item.salePrice
+          }
+        });
+
+        results.push(purchase);
       }
-
-      await tx.stockMovement.create({
-        data: {
-          product_id: data.productId,
-          branch_id: data.warehouseBranchId,
-          movement_type: 'PURCHASE',
-          reference_id: purchase.id,
-          reference_type: 'purchase',
-          quantity_change: qty,
-          previous_qty: previousQty,
-          new_qty: typeof newQty === 'number' ? newQty : asNumber(newQty as Prisma.Decimal),
-          unit_cost: data.costPrice,
-          notes: data.notes,
-          created_by: data.createdBy,
-        },
-      });
-
-      return purchase;
+      return results;
     });
   }
 

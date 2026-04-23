@@ -283,7 +283,7 @@ export function Transfers() {
         <html><head><title>Transfer Slip - ${t.reference_no || t.id}</title></head>
         <body style="font-family: sans-serif; padding: 40px; color: #334155;">
           <div style="border-bottom: 2px solid #e2e8f0; padding-bottom: 20px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center;">
-            <h1 style="margin: 0; font-size: 24px; font-weight: 800; color: #4f46e5;">MANPASAND POS</h1>
+            <h1 style="margin: 0; font-size: 24px; font-weight: 800; color: #4f46e5;">SARWAT TRADERS POS</h1>
             <h2 style="margin: 0; font-size: 18px; font-weight: 700; color: #64748b;">STOCK TRANSFER CHALLAN</h2>
           </div>
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 30px; font-size: 14px;">

@@ -108,11 +108,9 @@ export function LoginForm({ onLogin }: LoginFormProps) {
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
           <div className="flex justify-center mb-4">
-            <div className="bg-blue-600 p-3 rounded-full">
-              <Store className="h-8 w-8 text-white" />
-            </div>
+            <img src="/logo.png" alt="Sarwat Traders Logo" className="h-20 w-auto" />
           </div>
-          <CardTitle className="text-2xl font-bold text-gray-900">MANPASAND</CardTitle>
+          <CardTitle className="text-2xl font-bold text-gray-900">Sarwat Traders</CardTitle>
           <CardDescription>Point of Sale System</CardDescription>
         </CardHeader>
         <CardContent>

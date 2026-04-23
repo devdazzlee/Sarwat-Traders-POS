@@ -12,17 +12,17 @@ import { Store, User, Bell, CreditCard, Printer, Shield, Database, Wifi } from "
 
 export function Settings() {
   const [storeSettings, setStoreSettings] = useState({
-    storeName: "MANPASAND",
+    storeName: "Sarwat Traders",
     address: "123 Main Street, City, State 12345",
     phone: "+1 (555) 123-4567",
-    email: "info@manpasand.com",
+    email: "info@sarwattraders.com",
     taxRate: "8.00",
     currency: "USD",
   })
 
   const [userSettings, setUserSettings] = useState({
     username: "admin",
-    email: "admin@manpasand.com",
+    email: "admin@sarwattraders.com",
     role: "Administrator",
   })
 

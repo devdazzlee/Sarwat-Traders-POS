@@ -46,6 +46,7 @@ const shift_route_1 = __importDefault(require("./routes/shift.route"));
 const shiftAssignment_routes_1 = __importDefault(require("./routes/shiftAssignment.routes"));
 const barcode_routes_1 = __importDefault(require("./routes/barcode.routes"));
 const guestOrder_routes_1 = __importDefault(require("./routes/guestOrder.routes"));
+const customer_ledger_routes_1 = __importDefault(require("./routes/customer-ledger.routes"));
 const node_cron_1 = __importDefault(require("node-cron"));
 const vAPI = process.env.vAPI || '/api/v1';
 const app = (0, express_1.default)();
@@ -119,9 +120,11 @@ app.use(`${vAPI}/barcode-generator`, barcode_routes_1.default);
 // App Routes
 app.use(`${vAPI}/customer/app`, app_routes_1.default);
 app.use(`${vAPI}/customer`, customer_routes_1.default);
+app.use(`${vAPI}/customers`, customer_routes_1.default);
 app.use(`${vAPI}/app/customer/order`, customerOrder_routes_1.default);
 app.use(`${vAPI}/customer/device-identity`, device_identity_routes_1.default);
 app.use(`${vAPI}/guest/order`, guestOrder_routes_1.default); // Guest checkout route
+app.use(`${vAPI}/customer-ledger`, customer_ledger_routes_1.default);
 // Health check
 app.get('/health', (req, res) => {
     res.status(200).json({ status: 'OK - Server is working fine' });

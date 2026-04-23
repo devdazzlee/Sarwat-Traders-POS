@@ -42,6 +42,8 @@ export function Reports() {
   const { toast } = useToast()
   const [loading, setLoading] = useState(true)
   const [totalRevenue, setTotalRevenue] = useState(0)
+  const [totalCogs, setTotalCogs] = useState(0)
+  const [grossMargin, setGrossMargin] = useState(0)
   const [totalOrders, setTotalOrders] = useState(0)
   const [avgOrderValue, setAvgOrderValue] = useState(0)
   const [uniqueCustomers, setUniqueCustomers] = useState(0)
@@ -106,6 +108,8 @@ export function Reports() {
       
       console.log("💰 Total Revenue:", revenue, "from", sales.length, "sales")
       setTotalRevenue(revenue)
+      setTotalCogs(stats.totalCogs || 0)
+      setGrossMargin(stats.grossMargin || 0)
 
       // Calculate total orders
       const orders = stats.totalSales || sales.length
@@ -175,12 +179,17 @@ export function Reports() {
       const formattedTopProducts = bestSellingProducts.slice(0, 5).map((product: any) => {
         const quantity = product.quantity_sold || 0
         const price = product.price || 0
+        const cost = product.purchase_rate || 0
         const revenue = price * quantity
+        const cogs = cost * quantity
+        const margin = revenue - cogs
         const percentage = totalProductRevenue > 0 ? (revenue / totalProductRevenue) * 100 : 0
         return {
           name: product.name || "Unknown",
           quantity: quantity,
           revenue: revenue,
+          cogs: cogs,
+          margin: margin,
           percentage: percentage
         }
       })
@@ -435,9 +444,13 @@ export function Reports() {
                       <p className="text-sm text-gray-500">{product.quantity} units sold</p>
                     </div>
                   </div>
-                  <div className="text-right">
-                      <p className="font-medium text-gray-900">Rs {product.revenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-                      <Badge variant="secondary">{product.percentage.toFixed(1)}%</Badge>
+                    <div className="text-right flex flex-col gap-1 items-end">
+                      <p className="font-bold text-gray-900">Rs {product.revenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                      {product.margin !== undefined && (
+                        <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200">
+                          Profit: Rs {product.margin.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </Badge>
+                      )}
                     </div>
                   </div>
                 ))
@@ -447,8 +460,43 @@ export function Reports() {
         </Card>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Category-wise Sales */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+        {/* P&L Snapshot Card */}
+        <Card className="border-emerald-200">
+          <CardHeader className="bg-emerald-50 border-b border-emerald-100 pb-4">
+            <CardTitle className="text-emerald-800 flex items-center gap-2">
+              <DollarSign className="h-5 w-5" /> 
+              Profit & Loss (WAC Snapshot)
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-6">
+            <div className="space-y-6">
+              <div className="flex justify-between items-center border-b pb-3">
+                <span className="text-gray-600 font-medium text-lg">Gross Revenue</span>
+                <span className="text-gray-900 font-bold text-xl">Rs {totalRevenue.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+              </div>
+              <div className="flex justify-between items-center border-b pb-3 text-red-600">
+                <span className="font-medium text-lg">Total Cost of Goods Sold</span>
+                <span className="font-bold text-xl">- Rs {totalCogs.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+              </div>
+              <div className="flex justify-between items-center bg-gray-50 p-4 rounded-xl border border-gray-100">
+                <span className="text-gray-900 font-black text-xl uppercase tracking-wider">Gross Margin</span>
+                <span className={`font-black text-2xl ${grossMargin >= 0 ? "text-emerald-600" : "text-red-500"}`}>
+                  Rs {grossMargin.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                </span>
+              </div>
+              {totalRevenue > 0 && (
+                <div className="text-center pt-2">
+                  <Badge className="bg-slate-900 text-white font-bold px-4 py-1.5 text-sm">
+                     Net Margin: {((grossMargin / totalRevenue) * 100).toFixed(2)}%
+                  </Badge>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Existing Category-wise Sales Card */}
         <Card>
           <CardHeader>
             <CardTitle>Category-wise Sales</CardTitle>

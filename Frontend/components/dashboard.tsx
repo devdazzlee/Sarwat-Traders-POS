@@ -58,6 +58,7 @@ import BarcodeGenerator from "./barcode-generator";
 import { NewSale } from "./new-sale";
 import { PrinterSettings } from "./printer-settings";
 import { ProductExport } from "./product-export";
+import { CustomerLedger } from "./customer-ledger";
 
 
 interface DashboardProps {
@@ -67,6 +68,7 @@ interface DashboardProps {
 export function Dashboard({ onLogout }: DashboardProps) {
   const [activeTab, setActiveTab] = useState("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
 
   useEffect(() => {
     const preferredTab = getDefaultDashboardTab(localStorage.getItem("role"));
@@ -119,7 +121,24 @@ export function Dashboard({ onLogout }: DashboardProps) {
       case "pricing":
         return <Pricing />;
       case "customers":
-        return <Customers />;
+        return <Customers 
+          onViewLedger={(id) => {
+            setSelectedCustomerId(id);
+            setActiveTab("customer-ledger");
+          }} 
+        />;
+      case "customer-ledger":
+        return selectedCustomerId ? (
+          <CustomerLedger 
+            customerId={selectedCustomerId} 
+            onBack={() => {
+              setSelectedCustomerId(null);
+              setActiveTab("customers");
+            }} 
+          />
+        ) : (
+          <DashboardHome onNavigate={setActiveTab} />
+        );
       case "loyalty":
         return <Stocks />;
       case "stock-management":

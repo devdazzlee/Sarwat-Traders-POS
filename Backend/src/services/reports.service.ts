@@ -82,6 +82,7 @@ export class ReportsService {
         quantity_sold: Number(item._sum.quantity || 0),
         order_count: item._count.id,
         price: Number(product?.sales_rate_inc_dis_and_tax || product?.sales_rate_exc_dis_and_tax || 0),
+        purchase_rate: Number(product?.purchase_rate || 0),
         category: product?.category?.name || 'Uncategorized',
       };
     });
@@ -98,7 +99,7 @@ export class ReportsService {
       where.branch_id = branchId;
     }
 
-    const [totalSales, totalRevenue, uniqueCustomers] = await Promise.all([
+    const [totalSales, totalRevenue, uniqueCustomers, salesForCogs] = await Promise.all([
       prisma.sale.count({ where }),
       prisma.sale.aggregate({
         where,
@@ -113,11 +114,34 @@ export class ReportsService {
         },
         distinct: ['customer_id'],
       }),
+      prisma.sale.findMany({
+        where,
+        select: {
+          sale_items: {
+            select: {
+              quantity: true,
+              product: { select: { purchase_rate: true } }
+            }
+          }
+        }
+      }),
     ]);
+
+    let totalCogs = 0;
+    salesForCogs.forEach(sale => {
+      sale.sale_items.forEach(item => {
+        totalCogs += Number(item.quantity || 0) * Number(item.product?.purchase_rate || 0);
+      });
+    });
+
+    const revenueNum = Number(totalRevenue._sum.total_amount || 0);
+    const grossMargin = revenueNum - totalCogs;
 
     return {
       totalSales,
-      totalRevenue: Number(totalRevenue._sum.total_amount || 0),
+      totalRevenue: revenueNum,
+      totalCogs,
+      grossMargin,
       uniqueCustomers: uniqueCustomers.filter(c => c.customer_id).length,
     };
   }

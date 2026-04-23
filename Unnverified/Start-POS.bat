@@ -1,11 +1,11 @@
 @echo off
 REM ============================================
-REM MANPASAND POS - Chrome Kiosk Launch
+REM SARWAT TRADERS POS - Chrome Kiosk Launch
 REM ============================================
 
 echo.
 echo ============================================
-echo   MANPASAND POS - Starting...
+echo   SARWAT TRADERS POS - Starting...
 echo ============================================
 echo.
 

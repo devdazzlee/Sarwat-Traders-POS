@@ -207,6 +207,11 @@ class SaleService {
         await client_2.prisma.holdSale.delete({ where: { id: holdSaleId } });
     }
     async createSale({ branchId, customerId, paymentMethod, items, discountAmount, createdBy, }) {
+        const isCreditSale = paymentMethod === 'CREDIT';
+        // Credit sales MUST have a customer
+        if (isCreditSale && !customerId) {
+            throw new apiError_1.AppError(400, 'A customer must be selected for credit sales');
+        }
         // 1) Validate OUTSIDE any interactive transaction
         const [customer, branch] = await Promise.all([
             customerId ? client_2.prisma.customer.findUnique({ where: { id: customerId } }) : null,
@@ -218,9 +223,21 @@ class SaleService {
             throw new apiError_1.AppError(400, 'Invalid branch');
         if (!items.length)
             throw new apiError_1.AppError(400, 'No items provided');
+        // Warn if over credit limit (but allow — per business decision)
+        if (isCreditSale && customer) {
+            const creditLimit = new client_1.Prisma.Decimal(customer.credit_limit);
+            const currentBalance = new client_1.Prisma.Decimal(customer.outstanding_balance);
+            const subtotalCheck = items.reduce((s, it) => s + it.price * it.quantity, 0);
+            const finalTotalCheck = Math.max(0, subtotalCheck - (discountAmount ?? 0));
+            const newBalance = currentBalance.plus(finalTotalCheck);
+            if (creditLimit.gt(0) && newBalance.gt(creditLimit)) {
+                // Over limit — allowed with warning (warn is logged server-side, frontend shows the flag)
+                console.warn(`⚠️ Customer ${customer.name} exceeds credit limit: ${newBalance} > ${creditLimit}`);
+            }
+        }
         // 2) Validate that all products exist
         const productIds = items.map(i => i.productId);
-        const uniqueProductIds = [...new Set(productIds)]; // Remove duplicates
+        const uniqueProductIds = [...new Set(productIds)];
         const products = await client_2.prisma.product.findMany({
             where: { id: { in: uniqueProductIds } },
             select: { id: true },
@@ -247,38 +264,32 @@ class SaleService {
         for (const gp of Object.values(grouped)) {
             const existing = stockMap.get(gp.productId);
             const prev = new client_1.Prisma.Decimal(existing?.current_quantity ?? 0);
-            const change = gp.qty.mul(-1); // sale => decrement
+            const change = gp.qty.mul(-1);
             const next = prev.plus(change);
-            // allow negative stock per your testing; add a check here if you want to block it
-            movements.push({
-                product_id: gp.productId,
-                previous_qty: prev,
-                new_qty: next,
-                quantity_change: change,
-            });
-            stockMap.set(gp.productId, {
-                ...(existing ?? {}),
-                product_id: gp.productId,
-                branch_id: branchId,
-                current_quantity: next,
-            });
+            movements.push({ product_id: gp.productId, previous_qty: prev, new_qty: next, quantity_change: change });
+            stockMap.set(gp.productId, { ...(existing ?? {}), product_id: gp.productId, branch_id: branchId, current_quantity: next });
         }
-        // 5) Prepare all writes as a single non-interactive transaction (prevents P2028)
+        // 5) Prepare all writes as a single non-interactive transaction
         const subtotalAmt = items.reduce((s, it) => s + it.price * it.quantity, 0);
         const finalDiscount = discountAmount ?? 0;
         const finalTotal = Math.max(0, subtotalAmt - finalDiscount);
         const ops = [];
+        // Determine payment_method and payment_status for DB
+        const dbPaymentMethod = isCreditSale ? 'CREDIT' : paymentMethod;
+        const dbPaymentStatus = isCreditSale ? 'PENDING' : 'PAID';
+        const saleNumber = `SALE-${Date.now()}`;
         // (a) Sale + items
         ops.push(client_2.prisma.sale.create({
             data: {
-                sale_number: `SALE-${Date.now()}`,
+                sale_number: saleNumber,
                 branch_id: branchId,
                 customer_id: customerId,
                 total_amount: new client_1.Prisma.Decimal(finalTotal),
                 subtotal: new client_1.Prisma.Decimal(subtotalAmt),
                 discount_amount: new client_1.Prisma.Decimal(finalDiscount),
-                payment_method: paymentMethod,
-                payment_status: 'PAID',
+                payment_method: dbPaymentMethod,
+                payment_status: dbPaymentStatus,
+                payment_received: isCreditSale ? new client_1.Prisma.Decimal(0) : new client_1.Prisma.Decimal(finalTotal),
                 status: 'COMPLETED',
                 created_by: createdBy,
                 sale_items: {
@@ -292,39 +303,51 @@ class SaleService {
             },
             include: { sale_items: true },
         }));
-        // (b) Stock upserts (one per product)
+        // (b) Stock upserts
         for (const m of movements) {
-            const decAbs = m.quantity_change.abs(); // positive decrement amount
+            const decAbs = m.quantity_change.abs();
             ops.push(client_2.prisma.stock.upsert({
-                where: {
-                    product_id_branch_id: {
-                        product_id: m.product_id,
-                        branch_id: branchId,
-                    },
-                },
-                update: {
-                    current_quantity: { decrement: decAbs },
-                },
+                where: { product_id_branch_id: { product_id: m.product_id, branch_id: branchId } },
+                update: { current_quantity: { decrement: decAbs } },
                 create: {
                     product_id: m.product_id,
                     branch_id: branchId,
-                    current_quantity: m.new_qty, // start at computed value (can be negative)
+                    current_quantity: m.new_qty,
                     minimum_quantity: new client_1.Prisma.Decimal(0),
                     maximum_quantity: new client_1.Prisma.Decimal(1000),
                     reserved_quantity: new client_1.Prisma.Decimal(0),
                 },
             }));
         }
-        // (c) Stock movements (use computed prev/new; no read-after-write)
+        // (c) Stock movements
         for (const m of movements) {
             ops.push(client_2.prisma.stockMovement.create({
                 data: {
                     product_id: m.product_id,
                     branch_id: branchId,
                     movement_type: 'SALE',
-                    quantity_change: m.quantity_change, // negative
+                    quantity_change: m.quantity_change,
                     previous_qty: m.previous_qty,
                     new_qty: m.new_qty,
+                    created_by: createdBy,
+                },
+            }));
+        }
+        // (d) Credit ledger entry — update customer outstanding balance
+        if (isCreditSale && customerId && customer) {
+            const newBalance = new client_1.Prisma.Decimal(customer.outstanding_balance).plus(finalTotal);
+            ops.push(client_2.prisma.customer.update({
+                where: { id: customerId },
+                data: { outstanding_balance: newBalance },
+            }));
+            ops.push(client_2.prisma.customerLedger.create({
+                data: {
+                    customer_id: customerId,
+                    entry_type: client_1.LedgerEntryType.CREDIT_SALE,
+                    amount: new client_1.Prisma.Decimal(finalTotal),
+                    description: `Credit sale - ${saleNumber}`,
+                    sale_id: saleNumber, // will be updated by reference
+                    balance_after: newBalance,
                     created_by: createdBy,
                 },
             }));
@@ -698,6 +721,94 @@ class SaleService {
             productName: item.product.name,
             price: item.unit_price,
         }));
+    }
+    async updateSale(saleId, data) {
+        return client_2.prisma.$transaction(async (tx) => {
+            const oldSale = await tx.sale.findUnique({
+                where: { id: saleId },
+                include: { sale_items: true, customer: true },
+            });
+            if (!oldSale)
+                throw new apiError_1.AppError(404, "Sale not found");
+            if (oldSale.status !== "COMPLETED")
+                throw new apiError_1.AppError(400, "Only completed sales can be edited");
+            const branchId = oldSale.branch_id;
+            const oldTotal = oldSale.total_amount;
+            const newPaymentMethod = data.paymentMethod || oldSale.payment_method;
+            // Rollback Stock
+            for (const item of oldSale.sale_items) {
+                await tx.stock.update({
+                    where: { product_id_branch_id: { product_id: item.product_id, branch_id: branchId } },
+                    data: { current_quantity: { increment: item.quantity } },
+                });
+            }
+            // Delete old items
+            await tx.saleItem.deleteMany({ where: { sale_id: saleId } });
+            const subtotal = data.items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+            const discount = data.discountAmount ?? Number(oldSale.discount_amount);
+            const newTotal = Math.max(0, subtotal - discount);
+            // Create new items and update stock
+            const saleItemsData = [];
+            for (const item of data.items) {
+                saleItemsData.push({
+                    product_id: item.productId,
+                    quantity: new client_1.Prisma.Decimal(item.quantity),
+                    unit_price: new client_1.Prisma.Decimal(item.price),
+                    line_total: new client_1.Prisma.Decimal(item.price * item.quantity),
+                });
+                await tx.stock.update({
+                    where: { product_id_branch_id: { product_id: item.productId, branch_id: branchId } },
+                    data: { current_quantity: { decrement: item.quantity } },
+                });
+            }
+            // Handle Ledger Delta
+            if (oldSale.customer_id) {
+                const customer = await tx.customer.findUnique({ where: { id: oldSale.customer_id } });
+                if (customer) {
+                    let balanceDelta = new client_1.Prisma.Decimal(0);
+                    if (oldSale.payment_method === "CREDIT" && newPaymentMethod === "CREDIT") {
+                        balanceDelta = new client_1.Prisma.Decimal(newTotal).minus(oldTotal);
+                    }
+                    else if (oldSale.payment_method === "CREDIT" && newPaymentMethod !== "CREDIT") {
+                        balanceDelta = new client_1.Prisma.Decimal(oldTotal).mul(-1);
+                    }
+                    else if (oldSale.payment_method !== "CREDIT" && newPaymentMethod === "CREDIT") {
+                        balanceDelta = new client_1.Prisma.Decimal(newTotal);
+                    }
+                    if (!balanceDelta.isZero()) {
+                        const newBalance = new client_1.Prisma.Decimal(customer.outstanding_balance).plus(balanceDelta);
+                        await tx.customer.update({
+                            where: { id: oldSale.customer_id },
+                            data: { outstanding_balance: newBalance }
+                        });
+                        await tx.customerLedger.create({
+                            data: {
+                                customer_id: oldSale.customer_id,
+                                entry_type: client_1.LedgerEntryType.ADJUSTMENT,
+                                amount: balanceDelta.abs(),
+                                description: `Sale Adjustment - ${oldSale.sale_number}`,
+                                sale_id: oldSale.sale_number,
+                                balance_after: newBalance,
+                                created_by: data.createdBy
+                            }
+                        });
+                    }
+                }
+            }
+            return await tx.sale.update({
+                where: { id: saleId },
+                data: {
+                    subtotal: new client_1.Prisma.Decimal(subtotal),
+                    total_amount: new client_1.Prisma.Decimal(newTotal),
+                    discount_amount: new client_1.Prisma.Decimal(discount),
+                    payment_method: newPaymentMethod,
+                    payment_received: newPaymentMethod === "CREDIT" ? 0 : new client_1.Prisma.Decimal(newTotal),
+                    notes: data.notes ?? oldSale.notes,
+                    sale_items: { create: saleItemsData }
+                },
+                include: { sale_items: { include: { product: true } }, customer: true }
+            });
+        });
     }
 }
 exports.SaleService = SaleService;

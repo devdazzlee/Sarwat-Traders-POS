@@ -38,7 +38,11 @@ import {
   ChevronDown,
   ChevronUp,
   Loader2,
+  FileText,
+  Share2,
+  CheckCircle2,
 } from "lucide-react";
+import { downloadA4Invoice, shareOnWhatsApp, type InvoiceData } from "@/lib/pdf-generator";
 import apiClient from "@/lib/apiClient";
 import { offlineAPIClient } from "@/lib/offline-api-client";
 import { offlineDB } from "@/lib/offline-db";
@@ -54,6 +58,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useToast } from "@/hooks/use-toast";
 import { useHoldSales } from "@/hooks/use-hold-sales";
 import { usePosBranch } from "@/hooks/use-pos-branch";
 
@@ -95,6 +100,7 @@ type Printer = ReturnType<typeof usePrinterSettings>["printers"][number];
 
 
 export function NewSale() {
+  const { toast } = useToast();
   const [cart, setCart] = useState<CartItem[]>([]);
   // Track input values as strings to allow decimal point typing
   const [priceInputs, setPriceInputs] = useState<Record<string, string>>({});
@@ -105,7 +111,7 @@ export function NewSale() {
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
-  const [paymentMethodPending, setPaymentMethodPending] = useState<"Cash" | "Card" | null>(null);
+  const [paymentMethodPending, setPaymentMethodPending] = useState<"Cash" | "Credit" | null>(null);
   const [tenderedAmount, setTenderedAmount] = useState("");
   const [calculatedChange, setCalculatedChange] = useState(0);
   const [paymentError, setPaymentError] = useState("");
@@ -145,9 +151,21 @@ export function NewSale() {
   const [scanLoading, setScanLoading] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState<string | null>(null);
+  const [isAddCustomerOpen, setIsAddCustomerOpen] = useState(false);
+  const [newCustomerData, setNewCustomerData] = useState({
+    name: "",
+    email: "",
+    phone_number: "",
+    whatsapp_number: "",
+    credit_limit: "",
+  });
+  const [isAddingCustomer, setIsAddingCustomer] = useState(false);
   // Global printer settings (configured in Printer Settings page)
   const { receiptPrinter, getReceiptPrinterObj, printers } = usePrinterSettings();
   const [showHeldSales, setShowHeldSales] = useState(false);
+  const [checkoutSuccessData, setCheckoutSuccessData] = useState<InvoiceData | null>(null);
+  const [manualWhatsAppNumber, setManualWhatsAppNumber] = useState("");
+  const [isAskingWhatsApp, setIsAskingWhatsApp] = useState(false);
   const [isHoldingSale, setIsHoldingSale] = useState(false);
   const [isViewingHeldSales, setIsViewingHeldSales] = useState(false);
   const [deleteTargetHoldSale, setDeleteTargetHoldSale] = useState<number | null>(null);
@@ -899,7 +917,7 @@ export function NewSale() {
       total,
       paymentMethod,
       cashier: "Muhammad",
-      store: "MANPASAND Store #001",
+      store: "Sarwat Traders #001",
       amountPaid,
       changeAmount,
     };
@@ -922,7 +940,7 @@ export function NewSale() {
     resetPaymentState();
   };
 
-  const startPayment = (method: "Cash" | "Card") => {
+  const startPayment = (method: "Cash" | "Credit") => {
     if (!hasBranch) {
       return;
     }
@@ -960,17 +978,18 @@ export function NewSale() {
     const change = Math.max(0, amountNumber - total);
     setPaymentError("");
 
-    const success = await handlePayment(paymentMethodPending, amountNumber, change);
-    if (success) {
+    const result = await handlePayment(paymentMethodPending, amountNumber, change);
+    if (result) {
       resetPaymentState();
+      setCheckoutSuccessData(result);
     }
   };
 
   const handlePayment = async (
-    method: "Cash" | "Card",
+    method: "Cash" | "Credit",
     amountPaid: number,
     changeAmount: number
-  ) => {
+  ): Promise<InvoiceData | null> => {
     const cartSnapshot = cart.map((item) => ({ ...item }));
 
     return await withPaymentLoading(async () => {
@@ -1000,7 +1019,7 @@ export function NewSale() {
         // Prepare payload
         const payload: any = {
           items: saleItems,
-          paymentMethod: method === "Cash" ? "CASH" : "CARD",
+          paymentMethod: method === "Cash" ? "CASH" : "CREDIT",
           branchId,
           discountAmount: globalDiscountAmount,
         };
@@ -1038,7 +1057,7 @@ export function NewSale() {
               total: total,
               customer: selectedCustomer ? { id: selectedCustomer } : null,
               payment: {
-                method: method === "Cash" ? "CASH" : "CARD",
+                method: method === "Cash" ? "CASH" : "CREDIT",
                 amountPaid,
                 changeAmount
               },
@@ -1071,7 +1090,7 @@ export function NewSale() {
             total: total,
             customer: selectedCustomer ? { id: selectedCustomer } : null,
             payment: {
-              method: method === "Cash" ? "CASH" : "CARD",
+              method: method === "Cash" ? "CASH" : "CREDIT",
               amountPaid,
               changeAmount
             },
@@ -1110,6 +1129,8 @@ export function NewSale() {
         setCart([]);
         setGlobalDiscountValue("");
 
+        let receiptDataForServer: any = null;
+
         // Auto-print receipt
         try {
           // Get branch name from localStorage (correct source)
@@ -1121,8 +1142,8 @@ export function NewSale() {
           const fullAddress = "Karachi, Pakistan";
          
           console.log("fullAddress", fullAddress);
-          const receiptDataForServer: ReceiptData = {
-            storeName: storedBranchName || branchInfo.name || "MANPASAND GENERAL STORE",
+          receiptDataForServer = {
+            storeName: storedBranchName || branchInfo.name || "SARWAT TRADERS",
             tagline: "Quality • Service • Value",
             address: fullAddress,
             transactionId: transactionId,
@@ -1185,11 +1206,33 @@ export function NewSale() {
           // Print failed - no toast shown
         }
 
-        return true;
+        const selectedCustomerObj = customers.find((c) => c.id === selectedCustomer);
+
+        return {
+          storeName: receiptDataForServer?.storeName || "SARWAT TRADERS",
+          storeAddress: receiptDataForServer?.address || "",
+          storePhone: "0300 0000000",
+          customerName: selectedCustomerObj?.name || "Walk-in Customer",
+          customerPhone: selectedCustomerObj?.phone_number || "",
+          customerWhatsApp: selectedCustomerObj?.whatsapp_number || selectedCustomerObj?.phone_number || "",
+          saleNumber: transactionId,
+          date: new Date(),
+          items: cartSnapshot.map((item) => ({
+            name: item.name,
+            quantity: item.quantity,
+            price: getSellingPrice(item),
+            lineTotal: getSellingPrice(item) * item.quantity,
+            unit: (item as any)?.unit?.name || (item as any)?.unitName || "",
+          })),
+          subtotal: subtotal,
+          discount: globalDiscountAmount,
+          total: total,
+          paymentMethod: method === "Cash" ? "CASH" : "CREDIT",
+          balanceDue: method === "Credit" ? total : 0, // Simplified: Sale amount added to balance
+        };
       } catch (error) {
         console.error("Payment error:", error);
-        // Payment failed - no toast shown
-        return false;
+        return null;
       }
     });
   };
@@ -1556,11 +1599,11 @@ export function NewSale() {
         return;
       }
 
-      // 'D' for Card payment
+      // 'D' for Credit payment
       if ((e.key === 'd' || e.key === 'D') && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
         if (cart.length > 0 && total > 0 && !paymentDialogOpen) {
-          startPayment("Card");
+          startPayment("Credit");
         }
         return;
       }
@@ -1768,6 +1811,69 @@ export function NewSale() {
               <span className="text-blue-600 text-xs">(change in Printer Settings)</span>
             </div>
           )}
+
+        {/* Customer Selection */}
+        <div className="mb-4 max-w-sm bg-white text-black rounded-lg border border-gray-200 shadow-sm p-3">
+          <label className="block text-sm font-semibold text-gray-800 mb-1">
+            Customer (optional for Cash, <span className="text-blue-600 font-bold">required for Credit</span>)
+          </label>
+          <div className="flex gap-2">
+            <Select
+              value={selectedCustomer || "none"}
+              onValueChange={(value) => setSelectedCustomer(value === "none" ? null : value)}
+            >
+              <SelectTrigger className="w-full font-medium">
+                <SelectValue placeholder="Walk-in Customer" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none" className="italic font-medium text-gray-500">Walk-in Customer</SelectItem>
+                {customers.map((customer: any) => (
+                  <SelectItem key={customer.id} value={customer.id} className="font-medium">
+                    {customer.name} {customer.phone_number ? `(${customer.phone_number})` : ''}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button variant="outline" size="icon" className="shrink-0" onClick={() => setIsAddCustomerOpen(true)}>
+              <Plus className="h-4 w-4" />
+            </Button>
+          </div>
+          
+          {selectedCustomer && (
+            <div className="mt-3 pt-3 border-t border-gray-100 flex flex-col gap-1">
+              {(() => {
+                const customer = customers.find((c) => c.id === selectedCustomer);
+                if (!customer) return null;
+                const balance = Number(customer.outstanding_balance || 0);
+                const limit = Number(customer.credit_limit || 0);
+                const isOverLimit = limit > 0 && (balance + total) > limit;
+
+                return (
+                  <>
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="text-gray-500 font-medium tracking-wide uppercase">Current Balance</span>
+                      <span className={`font-bold ${balance > 0 ? 'text-orange-600' : 'text-green-600'}`}>
+                        Rs {balance.toLocaleString()}
+                      </span>
+                    </div>
+                    {limit > 0 && (
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="text-gray-500 font-medium tracking-wide uppercase">Credit Limit</span>
+                        <span className="font-bold text-gray-700">Rs {limit.toLocaleString()}</span>
+                      </div>
+                    )}
+                    {isOverLimit && (
+                      <div className="mt-1 px-2 py-1.5 bg-red-50 text-red-700 text-[11px] rounded flex items-start gap-1.5 leading-snug font-medium">
+                        <span className="mt-0.5">⚠️</span> 
+                        <span>This sale exceeds the customer's credit limit. Authorized personnel limits apply.</span>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
+            </div>
+          )}
+        </div>
 
         {/* Categories */}
         <div className="flex space-x-2 mb-6 overflow-x-auto">
@@ -2445,12 +2551,12 @@ export function NewSale() {
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => startPayment("Card")}
-                  disabled={paymentLoading || branchLoading || !hasBranch}
-                  className="h-10 text-sm"
+                  onClick={() => startPayment("Credit")}
+                  disabled={paymentLoading || branchLoading || !hasBranch || (!selectedCustomer && total > 0)}
+                  className="h-10 text-sm border-blue-200 hover:bg-blue-50 hover:text-blue-700 text-blue-600 font-semibold"
                 >
                   <CreditCard className="mr-2 h-4 w-4" />
-                  Card
+                  Credit Sale
                 </Button>
               </div>
             </div>
@@ -2572,6 +2678,247 @@ export function NewSale() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      <Dialog open={isAddCustomerOpen} onOpenChange={setIsAddCustomerOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Quick Add Customer</DialogTitle>
+            <DialogDescription>
+              Create a new customer profile for credit management and billing.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-700">Name *</label>
+                <Input
+                  placeholder="Customer name"
+                  value={newCustomerData.name}
+                  onChange={(e) =>
+                    setNewCustomerData({ ...newCustomerData, name: e.target.value })
+                  }
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-700">Email *</label>
+                <Input
+                  type="email"
+                  placeholder="customer@example.com"
+                  value={newCustomerData.email}
+                  onChange={(e) =>
+                    setNewCustomerData({ ...newCustomerData, email: e.target.value })
+                  }
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-700">Phone</label>
+                <Input
+                  placeholder="0300 0000000"
+                  value={newCustomerData.phone_number}
+                  onChange={(e) =>
+                    setNewCustomerData({ ...newCustomerData, phone_number: e.target.value })
+                  }
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-700">WhatsApp</label>
+                <Input
+                  placeholder="Wa.me number"
+                  value={newCustomerData.whatsapp_number}
+                  onChange={(e) =>
+                    setNewCustomerData({ ...newCustomerData, whatsapp_number: e.target.value })
+                  }
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-gray-700">Credit Limit (Rs)</label>
+              <Input
+                type="number"
+                placeholder="0 for unlimited"
+                value={newCustomerData.credit_limit}
+                onChange={(e) =>
+                  setNewCustomerData({ ...newCustomerData, credit_limit: e.target.value })
+                }
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsAddCustomerOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              disabled={!newCustomerData.name || !newCustomerData.email || isAddingCustomer}
+              onClick={async () => {
+                try {
+                  setIsAddingCustomer(true);
+                  const res = await apiClient.post("/customer", {
+                    name: newCustomerData.name,
+                    email: newCustomerData.email.trim().toLowerCase(),
+                    phone_number: newCustomerData.phone_number,
+                    whatsapp_number: newCustomerData.whatsapp_number,
+                    credit_limit: newCustomerData.credit_limit ? Number(newCustomerData.credit_limit) : 0,
+                    outstanding_balance: 0,
+                  });
+                  await fetchCustomers(true);
+                  if (res.data?.data?.id) {
+                    setSelectedCustomer(res.data.data.id);
+                  }
+                  
+                  toast({
+                    title: "Success",
+                    description: "Customer added and selected successfully",
+                    className: "bg-emerald-50 border-emerald-200 text-emerald-800",
+                  });
+
+                  setIsAddCustomerOpen(false);
+                  setNewCustomerData({
+                    name: "",
+                    email: "",
+                    phone_number: "",
+                    whatsapp_number: "",
+                    credit_limit: "",
+                  });
+                } catch (error: any) {
+                  console.error("Customer Add Error:", error);
+                  const errMsg = error.response?.data?.message || error.response?.data?.errors?.[0]?.message || "Failed to create customer";
+                  toast({
+                    variant: "destructive",
+                    title: "Registration Failed",
+                    description: errMsg,
+                  });
+                } finally {
+                  setIsAddingCustomer(false);
+                }
+              }}
+            >
+              {isAddingCustomer ? "Saving..." : "Save Customer"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Checkout Success Screen */}
+      <Dialog open={!!checkoutSuccessData} onOpenChange={(open) => {
+        if (!open) {
+          setCheckoutSuccessData(null);
+          setIsAskingWhatsApp(false);
+          setManualWhatsAppNumber("");
+        }
+      }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <div className="flex flex-col items-center justify-center space-y-3">
+              <div className="bg-green-100 p-3 rounded-full">
+                <CheckCircle2 className="h-8 w-8 text-green-600" />
+              </div>
+              <DialogTitle className="text-xl">Payment Successful</DialogTitle>
+              <DialogDescription className="text-center">
+                Sale <span className="font-semibold text-gray-800">#{checkoutSuccessData?.saleNumber}</span> completed successfully.
+              </DialogDescription>
+            </div>
+          </DialogHeader>
+
+          {checkoutSuccessData && (
+            <div className="py-2">
+              <div className="bg-gray-50 rounded-lg p-4 border border-gray-100 flex flex-col items-center mb-6">
+                <p className="text-sm text-gray-500 mb-1">Total Received</p>
+                <p className="text-3xl font-bold text-gray-900">
+                  <span className="text-xl mr-1">Rs</span>
+                  {checkoutSuccessData.paymentMethod.toUpperCase() === 'CREDIT' 
+                    ? checkoutSuccessData.total.toLocaleString()
+                    : tenderedAmount ? parseFloat(tenderedAmount).toLocaleString() : checkoutSuccessData.total.toLocaleString()}
+                </p>
+                {checkoutSuccessData.paymentMethod.toUpperCase() === 'CASH' && calculatedChange > 0 && (
+                  <p className="text-green-600 font-medium text-sm mt-2">
+                    Change Due: Rs {calculatedChange.toLocaleString()}
+                  </p>
+                )}
+                {checkoutSuccessData.paymentMethod.toUpperCase() === 'CREDIT' && (
+                  <p className="text-orange-600 font-medium text-sm mt-2">
+                    Payment Method: Credit Sale
+                  </p>
+                )}
+              </div>
+
+              <div className="mt-4">
+                {isAskingWhatsApp ? (
+                  <div className="col-span-2 space-y-2 bg-green-50 p-3 rounded-lg border border-green-100 animate-in fade-in slide-in-from-top-2">
+                    <label className="text-xs font-bold text-green-700 uppercase tracking-wider">Enter WhatsApp Number</label>
+                    <div className="flex gap-2">
+                      <Input 
+                        placeholder="0300 1234567"
+                        value={manualWhatsAppNumber}
+                        onChange={(e) => setManualWhatsAppNumber(e.target.value)}
+                        className="bg-white border-green-200 focus-visible:ring-green-500"
+                        autoFocus
+                      />
+                      <Button 
+                        size="sm"
+                        className="bg-[#25D366] hover:bg-[#128C7E] text-white px-4 font-bold"
+                        onClick={async () => {
+                          if (!manualWhatsAppNumber) return;
+                          await shareOnWhatsApp({
+                            ...checkoutSuccessData!,
+                            customerWhatsApp: manualWhatsAppNumber
+                          });
+                          setIsAskingWhatsApp(false);
+                        }}
+                      >
+                        Send
+                      </Button>
+                      <Button 
+                        size="sm"
+                        variant="ghost" 
+                        onClick={() => setIsAskingWhatsApp(false)}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-3">
+                    <Button 
+                      variant="outline" 
+                      className="w-full flex items-center justify-center gap-2 h-12 border-blue-200 text-blue-700 hover:bg-blue-50"
+                      onClick={() => downloadA4Invoice(checkoutSuccessData)}
+                    >
+                      <FileText className="h-5 w-5" />
+                      PDF Invoice
+                    </Button>
+                    <Button 
+                      className="w-full flex items-center justify-center gap-2 h-12 bg-[#25D366] hover:bg-[#128C7E] text-white"
+                      onClick={async () => {
+                        const number = checkoutSuccessData.customerWhatsApp || checkoutSuccessData.customerPhone;
+                        if (!number) {
+                          setIsAskingWhatsApp(true);
+                          return;
+                        }
+                        await shareOnWhatsApp(checkoutSuccessData);
+                      }}
+                    >
+                      <Share2 className="h-5 w-5" />
+                      WhatsApp
+                    </Button>
+                  </div>
+                )}
+              </div>
+              <Button 
+                variant="ghost" 
+                className="w-full mt-3 h-10 text-gray-500"
+                onClick={() => {
+                  setCheckoutSuccessData(null);
+                  setIsAskingWhatsApp(false);
+                  setManualWhatsAppNumber("");
+                }}
+              >
+                Start New Sale
+              </Button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

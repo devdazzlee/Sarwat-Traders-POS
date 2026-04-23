@@ -210,7 +210,7 @@ export async function printReceiptPDF(input: PrintJobInput) {
   // Store name (center) — shrink to fit once (no wrap)
   doc.font(boldFont);
   const usedHead = drawFit(
-    (receiptData.storeName || 'MANPASAND SUPERMARKET').toUpperCase(),
+    (receiptData.storeName || 'SARWAT TRADERS').toUpperCase(),
     margins.left, y, W, { maxSize: HEAD_MAX, minSize: 11.0, align: 'center', font: boldFont }
   );
   y += lineH(usedHead) * 0.9;

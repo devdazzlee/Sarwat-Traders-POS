@@ -4,9 +4,9 @@ exports.imageService = exports.CloudinaryService = void 0;
 const cloudinary_1 = require("cloudinary");
 // Configure Cloudinary
 cloudinary_1.v2.config({
-    cloud_name: process.env.CLOUDINARY_CLOUD_NAME || 'djadwzfwg',
-    api_key: process.env.CLOUDINARY_API_KEY || '199548153713428',
-    api_secret: process.env.CLOUDINARY_API_SECRET || 'gdhzagnXsXDYGrVyEx8qjzzYktY',
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME || 'dlw3schfu',
+    api_key: process.env.CLOUDINARY_API_KEY || '852952424864285',
+    api_secret: process.env.CLOUDINARY_API_SECRET || 'NcCNk3Cy5eJUPeVvtt1FWw1U6lQ',
 });
 class CloudinaryService {
     /**

@@ -551,7 +551,7 @@ export function ManualSale() {
       total,
       paymentMethod,
       cashier: "Muhammad",
-      store: "MANPASAND Store #001",
+      store: "Sarwat Traders #001",
       amountPaid,
       changeAmount,
       discount,
@@ -766,7 +766,7 @@ export function ManualSale() {
          
           console.log("fullAddress", fullAddress);
           const receiptDataForServer: ReceiptData = {
-            storeName: storedBranchName || branchInfo.name || "MANPASAND GENERAL STORE",
+            storeName: storedBranchName || branchInfo.name || "SARWAT TRADERS",
             tagline: "Quality • Service • Value",
             address: fullAddress,
             transactionId: transactionId,

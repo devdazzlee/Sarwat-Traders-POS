@@ -15,14 +15,16 @@ const customerLoginSchema = z.object({
 
 const customerUpdateSchema = z.object({
     body: z.object({
-        name: z.string().min(1, 'Name is required').optional(),
+        email: z.string().email('Invalid email address').optional(),
+        name: z.string().optional().nullish(),
         phone_number: z
             .string()
-            .min(10, 'Phone number must be at least 10 digits')
             .max(15, 'Phone number must be at most 15 digits')
-            .optional(),
-        address: z.string().min(1, 'Address is required').optional(),
-        billing_address: z.string().min(1, 'Billing address is required').optional(),
+            .optional()
+            .nullish(),
+        address: z.string().optional().nullish(),
+        billing_address: z.string().optional().nullish(),
+        credit_limit: z.number().optional().nullish(),
     }),
 });
 

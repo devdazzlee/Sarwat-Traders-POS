@@ -9,14 +9,14 @@ import { Toaster as ToasterOutlet } from "@/components/ui/sonner"
 const inter = Inter({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
-  title: "MANPASAND POS System",
+  title: "Sarwat Traders POS System",
   description: "Professional Point of Sale System",
   generator: 'v0.dev',
   manifest: '/manifest.json',
   appleWebApp: {
     capable: true,
     statusBarStyle: 'default',
-    title: 'MANPASAND POS',
+    title: 'Sarwat Traders POS',
   },
   icons: {
     icon: '/icons/icon-192x192.png',
@@ -25,7 +25,7 @@ export const metadata: Metadata = {
   other: {
     'apple-mobile-web-app-capable': 'yes',
     'apple-mobile-web-app-status-bar-style': 'default',
-    'apple-mobile-web-app-title': 'MANPASAND POS',
+    'apple-mobile-web-app-title': 'Sarwat Traders POS',
   },
 }
 
