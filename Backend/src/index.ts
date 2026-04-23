@@ -60,6 +60,7 @@ app.use(cors({
       'https://pos.manpasandstore.com',
       'https://manpasand-pos-t623.vercel.app',
       'https://manpasand-pos-beta.vercel.app',
+      'https://sarwat-traders-pos-bo8m.vercel.app',
       'http://localhost:3000',
       'http://localhost:3001',
       'http://localhost:5173',
