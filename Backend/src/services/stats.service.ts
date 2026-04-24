@@ -1,12 +1,12 @@
 import { prisma } from "../prisma/client";
 
 export class StatsService {
-    private async totalCustomers() {
+    private async totalCustomers(branchId?: string) {
         const total = await prisma.customer.count();
         return total;
     }
 
-    private async lowStockProducts() {
+    private async lowStockProducts(branchId?: string) {
         const lowStock = await prisma.stock.findMany({
             where: {
                 current_quantity: {
@@ -15,6 +15,7 @@ export class StatsService {
                 product: {
                     is_active: true,
                 },
+                ...(branchId && branchId !== "Not Found" ? { branch_id: branchId } : {})
             },
             select: {
                 id: true,
@@ -32,15 +33,15 @@ export class StatsService {
         return lowStock;
     }
 
-    private async todaySales() {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
+    private async todaySales(branchId?: string) {
+        const past24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
         const sales = await prisma.sale.findMany({
             where: {
                 created_at: {
-                    gte: today,
+                    gte: past24Hours,
                 },
+                ...(branchId && branchId !== "Not Found" ? { branch_id: branchId } : {})
             },
             select: {
                 id: true,
@@ -57,17 +58,60 @@ export class StatsService {
         return sales;
     }
 
-    public async getDashboardStats() {
-        const [totalCustomers, lowStockProducts, todaySales] = await Promise.all([
-            this.totalCustomers(),
-            this.lowStockProducts(),
-            this.todaySales(),
+    private async dailyRevenue(branchId?: string) {
+        const past24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const revenue = await prisma.sale.aggregate({
+            _sum: { total_amount: true },
+            where: {
+                created_at: { gte: past24Hours },
+                ...(branchId && branchId !== "Not Found" ? { branch_id: branchId } : {})
+            }
+        });
+        return revenue._sum.total_amount ? Number(revenue._sum.total_amount) : 0;
+    }
+
+    private async dailyCredit(branchId?: string) {
+        const past24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const credit = await prisma.sale.aggregate({
+            _sum: { total_amount: true },
+            where: {
+                payment_method: 'CREDIT',
+                created_at: { gte: past24Hours },
+                ...(branchId && branchId !== "Not Found" ? { branch_id: branchId } : {})
+            }
+        });
+        return credit._sum.total_amount ? Number(credit._sum.total_amount) : 0;
+    }
+
+    private async dailyExpense(branchId?: string) {
+        const past24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const expenses = await prisma.expense.aggregate({
+            _sum: { amount: true },
+            where: {
+                created_at: { gte: past24Hours },
+                ...(branchId && branchId !== "Not Found" ? { cashflow: { branch_id: branchId } } : {})
+            }
+        });
+        return expenses._sum.amount ? Number(expenses._sum.amount) : 0;
+    }
+
+    public async getDashboardStats(branchId?: string) {
+        const [totalCustomers, lowStockProducts, todaySales, dailyRevenue, dailyCredit, dailyExpense] = await Promise.all([
+            this.totalCustomers(branchId),
+            this.lowStockProducts(branchId),
+            this.todaySales(branchId),
+            this.dailyRevenue(branchId),
+            this.dailyCredit(branchId),
+            this.dailyExpense(branchId),
         ]);
 
         return {
             totalCustomers,
             lowStockProducts,
             todaySales,
+            dailyRevenue,
+            dailyCredit,
+            dailyExpense,
         };
     }
 }

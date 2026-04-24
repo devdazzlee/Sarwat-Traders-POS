@@ -111,7 +111,7 @@ export function LoginForm({ onLogin }: LoginFormProps) {
             <img src="/logo.png" alt="Sarwat Traders Logo" className="h-20 w-auto" />
           </div>
           <CardTitle className="text-2xl font-bold text-gray-900">Sarwat Traders</CardTitle>
-          <CardDescription>Point of Sale System</CardDescription>
+          <CardDescription>Point of Sales System</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">

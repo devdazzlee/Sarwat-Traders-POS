@@ -109,9 +109,6 @@ const getSaleByIdController = asyncHandler(async (req: Request, res: Response) =
 
 const createSaleController = asyncHandler(async (req: Request, res: Response) => {
     const branchId = resolveBranchId(req);
-    if (!branchId) {
-        return new ApiResponse(null, "No branch ID found for sale", 400, false).send(res);
-    }
 
     const sale = await saleService.createSale({
         ...req.body,
@@ -156,7 +153,8 @@ const getTodaySalesController = asyncHandler(async (req: Request, res: Response)
 });
 
 const getRecentSaleItemProductNameAndPrice = asyncHandler(async (req: Request, res: Response) => {
-    const branchId = req.user?.branch_id as string;
+    let branchId = resolveBranchId(req);
+    if (branchId === "Not Found") branchId = undefined;
     const recentSaleItem = await saleService.getRecentSaleItemsProductNameAndPrice(branchId);
     new ApiResponse(recentSaleItem, "Recent sale item product name and price fetched successfully").send(res);
 });

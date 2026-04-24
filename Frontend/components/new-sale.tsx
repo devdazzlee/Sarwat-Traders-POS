@@ -60,7 +60,6 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { useHoldSales } from "@/hooks/use-hold-sales";
-import { usePosBranch } from "@/hooks/use-pos-branch";
 
 interface CartItem {
   id: string; // Unique cart item ID (product.id + timestamp for separate entries)
@@ -115,17 +114,8 @@ export function NewSale() {
   const [tenderedAmount, setTenderedAmount] = useState("");
   const [calculatedChange, setCalculatedChange] = useState(0);
   const [paymentError, setPaymentError] = useState("");
-  const {
-    adminMode,
-    branchLoading,
-    branches: availableBranches,
-    selectedBranchId,
-    setSelectedBranchId,
-    branchInfo,
-    hasBranch,
-  } = usePosBranch();
   const { holdSales, holdSale, retrieveHoldSale, deleteHoldSale, holdSalesLoading, refreshHoldSales } =
-    useHoldSales(selectedBranchId);
+    useHoldSales();
   const searchInputRef = useRef<HTMLInputElement>(null);
   // Refs for price and quantity inputs for keyboard navigation
   const priceInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
@@ -783,7 +773,7 @@ export function NewSale() {
   };
 
   const holdCurrentSale = async () => {
-    if (cart.length === 0 || !hasBranch) {
+    if (cart.length === 0) {
       return;
     }
 
@@ -941,10 +931,6 @@ export function NewSale() {
   };
 
   const startPayment = (method: "Cash" | "Credit") => {
-    if (!hasBranch) {
-      return;
-    }
-
     setPaymentMethodPending(method);
     setTenderedAmount(total.toFixed(2));
     setPaymentError("");
@@ -1010,17 +996,10 @@ export function NewSale() {
           };
         });
 
-        const branchId = selectedBranchId;
-
-        if (!branchId) {
-          throw new Error("A branch must be selected before creating a sale.");
-        }
-
         // Prepare payload
         const payload: any = {
           items: saleItems,
           paymentMethod: method === "Cash" ? "CASH" : "CREDIT",
-          branchId,
           discountAmount: globalDiscountAmount,
         };
         if (selectedCustomer) {
@@ -1143,7 +1122,7 @@ export function NewSale() {
          
           console.log("fullAddress", fullAddress);
           receiptDataForServer = {
-            storeName: storedBranchName || branchInfo.name || "SARWAT TRADERS",
+            storeName: storedBranchName || "SARWAT TRADERS",
             tagline: "Quality • Service • Value",
             address: fullAddress,
             transactionId: transactionId,
@@ -1646,7 +1625,7 @@ export function NewSale() {
                 <Button
                   variant="outline"
                   onClick={holdCurrentSale}
-                  disabled={isHoldingSale || branchLoading || !hasBranch}
+                  disabled={isHoldingSale}
                 >
                   {isHoldingSale ? "Saving..." : "Hold Sale"}
                 </Button>
@@ -1662,7 +1641,7 @@ export function NewSale() {
                   <Button
                     variant="outline"
                     onClick={handleViewHeldSales}
-                    disabled={isViewingHeldSales || holdSalesLoading || branchLoading || !hasBranch}
+                    disabled={isViewingHeldSales || holdSalesLoading}
                   >
                     {isViewingHeldSales || holdSalesLoading ? "Loading..." : "View Held Sales"}
                   </Button>
@@ -1670,34 +1649,6 @@ export function NewSale() {
               )}
             </div>
           </div>
-          {adminMode && (
-            <div className="mb-4 max-w-sm">
-              <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-gray-500">
-                POS Branch
-              </label>
-              <Select
-                value={selectedBranchId || "none"}
-                onValueChange={(value) => setSelectedBranchId(value === "none" ? "" : value)}
-              >
-                <SelectTrigger className="bg-white">
-                  <SelectValue placeholder={branchLoading ? "Loading branches..." : "Select branch"} />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Select branch</SelectItem>
-                  {availableBranches.map((branch) => (
-                    <SelectItem key={branch.id} value={branch.id}>
-                      {branch.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {!hasBranch && !branchLoading && (
-                <p className="mt-2 text-sm text-amber-700">
-                  Select a branch to use Hold Sale and complete sales.
-                </p>
-              )}
-            </div>
-          )}
           <div className="flex items-center space-x-4">
             <div className="relative flex-1 max-w-md">
               <Search className={`absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 ${isScanning ? 'text-blue-500 animate-pulse' : 'text-gray-400'}`} />
@@ -1982,7 +1933,7 @@ export function NewSale() {
                 size="sm"
                 onClick={holdCurrentSale}
                 className="flex-1 min-w-[120px]"
-                disabled={isHoldingSale || branchLoading || !hasBranch}
+                disabled={isHoldingSale}
               >
                 {isHoldingSale ? "Saving..." : "Hold Sale (Save)"}
               </Button>
@@ -1995,7 +1946,7 @@ export function NewSale() {
               size="sm"
               onClick={handleViewHeldSales}
               className="mt-3 w-full justify-between border border-gray-200 bg-white hover:bg-white"
-              disabled={isViewingHeldSales || holdSalesLoading || branchLoading || !hasBranch}
+              disabled={isViewingHeldSales || holdSalesLoading}
             >
               <span className="text-sm font-medium text-gray-700">
                 {isViewingHeldSales || holdSalesLoading
@@ -2542,7 +2493,7 @@ export function NewSale() {
                 <Button
                   size="sm"
                   onClick={() => startPayment("Cash")}
-                  disabled={paymentLoading || branchLoading || !hasBranch}
+                  disabled={paymentLoading}
                   className="h-10 text-sm"
                 >
                   <DollarSign className="mr-2 h-4 w-4" />
@@ -2552,7 +2503,7 @@ export function NewSale() {
                   size="sm"
                   variant="outline"
                   onClick={() => startPayment("Credit")}
-                  disabled={paymentLoading || branchLoading || !hasBranch || (!selectedCustomer && total > 0)}
+                  disabled={paymentLoading || (!selectedCustomer && total > 0)}
                   className="h-10 text-sm border-blue-200 hover:bg-blue-50 hover:text-blue-700 text-blue-600 font-semibold"
                 >
                   <CreditCard className="mr-2 h-4 w-4" />

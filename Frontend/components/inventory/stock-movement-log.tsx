@@ -212,7 +212,7 @@ export function StockMovementLog() {
                   <SelectValue placeholder="All Branches" />
                 </SelectTrigger>
                 <SelectContent className="rounded-2xl shadow-2xl">
-                  <SelectItem value="all" className="font-bold text-xs uppercase">Global Domain</SelectItem>
+                  <SelectItem value="all" className="font-bold text-xs uppercase">All Branches</SelectItem>
                   {branches.map(b => <SelectItem key={b.id} value={b.id} className="text-xs">{b.name}</SelectItem>)}
                 </SelectContent>
               </Select>

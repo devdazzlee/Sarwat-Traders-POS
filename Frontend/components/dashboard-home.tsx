@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button"
 import { PageLoader } from "@/components/ui/page-loader"
 import { useLoading } from "@/hooks/use-loading"
 import { useToast } from "@/hooks/use-toast"
-import { DollarSign, ShoppingCart, Users, Package, TrendingUp, TrendingDown, RefreshCw, Download, Truck, Plus } from "lucide-react"
+import { DollarSign, ShoppingCart, Users, Package, TrendingUp, TrendingDown, RefreshCw, Download, Truck, Plus, CreditCard, Banknote, Receipt } from "lucide-react"
 import { StatCardSkeleton } from "@/components/ui/stat-card-skeleton"
 import apiClient from "@/lib/apiClient"
 import { normalizeUserRole, type UserRole } from "@/lib/role-utils"
@@ -49,6 +49,9 @@ interface DashboardStats {
     }
   }>
   todaySales: any[]
+  dailyRevenue: number
+  dailyCredit: number
+  dailyExpense: number
 }
 
 interface DashboardHomeProps {
@@ -69,67 +72,40 @@ export function DashboardHome({ onNavigate }: DashboardHomeProps) {
 
   const getTopProducts = async () => {
     try {
-      console.log('🔄 Fetching top products...')
       const response = await apiClient.get('/products/best-selling')
-      console.log('✅ Top products response:', response.data)
       if (response?.data?.success) {
         setTopProducts(response.data.data || [])
-      } else {
-        console.warn('⚠️ Top products response not successful:', response.data)
       }
     } catch (error: any) {
       console.error("❌ Error fetching top products:", error)
-      console.error("Error details:", error.response?.data)
-      toast({
-        variant: "destructive",
-        title: "Top Products Error",
-        description: error.response?.data?.message || "Failed to fetch top products"
-      })
     }
   }
-
 
   const getRecentSales = async () => {
     try {
       const response = await apiClient.get('/sale/recent')
-      console.log('✅ Recent Sales Response:', response.data)
       if (response?.data?.success) {
         setRecentSales(response.data.data || [])
-        console.log('📊 Recent Sales Data:', response.data.data)
       } else {
-        console.warn('⚠️ Recent sales response not successful:', response.data)
         setRecentSales([])
       }
     } catch (error: any) {
       console.error("❌ Error fetching recent sales:", error.response?.data || error.message)
       setRecentSales([])
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: error.response?.data?.message || "Failed to fetch recent sales"
-      })
     }
   }
 
   const getStats = async () => {
     try {
       const response = await apiClient.get('/dashboard/stats')
-      console.log('✅ Dashboard Stats Response:', response.data)
       if (response?.data?.success) {
         setStats(response.data.data || null)
-        console.log('📊 Dashboard Stats Data:', response.data.data)
       } else {
-        console.warn('⚠️ Dashboard stats response not successful:', response.data)
         setStats(null)
       }
     } catch (error: any) {
       console.error("❌ Error fetching stats:", error.response?.data || error.message)
       setStats(null)
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: error.response?.data?.message || "Failed to fetch dashboard stats"
-      })
     }
   }
 
@@ -197,7 +173,10 @@ export function DashboardHome({ onNavigate }: DashboardHomeProps) {
     const summaryLines = [
       `- Total Customers: ${stats.totalCustomers}`,
       `- Low Stock Items: ${stats.lowStockProducts.length}`,
-      stats.todaySales.length > 0 ? `- Today's Sales: ${stats.todaySales.length}` : "- No sales today",
+      `- Today's Transactions: ${stats.todaySales.length}`,
+      `- Daily Revenue: Rs ${(stats.dailyRevenue || 0).toFixed(2)}`,
+      `- Daily Credit: Rs ${(stats.dailyCredit || 0).toFixed(2)}`,
+      `- Daily Expenses: Rs ${(stats.dailyExpense || 0).toFixed(2)}`,
     ]
     summaryLines.forEach((line) => {
       doc.text(line, 16, y)
@@ -215,10 +194,7 @@ export function DashboardHome({ onNavigate }: DashboardHomeProps) {
       ? recentSales.map((sale) => `- ${sale.productName} - Rs ${sale.price}`)
       : ["- No recent transactions"]
     transactions.forEach((line) => {
-      if (y > 275) {
-        doc.addPage()
-        y = 15
-      }
+      if (y > 275) { doc.addPage(); y = 15 }
       const wrapped = doc.splitTextToSize(line, 178)
       doc.text(wrapped, 16, y)
       y += wrapped.length * 5
@@ -237,32 +213,7 @@ export function DashboardHome({ onNavigate }: DashboardHomeProps) {
         )
       : ["No top products data"]
     productLines.forEach((line) => {
-      if (y > 275) {
-        doc.addPage()
-        y = 15
-      }
-      const wrapped = doc.splitTextToSize(line, 178)
-      doc.text(wrapped, 16, y)
-      y += wrapped.length * 5
-    })
-    y += 2
-
-    doc.setFont("helvetica", "bold")
-    doc.setFontSize(12)
-    doc.text("Low Stock Alerts", 14, y)
-    y += 6
-    doc.setFont("helvetica", "normal")
-    doc.setFontSize(10)
-    const lowStockLines = stats.lowStockProducts.length
-      ? stats.lowStockProducts.map(
-          (item) => `- ${item.product.name} (${item.product.sku}) - Quantity: ${item.current_quantity}`,
-        )
-      : ["- No low stock alerts"]
-    lowStockLines.forEach((line) => {
-      if (y > 275) {
-        doc.addPage()
-        y = 15
-      }
+      if (y > 275) { doc.addPage(); y = 15 }
       const wrapped = doc.splitTextToSize(line, 178)
       doc.text(wrapped, 16, y)
       y += wrapped.length * 5
@@ -290,12 +241,11 @@ export function DashboardHome({ onNavigate }: DashboardHomeProps) {
     })
   }
 
-  // Don't show full page loader, show skeletons instead
-
   const formatCurrency = (amount: string | number) => `Rs ${Number(amount).toFixed(2)}`
 
   return (
     <div className="p-4 md:p-6 space-y-4 md:space-y-6">
+      {/* Header */}
       <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
         <div>
           <h1 className="text-2xl md:text-3xl font-bold text-gray-900">Dashboard</h1>
@@ -320,7 +270,7 @@ export function DashboardHome({ onNavigate }: DashboardHomeProps) {
         </div>
       </div>
 
-      {/* Stats Cards */}
+      {/* Stats Cards — Row 1: Counts */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
         {initialLoading ? (
           <>
@@ -338,6 +288,7 @@ export function DashboardHome({ onNavigate }: DashboardHomeProps) {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">{stats?.todaySales?.length || 0}</div>
+                <p className="text-xs text-gray-500 mt-1">Transactions in last 24h</p>
               </CardContent>
             </Card>
 
@@ -348,6 +299,7 @@ export function DashboardHome({ onNavigate }: DashboardHomeProps) {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">{recentSales.length}</div>
+                <p className="text-xs text-gray-500 mt-1">Latest 5 transactions</p>
               </CardContent>
             </Card>
 
@@ -358,18 +310,13 @@ export function DashboardHome({ onNavigate }: DashboardHomeProps) {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">{stats?.totalCustomers || 0}</div>
+                <p className="text-xs text-gray-500 mt-1">Registered customers</p>
               </CardContent>
             </Card>
 
             <Card
-              className={`transition-shadow ${
-                canOpenInventory ? "cursor-pointer hover:shadow-md" : "hover:shadow-md"
-              }`}
-              onClick={() => {
-                if (canOpenInventory) {
-                  onNavigate?.("inventory-dashboard")
-                }
-              }}
+              className={`transition-shadow ${canOpenInventory ? "cursor-pointer hover:shadow-md" : "hover:shadow-md"}`}
+              onClick={() => { if (canOpenInventory) { onNavigate?.("inventory-dashboard") } }}
             >
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium">Low Stock Items</CardTitle>
@@ -386,6 +333,53 @@ export function DashboardHome({ onNavigate }: DashboardHomeProps) {
         )}
       </div>
 
+      {/* Stats Cards — Row 2: Financial Metrics */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 md:gap-6">
+        {initialLoading ? (
+          <>
+            <StatCardSkeleton />
+            <StatCardSkeleton />
+            <StatCardSkeleton />
+          </>
+        ) : (
+          <>
+            <Card className="hover:shadow-md transition-shadow border-blue-200 bg-blue-50/50">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium text-blue-800">Total Revenue (Today)</CardTitle>
+                <Banknote className="h-5 w-5 text-blue-600" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-blue-700">{formatCurrency(stats?.dailyRevenue || 0)}</div>
+                <p className="text-xs text-blue-500 mt-1">All cash + credit sales</p>
+              </CardContent>
+            </Card>
+
+            <Card className="hover:shadow-md transition-shadow border-amber-200 bg-amber-50/50">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium text-amber-800">Credit Sales (Today)</CardTitle>
+                <CreditCard className="h-5 w-5 text-amber-600" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-amber-700">{formatCurrency(stats?.dailyCredit || 0)}</div>
+                <p className="text-xs text-amber-500 mt-1">Unpaid credit transactions</p>
+              </CardContent>
+            </Card>
+
+            <Card className="hover:shadow-md transition-shadow border-red-200 bg-red-50/50">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium text-red-800">Expenses (Today)</CardTitle>
+                <Receipt className="h-5 w-5 text-red-600" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-red-700">{formatCurrency(stats?.dailyExpense || 0)}</div>
+                <p className="text-xs text-red-500 mt-1">Total outgoing cash</p>
+              </CardContent>
+            </Card>
+          </>
+        )}
+      </div>
+
+      {/* Quick Actions */}
       {onNavigate && role && (
         <div className="flex flex-wrap gap-2">
           {PURCHASE_ENTRY_ROLES.includes(role) && (
@@ -409,6 +403,7 @@ export function DashboardHome({ onNavigate }: DashboardHomeProps) {
         </div>
       )}
 
+      {/* Recent Sales + Top Products */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6">
         {/* Recent Sales */}
         <Card>
@@ -426,21 +421,18 @@ export function DashboardHome({ onNavigate }: DashboardHomeProps) {
                   className="flex items-center justify-between p-3 border rounded-lg hover:bg-gray-50 transition-colors"
                 >
                   <div>
-                    <div className="font-medium">{sale.productName}</div>
+                    <div className="font-medium text-sm">{sale.productName}</div>
                   </div>
                   <div className="text-right">
                     <div className="font-medium">{formatCurrency(sale.price)}</div>
-                    <Badge
-                      variant="default"
-                      className="bg-green-100 text-green-800"
-                    >
+                    <Badge variant="default" className="bg-green-100 text-green-800 text-xs">
                       completed
                     </Badge>
                   </div>
                 </div>
               ))}
               {recentSales.length === 0 && (
-                <div className="text-center text-gray-500">No recent sales</div>
+                <div className="text-center text-gray-500 py-4">No recent sales</div>
               )}
             </div>
           </CardContent>
@@ -475,7 +467,7 @@ export function DashboardHome({ onNavigate }: DashboardHomeProps) {
                 </div>
               ))}
               {topProducts.length === 0 && (
-                <div className="text-center text-gray-500">No top products data</div>
+                <div className="text-center text-gray-500 py-4">No top products data</div>
               )}
             </div>
           </CardContent>

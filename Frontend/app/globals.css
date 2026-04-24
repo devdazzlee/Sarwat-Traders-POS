@@ -6,10 +6,62 @@
   box-sizing: border-box;
 }
 
+/* ============================================================
+   GLOBAL POS TYPOGRAPHY SYSTEM
+   Enforces consistent, easy-to-read fonts across all pages
+   ============================================================ */
 body {
   font-family: Arial, Helvetica, sans-serif;
+  font-size: 14px;
+  font-weight: 400;
+  color: #111827;
   overflow-x: hidden;
 }
+
+/* Normalize aggressive font-black class to semibold */
+.font-black {
+  font-weight: 700 !important;
+}
+
+/* Normalize tiny tracking-widest text (was causing unreadable labels) */
+.tracking-widest {
+  letter-spacing: 0.025em !important;
+}
+
+/* Normalize very tiny text sizes that hurt readability */
+.text-\[8px\],
+.text-\[9px\],
+.text-\[10px\] {
+  font-size: 11px !important;
+}
+
+/* Headings — consistent and clean */
+h1 { font-size: 1.5rem; font-weight: 700; color: #111827; }
+h2 { font-size: 1.25rem; font-weight: 600; color: #1f2937; }
+h3 { font-size: 1.125rem; font-weight: 600; color: #1f2937; }
+h4 { font-size: 1rem; font-weight: 600; color: #374151; }
+
+/* Form labels — readable, not uppercase military style */
+label {
+  font-size: 13px;
+  font-weight: 500;
+  color: #374151;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+/* Table headers — consistent */
+th {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7280;
+}
+
+/* Ensure uppercase in labels is readable */
+.uppercase {
+  letter-spacing: 0.04em;
+}
+
 
 /* Ensure mobile viewport */
 html {

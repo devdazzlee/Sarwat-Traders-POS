@@ -31,7 +31,7 @@ import { Badge } from "@/components/ui/badge";
 
 const REPORT_TYPES = [
   { value: "valuation", label: "Stock Valuation", icon: Box, desc: "Current inventory worth and quantities across locations." },
-  { value: "purchase", label: "Procurement History", icon: Truck, desc: "Log of all incoming stock and purchase orders." },
+  { value: "purchase", label: "purchase History", icon: Truck, desc: "Log of all incoming stock and purchase orders." },
   { value: "transfer", label: "Inter-Branch Logistics", icon: ArrowRightLeft, desc: "Stock movement between branches and warehouses." },
   { value: "stockout", label: "Outflow Analytics", icon: TrendingUp, desc: "Sales, damages, and losses tracking." },
   { value: "lowstock", label: "Critical Alerts", icon: AlertTriangle, desc: "Items below minimum threshold levels." },

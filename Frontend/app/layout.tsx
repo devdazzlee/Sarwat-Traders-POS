@@ -10,7 +10,7 @@ const inter = Inter({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
   title: "Sarwat Traders POS System",
-  description: "Professional Point of Sale System",
+  description: "Professional Point of Sales System",
   generator: 'v0.dev',
   manifest: '/manifest.json',
   appleWebApp: {

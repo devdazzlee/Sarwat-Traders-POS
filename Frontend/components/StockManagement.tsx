@@ -469,7 +469,7 @@ export function StockManagement() {
               onClick={handleExport}
               className="hidden sm:flex text-slate-600 border-slate-200 bg-white hover:bg-slate-50 font-black h-11 px-6 rounded-xl text-[11px] tracking-widest uppercase gap-3 transition-all shadow-sm"
             >
-              <FileDown className="h-4 w-4 text-indigo-500" /> Export Ledger
+              <FileDown className="h-4 w-4 text-indigo-500" /> Export
             </Button>
 
             <Button
@@ -499,13 +499,13 @@ export function StockManagement() {
               </DialogTrigger>
               <DialogContent className="max-w-lg bg-white rounded-2xl border-none shadow-2xl p-0 overflow-hidden">
                 <DialogHeader className="p-6 bg-indigo-600">
-                  <DialogTitle className="text-lg font-black text-white uppercase tracking-tight">Stock Registration</DialogTitle>
-                  <p className="text-indigo-100 text-[10px] font-bold uppercase tracking-widest mt-0.5 opacity-80">Procurement & Log</p>
+                  <DialogTitle className="text-lg font-black text-white uppercase tracking-tight">Add Stock</DialogTitle>
+                  <p className="text-indigo-100 text-[10px] font-bold uppercase tracking-widest mt-0.5 opacity-80">Add new stock entry</p>
                 </DialogHeader>
                 <div className="p-6 space-y-6">
                   {/* PRODUCT SELECTOR */}
                   <div className="space-y-2 relative" ref={addProductDropdownRef}>
-                    <Label className="text-[10px] font-black uppercase text-slate-500 tracking-wider">Inventory Asset</Label>
+                    <Label className="text-[10px] font-black uppercase text-slate-500 tracking-wider">Product</Label>
                     <div className="relative group">
                       <Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-600 transition-colors" />
                       <Input
@@ -524,7 +524,7 @@ export function StockManagement() {
                           {filteredProducts.length === 0 ? (
                             <div className="p-6 text-center">
                               <Package className="h-6 w-6 text-slate-200 mx-auto mb-1" />
-                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter italic">No matching assets</p>
+                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter italic">No products found</p>
                             </div>
                           ) : (
                             <div className="p-1">
@@ -554,10 +554,10 @@ export function StockManagement() {
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <Label className="text-[10px] font-black uppercase text-slate-500 tracking-wider">Node</Label>
+                      <Label className="text-[10px] font-black uppercase text-slate-500 tracking-wider">Branch</Label>
                       <Select value={addForm.branchId} onValueChange={(v) => setAddForm({ ...addForm, branchId: v })}>
                         <SelectTrigger className="h-12 bg-slate-50 border-none rounded-xl font-bold text-slate-700 focus:ring-2 focus:ring-indigo-600/20">
-                          <SelectValue placeholder="Target Node" />
+                          <SelectValue placeholder="Select Branch" />
                         </SelectTrigger>
                         <SelectContent className="rounded-xl border-none shadow-xl">
                           {branches.map(b => <SelectItem key={b.id} value={b.id} className="font-bold text-[11px] py-2">{b.name}</SelectItem>)}
@@ -593,7 +593,7 @@ export function StockManagement() {
                       </Select>
                     </div>
                     <div className="space-y-2">
-                      <Label className="text-[10px] font-black uppercase text-slate-500 tracking-wider">Cost Point</Label>
+                      <Label className="text-[10px] font-black uppercase text-slate-500 tracking-wider">Cost Price</Label>
                       <Input
                         placeholder="Cost"
                         type="number"
@@ -606,7 +606,7 @@ export function StockManagement() {
 
                   <Button className="w-full h-14 bg-indigo-600 hover:bg-slate-900 text-white font-black rounded-xl shadow-lg shadow-indigo-100 text-xs tracking-widest uppercase transition-all gap-2" onClick={handleAddStock} disabled={isTransferring}>
                     {isTransferring ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-                    Authorize Registration
+                    Save Stock
                   </Button>
                 </div>
               </DialogContent>
@@ -626,11 +626,11 @@ export function StockManagement() {
               </DialogTrigger>
               <DialogContent className="max-w-md bg-white rounded-3xl border-none shadow-2xl p-0 overflow-hidden">
                 <DialogHeader className="p-8 bg-amber-500">
-                  <DialogTitle className="text-xl font-black text-white uppercase tracking-tight text-center">Precision Adjustment</DialogTitle>
+                  <DialogTitle className="text-xl font-black text-white uppercase tracking-tight text-center">Adjust Stock</DialogTitle>
                 </DialogHeader>
                 <div className="p-8 space-y-6">
                   <div className="space-y-2 relative" ref={adjustProductDropdownRef}>
-                    <Label className="text-[11px] font-black uppercase text-slate-400 tracking-wider">Asset for Adjustment</Label>
+                    <Label className="text-[11px] font-black uppercase text-slate-400 tracking-wider">Product</Label>
                     <div className="relative group">
                       <Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
                       <Input
@@ -676,7 +676,7 @@ export function StockManagement() {
 
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <Label className="text-[11px] font-black uppercase text-slate-400 tracking-wider">Node Location</Label>
+                      <Label className="text-[11px] font-black uppercase text-slate-400 tracking-wider">Branch</Label>
                       <Select value={adjustForm.branchId} onValueChange={(v) => setAdjustForm({ ...adjustForm, branchId: v })}>
                         <SelectTrigger className="h-12 bg-slate-50 border-none rounded-xl font-bold text-slate-700">
                           <SelectValue placeholder="Branch" />
@@ -699,7 +699,7 @@ export function StockManagement() {
                   </div>
 
                   <div className="space-y-2">
-                    <Label className="text-[11px] font-black uppercase text-slate-400 tracking-wider">Correction Category</Label>
+                    <Label className="text-[11px] font-black uppercase text-slate-400 tracking-wider">Reason</Label>
                     <Select value={adjustForm.reason} onValueChange={(v) => setAdjustForm({ ...adjustForm, reason: v })}>
                       <SelectTrigger className="h-12 bg-slate-100/50 border-none rounded-xl font-bold text-slate-700">
                         <SelectValue placeholder="Select Reason" />
@@ -734,11 +734,11 @@ export function StockManagement() {
               </DialogTrigger>
               <DialogContent className="max-w-lg bg-white rounded-2xl border-none shadow-2xl p-0 overflow-hidden">
                 <DialogHeader className="p-6 bg-rose-600">
-                  <DialogTitle className="text-lg font-black text-white uppercase tracking-tight text-center">Stock Disposal Protocol</DialogTitle>
+                  <DialogTitle className="text-lg font-black text-white uppercase tracking-tight text-center">Remove Stock</DialogTitle>
                 </DialogHeader>
                 <div className="p-6 space-y-6">
                   <div className="space-y-2 relative" ref={removeProductDropdownRef}>
-                    <Label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Asset for Disposal</Label>
+                    <Label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Product</Label>
                     <div className="relative group">
                       <Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
                       <Input
@@ -784,7 +784,7 @@ export function StockManagement() {
 
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <Label className="text-[11px] font-black uppercase text-slate-400 tracking-wider">Storage Node</Label>
+                      <Label className="text-[11px] font-black uppercase text-slate-400 tracking-wider">Branch</Label>
                       <Select value={removeForm.branchId} onValueChange={(v) => setRemoveForm({ ...removeForm, branchId: v })}>
                         <SelectTrigger className="h-12 bg-slate-50 border-none rounded-xl font-bold text-slate-700">
                           <SelectValue placeholder="Branch" />
@@ -795,7 +795,7 @@ export function StockManagement() {
                       </Select>
                     </div>
                     <div className="space-y-2">
-                      <Label className="text-[11px] font-black uppercase text-slate-400 tracking-wider">Disposal Quantity</Label>
+                      <Label className="text-[11px] font-black uppercase text-slate-400 tracking-wider">Quantity to Remove</Label>
                       <Input
                         type="number"
                         placeholder="0"
@@ -807,7 +807,7 @@ export function StockManagement() {
                   </div>
 
                   <div className="space-y-2">
-                    <Label className="text-[11px] font-black uppercase text-slate-400 tracking-wider">Disposal Reason</Label>
+                    <Label className="text-[11px] font-black uppercase text-slate-400 tracking-wider">Reason</Label>
                     <Select value={removeForm.reason} onValueChange={(v) => setRemoveForm({ ...removeForm, reason: v })}>
                       <SelectTrigger className="h-12 bg-slate-50 border-none rounded-xl font-bold text-slate-700">
                         <SelectValue placeholder="Method" />

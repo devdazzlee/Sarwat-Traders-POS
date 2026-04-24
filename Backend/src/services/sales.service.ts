@@ -923,22 +923,22 @@ class SaleService {
     return sale as Prisma.SaleGetPayload<{ include: { sale_items: true } }>;
   }
 
-  async getRecentSaleItemsProductNameAndPrice(branchId: string) {
-    const sale = await prisma.sale.findFirst({
-      where: { branch_id: branchId },
+  async getRecentSaleItemsProductNameAndPrice(branchId?: string) {
+    const defaultBranchId = branchId?.trim() || undefined;
+
+    const sales = await prisma.sale.findMany({
+      where: defaultBranchId && defaultBranchId !== "Not Found" 
+        ? { branch_id: defaultBranchId } 
+        : undefined,
       orderBy: { sale_date: 'desc' },
-      include: {
-        sale_items: {
-          orderBy: { id: 'desc' },
-          take: 5,
-          include: { product: true },
-        },
-      },
+      take: 5,
     });
-    if (!sale || sale.sale_items.length === 0) return [];
-    return sale.sale_items.map((item) => ({
-      productName: item.product.name,
-      price: item.unit_price,
+
+    if (!sales || sales.length === 0) return [];
+    
+    return sales.map((sale) => ({
+      productName: sale.sale_number, // Mapping sale_number to productName as expected by UI
+      price: sale.total_amount,
     }));
   }
 

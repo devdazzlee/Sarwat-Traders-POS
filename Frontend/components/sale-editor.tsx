@@ -164,7 +164,7 @@ export function SaleEditor({ sale, open, onOpenChange, onSuccess }: SaleEditorPr
                  <Table>
                     <TableHeader className="bg-slate-50">
                        <TableRow>
-                          <TableHead className="font-black text-xs uppercase text-slate-500">Inventory Item</TableHead>
+                          <TableHead className="font-black text-xs uppercase text-slate-500">Product</TableHead>
                           <TableHead className="font-black text-xs uppercase text-slate-500 w-32">Qty</TableHead>
                           <TableHead className="font-black text-xs uppercase text-slate-500 w-40 text-right">Unit Price</TableHead>
                           <TableHead className="font-black text-xs uppercase text-slate-500 w-40 text-right">Subtotal</TableHead>
@@ -252,7 +252,7 @@ export function SaleEditor({ sale, open, onOpenChange, onSuccess }: SaleEditorPr
                     </div>
                  </div>
                  <div className="flex justify-between items-center pt-2 border-t border-slate-200">
-                    <span className="text-xl font-black uppercase text-slate-900">Revised Total</span>
+                    <span className="text-xl font-black uppercase text-slate-900">New Total</span>
                     <span className="text-3xl font-black text-blue-600">Rs {calculateTotal().toLocaleString()}</span>
                  </div>
               </div>
@@ -268,7 +268,7 @@ export function SaleEditor({ sale, open, onOpenChange, onSuccess }: SaleEditorPr
         </div>
 
         <DialogFooter className="p-6 bg-white border-t border-slate-200">
-           <Button variant="ghost" className="font-black text-slate-500" onClick={() => onOpenChange(false)}>Discard Edits</Button>
+           <Button variant="ghost" className="font-black text-slate-500" onClick={() => onOpenChange(false)}>Cancel</Button>
            <Button 
              className="bg-slate-900 hover:bg-slate-800 text-white font-black px-12 rounded-xl h-12 shadow-xl border-b-4 border-slate-700" 
              onClick={handleSave}

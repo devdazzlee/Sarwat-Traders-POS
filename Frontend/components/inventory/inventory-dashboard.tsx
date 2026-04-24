@@ -21,14 +21,11 @@ import {
   Boxes,
   Activity,
   CheckCircle2,
-  XCircle,
   BarChart3,
-  PieChart as PieIcon,
   ShoppingBag,
-  ArrowUpRight,
+  ArrowRightLeft,
   Gauge,
   Zap,
-  ArrowRightLeft,
 } from "lucide-react";
 import {
   PieChart,
@@ -40,10 +37,7 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  Legend,
   ResponsiveContainer,
-  AreaChart,
-  Area,
   ComposedChart,
 } from "recharts";
 import apiClient from "@/lib/apiClient";
@@ -71,22 +65,11 @@ interface DashboardStats {
 
 const COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6"];
 
-// --- PREMIUM LOADER ---
-function PremiumLoader({ message = "Synchronizing Inventory Network..." }: { message?: string }) {
+function PageLoader() {
   return (
-    <div className="min-h-[70vh] flex flex-col items-center justify-center p-8 animate-in fade-in zoom-in duration-500">
-      <div className="relative mb-8 pt-20">
-        <div className="h-24 w-24 rounded-full border-[6px] border-slate-100 border-t-blue-600 animate-spin" />
-        <div className="absolute inset-0 flex items-center justify-center mt-20">
-           <div className="h-12 w-12 bg-blue-50 rounded-full flex items-center justify-center animate-pulse shadow-lg shadow-blue-100">
-              <RefreshCw className="h-6 w-6 text-blue-600" />
-           </div>
-        </div>
-      </div>
-      <div className="text-center space-y-2">
-        <h3 className="text-2xl font-black text-slate-900 tracking-tight uppercase">{message}</h3>
-        <p className="text-slate-400 font-bold text-[10px] uppercase tracking-widest italic animate-pulse">Secure Connection Established · Fetching Real-time Analytics</p>
-      </div>
+    <div className="min-h-[70vh] flex flex-col items-center justify-center p-8">
+      <RefreshCw className="h-8 w-8 text-blue-600 animate-spin mb-4" />
+      <p className="text-gray-500 text-sm">Loading inventory data...</p>
     </div>
   );
 }
@@ -100,19 +83,9 @@ export function InventoryDashboard({ onNavigate }: { onNavigate?: (tab: string) 
   const [userRole, setUserRole] = useState<string | null>(null);
   const { toast } = useToast();
 
-  const handleNavigate = (tab: string, label: string) => {
-    toast({
-      title: "Action Initialized",
-      description: `Switching to ${label} module...`,
-      duration: 1500,
-    });
-    onNavigate?.(tab);
-  };
-
   const fetchStats = async (bid?: string, isInternal = false) => {
     if (isInternal) setSwitchingBranch(true);
     else setLoading(true);
-    
     try {
       const res = await apiClient.get(`${API_BASE}/inventory/dashboard`, {
         params: bid ? { branchId: bid } : {},
@@ -120,13 +93,11 @@ export function InventoryDashboard({ onNavigate }: { onNavigate?: (tab: string) 
       setStats(res.data?.data || null);
     } catch (e: any) {
       toast({
-        title: "Sync Error",
-        description: e?.response?.data?.message || "Failed to load neural inventory data",
+        title: "Error",
+        description: e?.response?.data?.message || "Failed to load inventory data",
         variant: "destructive",
       });
     } finally {
-      // Small artificial delay for premium feel if fast
-      await new Promise(r => setTimeout(r, 600));
       setLoading(false);
       setSwitchingBranch(false);
     }
@@ -146,7 +117,6 @@ export function InventoryDashboard({ onNavigate }: { onNavigate?: (tab: string) 
     setUserRole(role);
     const b = localStorage.getItem("branch");
     let initialBranchId = "";
-
     if (b && b !== "Not Found") {
       try {
         const obj = JSON.parse(b);
@@ -155,7 +125,6 @@ export function InventoryDashboard({ onNavigate }: { onNavigate?: (tab: string) 
         initialBranchId = b;
       }
     }
-
     if (role === "BRANCH_MANAGER" && initialBranchId) {
       setSelectedBranchId(initialBranchId);
       fetchStats(initialBranchId);
@@ -163,7 +132,6 @@ export function InventoryDashboard({ onNavigate }: { onNavigate?: (tab: string) 
       setSelectedBranchId("");
       fetchStats();
     }
-    
     fetchBranches();
   }, []);
 
@@ -179,177 +147,118 @@ export function InventoryDashboard({ onNavigate }: { onNavigate?: (tab: string) 
     return Math.round(((items - out) / items) * 100);
   }, [stats]);
 
-  if (loading && !stats) return <PremiumLoader />;
+  if (loading && !stats) return <PageLoader />;
 
   return (
-    <div className={`p-4 md:p-6 space-y-6 max-w-[1600px] mx-auto transition-all duration-500 ${switchingBranch ? 'opacity-60 grayscale-[0.5]' : 'opacity-100'}`}>
-      
-      {/* HEADER: NEURAL SYNC */}
-      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 pb-2">
-        <div className="space-y-1">
-          <div className="flex items-center gap-3">
-             <div className="h-10 w-10 bg-blue-600 rounded-xl flex items-center justify-center shadow-md shadow-blue-100">
-               <Boxes className="h-5 w-5 text-white" />
-             </div>
-             <div>
-               <h1 className="text-xl md:text-2xl font-bold text-slate-800 tracking-tight flex items-center gap-2">
-                 Inventory Operations
-                 <Badge className="bg-blue-50 text-blue-600 hover:bg-blue-100 border-none font-semibold px-2 py-0 rounded text-[10px]">V3.0</Badge>
-               </h1>
-               <p className="text-slate-400 font-medium text-xs tracking-tight">
-                 Real-time supply chain monitoring and asset valuation
-               </p>
-             </div>
-          </div>
+    <div className="p-4 md:p-6 space-y-6">
+
+      {/* Header */}
+      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl md:text-3xl font-bold text-gray-900">Inventory Dashboard</h1>
+          <p className="text-sm text-gray-500">Overview of stock, value and activity</p>
         </div>
-        
-        <div className="flex items-center gap-2 p-1 bg-white rounded-xl border border-slate-200 shadow-sm self-start">
+
+        <div className="flex items-center gap-2">
           {(userRole === "SUPER_ADMIN" || userRole === "ADMIN" || userRole === "WAREHOUSE_MANAGER" || userRole === "PURCHASE_MANAGER") && (
-            <div className="flex items-center gap-2 px-3 border-r">
-              <MapPin className="h-3.5 w-3.5 text-slate-400" />
-              <Select
-                value={selectedBranchId || "all"}
-                onValueChange={(v) => {
-                  const bid = v === "all" ? "" : v;
-                  setSelectedBranchId(bid);
-                  fetchStats(bid, true);
-                }}
-              >
-                <SelectTrigger className="w-[160px] border-none focus:ring-0 shadow-none h-8 font-semibold text-slate-700 text-xs text-center">
-                  <SelectValue placeholder="Global Domain" />
-                </SelectTrigger>
-                <SelectContent className="rounded-xl border-slate-200 shadow-xl">
-                  <SelectItem value="all" className="font-medium text-xs">Global Domain (All)</SelectItem>
-                  {branches.map((b) => (
-                    <SelectItem key={b.id} value={b.id} className="font-medium text-xs">
-                      {b.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            <Select
+              value={selectedBranchId || "all"}
+              onValueChange={(v) => {
+                const bid = v === "all" ? "" : v;
+                setSelectedBranchId(bid);
+                fetchStats(bid, true);
+              }}
+            >
+              <SelectTrigger className="w-[180px] h-9 text-sm">
+                <MapPin className="h-3.5 w-3.5 mr-2 text-gray-400" />
+                <SelectValue placeholder="All Branches" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Branches</SelectItem>
+                {branches.map((b) => (
+                  <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           )}
-          <Button 
-            variant="ghost" 
-            size="icon"
-            className="rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-all h-8 w-8"
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => fetchStats(selectedBranchId, true)}
           >
-            <RefreshCw className={`h-4 w-4 ${switchingBranch ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`h-4 w-4 mr-2 ${switchingBranch ? "animate-spin" : ""}`} />
+            Refresh
           </Button>
         </div>
       </div>
 
-      {/* TOP METRICS: THE POWER GRID */}
+      {/* Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card className="border-none shadow-sm border border-slate-100 bg-white group hover:shadow-md transition-all duration-300">
-           <CardContent className="p-5">
-              <div className="flex justify-between items-start">
-                <div className="p-2 bg-emerald-50 rounded-lg text-emerald-600">
-                  <DollarSign className="h-5 w-5" />
-                </div>
-                <div className="flex items-center gap-1 text-emerald-600 font-bold text-[10px]">
-                  <TrendingUp className="h-3 w-3" />
-                  +4.2%
-                </div>
-              </div>
-              <div className="mt-3">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Inventory Value</p>
-                <h3 className="text-xl font-bold text-slate-800 mt-1">{formatCurrency(totalValue)}</h3>
-                <div className="mt-3 h-1 w-full bg-slate-100 rounded-full overflow-hidden">
-                   <div className="h-full bg-emerald-500 rounded-full" style={{ width: '75%' }} />
-                </div>
-              </div>
-           </CardContent>
+        <Card className="hover:shadow-md transition-shadow">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Inventory Value</CardTitle>
+            <DollarSign className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-gray-900">{formatCurrency(totalValue)}</div>
+            <p className="text-xs text-gray-500 mt-1">Total stock value</p>
+          </CardContent>
         </Card>
 
-        <Card className="border-none shadow-sm border border-slate-100 bg-white group hover:shadow-md transition-all duration-300">
-           <CardContent className="p-5">
-              <div className="flex justify-between items-start">
-                <div className="p-2 bg-rose-50 rounded-lg text-rose-600">
-                  <Zap className="h-5 w-5" />
-                </div>
-                <Badge variant="outline" className="font-bold border-rose-200 text-rose-600 h-4 text-[8px] uppercase">Restock</Badge>
-              </div>
-              <div className="mt-3">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Out of Stock</p>
-                <h3 className="text-xl font-bold text-slate-800 mt-1">{stats?.outOfStockCount ?? 0}</h3>
-                <p className="text-[9px] font-semibold text-rose-500 mt-1 flex items-center gap-1">
-                  Critical action required
-                </p>
-              </div>
-           </CardContent>
+        <Card className="hover:shadow-md transition-shadow">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Out of Stock</CardTitle>
+            <AlertTriangle className="h-4 w-4 text-red-500" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-red-600">{stats?.outOfStockCount ?? 0}</div>
+            <p className="text-xs text-gray-500 mt-1">Items need restocking</p>
+          </CardContent>
         </Card>
 
-        <Card className="border-none shadow-sm border border-slate-100 bg-white group hover:shadow-md transition-all duration-300">
-           <CardContent className="p-5">
-              <div className="flex justify-between items-start">
-                <div className="p-2 bg-amber-50 rounded-lg text-amber-600">
-                  <Gauge className="h-5 w-5" />
-                </div>
-                <div className="text-amber-600 font-bold text-[10px]">{healthScore}% Health</div>
-              </div>
-              <div className="mt-3">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Inventory Health</p>
-                <h3 className="text-xl font-bold text-slate-800 mt-1">{stats?.lowStockAlerts?.length ?? 0} <span className="text-xs text-slate-400 font-medium">Alerts</span></h3>
-                <div className="mt-3 h-1 w-full bg-slate-100 rounded-full overflow-hidden">
-                   <div className="h-full bg-amber-500 rounded-full" style={{ width: `${100 - healthScore}%` }} />
-                </div>
-              </div>
-           </CardContent>
+        <Card className="hover:shadow-md transition-shadow">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Stock Health</CardTitle>
+            <Gauge className="h-4 w-4 text-yellow-500" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-gray-900">{healthScore}%</div>
+            <p className="text-xs text-gray-500 mt-1">{stats?.lowStockAlerts?.length ?? 0} low stock alerts</p>
+          </CardContent>
         </Card>
 
-        <Card className="border-none shadow-sm border border-slate-100 bg-white group hover:shadow-md transition-all duration-300">
-           <CardContent className="p-5">
-              <div className="flex justify-between items-start">
-                <div className="p-2 bg-blue-50 rounded-lg text-blue-600">
-                  <Package className="h-5 w-5" />
-                </div>
-                <div className="p-1 px-2 border rounded-md text-[8px] font-bold text-slate-400 uppercase tracking-widest">Live</div>
-              </div>
-              <div className="mt-3">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Catalog Size</p>
-                <h3 className="text-xl font-bold text-slate-800 mt-1">{stats?.totalSkus ?? 0} <span className="text-xs text-slate-400 font-medium">SKUs</span></h3>
-                <p className="text-[9px] font-semibold text-blue-500 mt-1 tracking-tight">Active product domain</p>
-              </div>
-           </CardContent>
+        <Card className="hover:shadow-md transition-shadow">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Total Products</CardTitle>
+            <Package className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-gray-900">{stats?.totalSkus ?? 0}</div>
+            <p className="text-xs text-gray-500 mt-1">Active product SKUs</p>
+          </CardContent>
         </Card>
       </div>
 
+      {/* Charts + Sidebar */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        
-        {/* CENTER STAGE: ANALYTICS */}
+
+        {/* Charts */}
         <div className="lg:col-span-2 space-y-6">
-          
-          <Card className="shadow-sm border-slate-100 rounded-2xl bg-white">
-            <CardHeader className="p-6 pb-2">
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle className="text-lg font-bold text-slate-800">Sales Velocity</CardTitle>
-                  <CardDescription className="text-slate-400 font-medium text-xs italic">Top moving items (Last 7 Days)</CardDescription>
-                </div>
-                <Badge variant="outline" className="text-[8px] font-extrabold uppercase tracking-widest">Insights</Badge>
-              </div>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base font-semibold text-gray-900">Sales Velocity</CardTitle>
+              <CardDescription className="text-sm text-gray-500">Top selling products in last 7 days</CardDescription>
             </CardHeader>
-            <CardContent className="p-6 pt-4">
-              <div className="h-[280px] w-full mt-2">
+            <CardContent>
+              <div className="h-[260px] w-full">
                 <ResponsiveContainer width="100%" height="100%">
                   <ComposedChart data={stats?.velocity || []}>
-                    <XAxis 
-                       dataKey="name" 
-                       axisLine={false} 
-                       tickLine={false} 
-                       fontSize={9} 
-                       fontWeight={600}
-                       tick={{fill: '#94a3b8'}}
-                    />
-                    <YAxis axisLine={false} tickLine={false} fontSize={9} tick={{fill: '#94a3b8'}} />
-                    <Tooltip 
-                       contentStyle={{ borderRadius: '12px', border: '1px solid #f1f5f9', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)', padding: '12px' }}
-                       labelStyle={{ fontWeight: 700, fontSize: '10px' }}
-                    />
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f8fafc" />
-                    <Bar dataKey="quantity" fill="#3b82f6" radius={[6, 6, 0, 0]} barSize={35} />
+                    <XAxis dataKey="name" axisLine={false} tickLine={false} fontSize={11} tick={{ fill: "#9ca3af" }} />
+                    <YAxis axisLine={false} tickLine={false} fontSize={11} tick={{ fill: "#9ca3af" }} />
+                    <Tooltip contentStyle={{ borderRadius: "8px", fontSize: "12px" }} />
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
+                    <Bar dataKey="quantity" fill="#3b82f6" radius={[4, 4, 0, 0]} barSize={32} />
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
@@ -357,195 +266,169 @@ export function InventoryDashboard({ onNavigate }: { onNavigate?: (tab: string) 
           </Card>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-             <Card className="shadow-sm border-slate-100 rounded-2xl bg-white">
-                <CardHeader className="p-5 border-b">
-                   <CardTitle className="text-sm font-bold text-slate-700 flex items-center gap-2">
-                     <PieIcon className="h-3.5 w-3.5 text-emerald-600" />
-                     Valuation by Category
-                   </CardTitle>
-                </CardHeader>
-                <CardContent className="p-4 h-[260px]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={stats?.categorySummary || []}
-                        innerRadius={50}
-                        outerRadius={75}
-                        paddingAngle={6}
-                        dataKey="value"
-                      >
-                        {stats?.categorySummary?.map((_, index) => (
-                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </CardContent>
-             </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-sm font-semibold text-gray-900">Value by Category</CardTitle>
+              </CardHeader>
+              <CardContent className="h-[240px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={stats?.categorySummary || []}
+                      innerRadius={50}
+                      outerRadius={75}
+                      paddingAngle={4}
+                      dataKey="value"
+                    >
+                      {stats?.categorySummary?.map((_, index) => (
+                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip formatter={(v: any) => formatCurrency(v)} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
 
-             <Card className="shadow-sm border-slate-100 rounded-2xl bg-white">
-                <CardHeader className="p-5 border-b">
-                   <CardTitle className="text-sm font-bold text-slate-700 flex items-center gap-2">
-                     <BarChart3 className="h-3.5 w-3.5 text-blue-600" />
-                     Location Allocation
-                   </CardTitle>
-                </CardHeader>
-                <CardContent className="p-0">
-                   <div className="divide-y max-h-[260px] overflow-y-auto">
-                     {stats?.branchSummary.map((b, i) => (
-                       <div key={b.branchId} className="p-3.5 flex items-center justify-between hover:bg-slate-50/50 transition-colors">
-                          <div className="flex items-center gap-3">
-                             <div className="h-7 w-7 rounded-lg bg-slate-50 flex items-center justify-center font-bold text-slate-500 text-[10px]">
-                               {i + 1}
-                             </div>
-                             <div>
-                               <p className="text-xs font-bold text-slate-700">{b.name}</p>
-                               <p className="text-[9px] font-medium text-slate-400 tracking-tight">{(b.value / totalValue * 100).toFixed(1)}% Weight</p>
-                             </div>
-                          </div>
-                          <p className="text-xs font-bold text-slate-800">{formatCurrency(b.value)}</p>
-                       </div>
-                     ))}
-                   </div>
-                </CardContent>
-             </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-sm font-semibold text-gray-900">Stock by Location</CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                <div className="divide-y max-h-[240px] overflow-y-auto">
+                  {stats?.branchSummary.map((b, i) => (
+                    <div key={b.branchId} className="px-4 py-3 flex items-center justify-between hover:bg-gray-50">
+                      <div className="flex items-center gap-3">
+                        <span className="h-6 w-6 rounded-full bg-gray-100 flex items-center justify-center text-xs font-medium text-gray-500">{i + 1}</span>
+                        <div>
+                          <p className="text-sm font-medium text-gray-800">{b.name}</p>
+                          <p className="text-xs text-gray-400">{totalValue > 0 ? (b.value / totalValue * 100).toFixed(1) : 0}% of total</p>
+                        </div>
+                      </div>
+                      <p className="text-sm font-semibold text-gray-900">{formatCurrency(b.value)}</p>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
           </div>
         </div>
 
-        {/* SIDEBAR: CRITICAL ALERTS & OPERATIONS */}
+        {/* Sidebar */}
         <div className="space-y-6">
-           
-           {/* PROCUREMENT HEALTH */}
-           <Card className="shadow-sm border-none rounded-2xl bg-slate-900 text-white">
-              <CardHeader className="p-5 pb-2">
-                <CardTitle className="text-[9px] font-bold uppercase tracking-widest text-slate-500">Procurement Performance</CardTitle>
-              </CardHeader>
-              <CardContent className="p-5 pt-0">
-                 <div className="flex items-end justify-between">
-                    <div>
-                      <h4 className="text-xl font-bold">{formatCurrency(stats?.procurementHealth?.totalValue || 0)}</h4>
-                      <p className="text-[9px] font-medium text-blue-400 mt-1 uppercase tracking-wider">{stats?.procurementHealth?.count || 0} Purchase Records</p>
-                    </div>
-                    <div className="h-12 w-12 bg-white/10 rounded-xl flex items-center justify-center border border-white/5">
-                       <ShoppingBag className="h-6 w-6 text-blue-400" />
-                    </div>
-                 </div>
-                 <div className="mt-5">
-                    <Button 
-                      onClick={() => handleNavigate('purchase-orders', 'Stock Management')}
-                      className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg h-10 shadow-lg shadow-blue-900/40 text-xs border-none group"
-                    >
-                      MANAGE STOCK
-                      <ArrowRightLeft className="ml-2 h-3.5 w-3.5" />
-                    </Button>
-                 </div>
-              </CardContent>
-           </Card>
 
-           {/* STOCK ALERTS: TABS */}
-           <Card className="shadow-sm border-slate-100 rounded-2xl bg-white overflow-hidden">
-              <Tabs defaultValue="low" className="w-full">
-                <TabsList className="w-full justify-start rounded-none bg-slate-50/20 h-12 border-b px-5 gap-5">
-                  <TabsTrigger value="low" className="rounded-none h-full border-b-2 border-transparent data-[state=active]:border-amber-500 data-[state=active]:bg-transparent font-bold uppercase text-[9px] tracking-widest text-slate-400 data-[state=active]:text-slate-800">
-                    Low Levels
-                  </TabsTrigger>
-                  <TabsTrigger value="pending" className="rounded-none h-full border-b-2 border-transparent data-[state=active]:border-blue-500 data-[state=active]:bg-transparent font-bold uppercase text-[9px] tracking-widest text-slate-400 data-[state=active]:text-slate-800">
-                    Active Transfers
-                  </TabsTrigger>
-                </TabsList>
-                <TabsContent value="low" className="p-0 m-0">
-                   <div className="divide-y max-h-[420px] overflow-y-auto custom-scrollbar">
-                     {stats?.lowStockAlerts?.length ? stats.lowStockAlerts.map((a, i) => (
-                       <div key={i} className="p-4 hover:bg-slate-50/50 transition-all">
-                         <div className="flex justify-between items-start mb-1.5">
-                           <span className="font-bold text-slate-700 text-xs truncate max-w-[140px]">{a.product?.name}</span>
-                           <span className="text-amber-600 font-bold text-[9px] tracking-tighter">Level: {a.currentQuantity}</span>
-                         </div>
-                         <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-1.5 text-[9px] font-medium text-slate-400">
-                              <MapPin className="h-3 w-3" />
-                              {a.branch?.name}
-                            </div>
-                            <div className="text-[8px] font-black italic text-slate-300">Min: {a.minThreshold}</div>
-                         </div>
-                       </div>
-                     )) : (
-                       <div className="p-10 text-center">
-                         <CheckCircle2 className="h-10 w-10 text-emerald-500 mx-auto mb-3 opacity-20" />
-                         <p className="text-slate-400 font-bold text-[10px] uppercase tracking-widest italic">All Levels Stable</p>
-                       </div>
-                     )}
-                   </div>
-                   <div className="p-3 border-t bg-slate-50/20">
-                       <Button 
-                         onClick={() => handleNavigate('stock-view', 'Full System Audit')}
-                         variant="ghost" 
-                         className="w-full text-slate-400 font-bold text-[10px] h-8"
-                       >
-                         FULL AUDIT <ChevronRight className="h-3 w-3 ml-1" />
-                       </Button>
-                   </div>
-                </TabsContent>
-                <TabsContent value="pending" className="p-0 m-0">
-                   <div className="divide-y max-h-[420px] overflow-y-auto">
-                     {stats?.pendingTransfers?.length ? stats.pendingTransfers.map((t) => (
-                       <div key={t.id} className="p-4 hover:bg-slate-50/50 transition-all">
-                          <div className="flex items-start gap-3">
-                             <div className="h-8 w-8 bg-blue-50 rounded-lg flex items-center justify-center shrink-0">
-                               <RefreshCw className="h-4 w-4 text-blue-500" />
-                             </div>
-                             <div className="flex-1 min-w-0">
-                               <p className="font-bold text-slate-700 text-xs truncate">{t.product?.name}</p>
-                               <div className="flex items-center gap-2 mt-1">
-                                 <span className="text-[9px] font-medium text-slate-400">{t.from_branch?.name.split(' ')[0]}</span>
-                                 <ChevronRight className="h-2 w-2 text-slate-300" />
-                                 <span className="text-[9px] font-bold text-blue-500">{t.to_branch?.name.split(' ')[0]}</span>
-                               </div>
-                             </div>
-                             <div className="text-right shrink-0">
-                               <p className="text-xs font-bold text-blue-600">{t.quantity}</p>
-                               <Badge variant="outline" className="text-[7px] font-bold uppercase py-0 px-1 border-slate-200 text-slate-400">{t.status}</Badge>
-                             </div>
-                          </div>
-                       </div>
-                     )) : (
-                       <div className="p-10 text-center">
-                          <p className="text-slate-400 font-bold text-xs">No Transfers Active</p>
-                       </div>
-                     )}
-                   </div>
-                </TabsContent>
-              </Tabs>
-           </Card>
+          {/* Procurement Summary */}
+          <Card className="bg-blue-600 text-white border-blue-600">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-blue-100">Total Purchases</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold mb-1">{formatCurrency(stats?.procurementHealth?.totalValue || 0)}</div>
+              <p className="text-blue-200 text-xs mb-4">{stats?.procurementHealth?.count || 0} purchase records</p>
+              <Button
+                onClick={() => onNavigate?.("purchases")}
+                className="w-full bg-white text-blue-600 hover:bg-blue-50 font-semibold text-sm"
+              >
+                Manage Stock
+                <ArrowRightLeft className="ml-2 h-4 w-4" />
+              </Button>
+            </CardContent>
+          </Card>
 
-           {/* QUICK ACTIVITY FEED */}
-           <Card className="shadow-sm border-slate-100 rounded-2xl bg-white overflow-hidden">
-              <CardHeader className="p-5 border-b bg-slate-50/10">
-                <CardTitle className="text-sm font-bold text-slate-700 flex items-center gap-2">
-                   <Activity className="h-3.5 w-3.5 text-emerald-500" />
-                   Recent Lifecycle
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="p-4">
-                 <div className="space-y-4">
-                    {stats?.recentPurchases.slice(0, 3).map((p, i) => (
-                      <div key={i} className="flex gap-4 group">
-                         <div className="flex flex-col items-center">
-                            <div className="h-7 w-7 rounded-full bg-slate-50 flex items-center justify-center shrink-0 border border-slate-100">
-                               <ShoppingCart className="h-3.5 w-3.5 text-slate-400" />
-                            </div>
-                            {i !== 2 && <div className="h-full w-px bg-slate-100 my-1.5" />}
-                         </div>
-                         <div className="pb-4">
-                            <p className="text-[11px] font-bold text-slate-700">Procured: {p.product?.name}</p>
-                            <p className="text-[9px] font-medium text-slate-400 mt-0.5">{p.supplier?.name} • {new Date(p.purchase_date).toLocaleDateString()}</p>
-                         </div>
+          {/* Alerts Tabs */}
+          <Card>
+            <Tabs defaultValue="low" className="w-full">
+              <TabsList className="w-full grid grid-cols-2">
+                <TabsTrigger value="low" className="text-xs">Low Stock</TabsTrigger>
+                <TabsTrigger value="pending" className="text-xs">Transfers</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="low" className="p-0 m-0">
+                <div className="divide-y max-h-[360px] overflow-y-auto">
+                  {stats?.lowStockAlerts?.length ? stats.lowStockAlerts.map((a, i) => (
+                    <div key={i} className="px-4 py-3 hover:bg-gray-50">
+                      <div className="flex justify-between items-start mb-1">
+                        <span className="text-sm font-medium text-gray-800 truncate max-w-[150px]">{a.product?.name}</span>
+                        <Badge variant="outline" className="text-amber-600 border-amber-200 text-xs">Qty: {a.currentQuantity}</Badge>
                       </div>
-                    ))}
-                 </div>
-              </CardContent>
-           </Card>
+                      <div className="flex items-center gap-1 text-xs text-gray-400">
+                        <MapPin className="h-3 w-3" />
+                        {a.branch?.name} · Min: {a.minThreshold}
+                      </div>
+                    </div>
+                  )) : (
+                    <div className="p-8 text-center">
+                      <CheckCircle2 className="h-8 w-8 text-green-400 mx-auto mb-2" />
+                      <p className="text-sm text-gray-400">All stock levels are fine</p>
+                    </div>
+                  )}
+                </div>
+                <div className="p-3 border-t">
+                  <Button onClick={() => onNavigate?.("stock-view")} variant="ghost" className="w-full text-sm text-gray-500">
+                    View Full Inventory <ChevronRight className="h-4 w-4 ml-1" />
+                  </Button>
+                </div>
+              </TabsContent>
+
+              <TabsContent value="pending" className="p-0 m-0">
+                <div className="divide-y max-h-[360px] overflow-y-auto">
+                  {stats?.pendingTransfers?.length ? stats.pendingTransfers.map((t) => (
+                    <div key={t.id} className="px-4 py-3 hover:bg-gray-50">
+                      <div className="flex items-center gap-3">
+                        <div className="h-8 w-8 bg-blue-50 rounded-lg flex items-center justify-center shrink-0">
+                          <RefreshCw className="h-4 w-4 text-blue-500" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-800 truncate">{t.product?.name}</p>
+                          <div className="flex items-center gap-1 text-xs text-gray-400 mt-0.5">
+                            <span>{t.from_branch?.name}</span>
+                            <ChevronRight className="h-3 w-3" />
+                            <span className="text-blue-500">{t.to_branch?.name}</span>
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <p className="text-sm font-semibold text-blue-600">{t.quantity}</p>
+                          <Badge variant="outline" className="text-xs text-gray-400">{t.status}</Badge>
+                        </div>
+                      </div>
+                    </div>
+                  )) : (
+                    <div className="p-8 text-center">
+                      <p className="text-sm text-gray-400">No active transfers</p>
+                    </div>
+                  )}
+                </div>
+              </TabsContent>
+            </Tabs>
+          </Card>
+
+          {/* Recent Purchases */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+                <Activity className="h-4 w-4 text-green-500" />
+                Recent Purchases
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                {stats?.recentPurchases.slice(0, 3).map((p, i) => (
+                  <div key={i} className="flex gap-3 items-start">
+                    <div className="h-8 w-8 rounded-full bg-gray-100 flex items-center justify-center shrink-0">
+                      <ShoppingCart className="h-4 w-4 text-gray-400" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-gray-800">{p.product?.name}</p>
+                      <p className="text-xs text-gray-400">{p.supplier?.name} · {new Date(p.purchase_date).toLocaleDateString()}</p>
+                    </div>
+                  </div>
+                ))}
+                {!stats?.recentPurchases?.length && (
+                  <p className="text-sm text-gray-400 text-center py-2">No recent purchases</p>
+                )}
+              </div>
+            </CardContent>
+          </Card>
         </div>
       </div>
     </div>
