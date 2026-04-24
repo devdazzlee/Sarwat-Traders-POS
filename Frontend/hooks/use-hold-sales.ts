@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
 import apiClient from "@/lib/apiClient";
-import { normalizeBranchId } from "@/lib/branch-utils";
 
 interface CartItem {
   id: string;
@@ -22,23 +21,14 @@ interface HoldSaleRecord {
   items: CartItem[];
   subtotal: number;
   totalItems: number;
-  branchId: string;
-  branchName: string;
+  customerName: string;
+  customerPhone: string;
   createdAt: string;
 }
 
-export function useHoldSales(branchIdOverride?: string) {
+export function useHoldSales() {
   const [holdSales, setHoldSales] = useState<HoldSaleRecord[]>([]);
   const [loading, setLoading] = useState(false);
-
-  const getBranchId = useCallback(() => {
-    if (branchIdOverride && branchIdOverride.trim()) {
-      return branchIdOverride.trim();
-    }
-
-    if (typeof window === "undefined") return "";
-    return normalizeBranchId(localStorage.getItem("branch"));
-  }, [branchIdOverride]);
 
   const normalizeItem = (item: any): CartItem => ({
     id: item.id,
@@ -60,21 +50,15 @@ export function useHoldSales(branchIdOverride?: string) {
     items: Array.isArray(holdSale.items) ? holdSale.items.map(normalizeItem) : [],
     subtotal: Number(holdSale.subtotal || 0),
     totalItems: Number(holdSale.total_items || 0),
-    branchId: holdSale.branch_id || "",
-    branchName: holdSale.branch?.name || "Unknown Branch",
+    customerName: holdSale.customer?.name || "Walk-in",
+    customerPhone: holdSale.customer?.phone_number || holdSale.customer?.mobile_number || "",
     createdAt: holdSale.created_at || new Date().toISOString(),
   });
 
   const refreshHoldSales = useCallback(async () => {
-    const branchId = getBranchId();
-    if (!branchId || branchId === "Not Found") {
-      setHoldSales([]);
-      return;
-    }
-
     try {
       setLoading(true);
-      const response = await apiClient.get("/sale/hold", { params: { branchId } });
+      const response = await apiClient.get("/sale/hold");
       const holds = Array.isArray(response?.data?.data)
         ? response.data.data.map(mapHoldSale)
         : [];
@@ -85,7 +69,7 @@ export function useHoldSales(branchIdOverride?: string) {
     } finally {
       setLoading(false);
     }
-  }, [getBranchId]);
+  }, []);
 
   useEffect(() => {
     refreshHoldSales();
@@ -94,12 +78,8 @@ export function useHoldSales(branchIdOverride?: string) {
   const holdSale = useCallback(async (cart: CartItem[], customerId?: string) => {
     if (!cart.length) return false;
 
-    const branchId = getBranchId();
-    if (!branchId || branchId === "Not Found") return false;
-
     try {
       const response = await apiClient.post("/sale/hold", {
-        branchId,
         customerId,
         items: cart,
       });
@@ -114,17 +94,14 @@ export function useHoldSales(branchIdOverride?: string) {
       console.error("Failed to hold sale in DB:", error);
       return false;
     }
-  }, [getBranchId, refreshHoldSales]);
+  }, [refreshHoldSales]);
 
   const retrieveHoldSale = useCallback(async (index: number): Promise<CartItem[] | null> => {
     if (index < 0 || index >= holdSales.length) return null;
     const holdSaleRecord = holdSales[index];
-    const branchId = getBranchId();
 
     try {
-      const response = await apiClient.post(`/sale/hold/${holdSaleRecord.id}/retrieve`, {
-        branchId,
-      });
+      const response = await apiClient.post(`/sale/hold/${holdSaleRecord.id}/retrieve`, {});
       const retrieved = response?.data?.data ? mapHoldSale(response.data.data) : null;
       setHoldSales((prev) => prev.filter((item) => item.id !== holdSaleRecord.id));
       return retrieved?.items || null;
@@ -132,38 +109,31 @@ export function useHoldSales(branchIdOverride?: string) {
       console.error("Failed to retrieve hold sale from DB:", error);
       return null;
     }
-  }, [getBranchId, holdSales]);
+  }, [holdSales]);
 
   const deleteHoldSale = useCallback(async (index: number) => {
     if (index < 0 || index >= holdSales.length) return;
     const holdSaleRecord = holdSales[index];
-    const branchId = getBranchId();
 
     try {
-      await apiClient.delete(`/sale/hold/${holdSaleRecord.id}`, {
-        data: { branchId },
-      });
+      await apiClient.delete(`/sale/hold/${holdSaleRecord.id}`);
       setHoldSales((prev) => prev.filter((item) => item.id !== holdSaleRecord.id));
     } catch (error) {
       console.error("Failed to delete hold sale from DB:", error);
     }
-  }, [getBranchId, holdSales]);
+  }, [holdSales]);
 
   const clearAllHoldSales = useCallback(async () => {
     const holdIds = holdSales.map((sale) => sale.id);
-    const branchId = getBranchId();
     for (const holdId of holdIds) {
       try {
-        // eslint-disable-next-line no-await-in-loop
-        await apiClient.delete(`/sale/hold/${holdId}`, {
-          data: { branchId },
-        });
+        await apiClient.delete(`/sale/hold/${holdId}`);
       } catch (error) {
         console.error("Failed to delete hold sale from DB:", error);
       }
     }
     setHoldSales([]);
-  }, [getBranchId, holdSales]);
+  }, [holdSales]);
 
   return {
     holdSales,
@@ -175,4 +145,3 @@ export function useHoldSales(branchIdOverride?: string) {
     holdSalesLoading: loading,
   };
 }
-

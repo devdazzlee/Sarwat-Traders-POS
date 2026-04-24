@@ -164,14 +164,15 @@ class SaleService {
     return sale;
   }
 
-  async getHoldSales({ branchId }: { branchId: string }) {
+  async getHoldSales() {
     return prisma.holdSale.findMany({
-      where: { branch_id: branchId },
       include: {
-        branch: {
+        customer: {
           select: {
             id: true,
             name: true,
+            phone_number: true,
+            mobile_number: true,
           },
         },
       },
@@ -180,23 +181,16 @@ class SaleService {
   }
 
   async createHoldSale({
-    branchId,
     customerId,
     createdBy,
     items,
   }: {
-    branchId: string;
     customerId?: string;
     createdBy?: string;
     items: HoldSaleCartItem[];
   }) {
     if (!items?.length) {
       throw new AppError(400, 'No items provided for hold sale');
-    }
-
-    const branch = await prisma.branch.findUnique({ where: { id: branchId } });
-    if (!branch) {
-      throw new AppError(400, 'Invalid branch');
     }
 
     const normalizedItems = items.map((item) => ({
@@ -220,7 +214,6 @@ class SaleService {
 
     return prisma.holdSale.create({
       data: {
-        branch_id: branchId,
         customer_id: customerId,
         created_by: createdBy,
         items: normalizedItems as Prisma.InputJsonValue,
@@ -228,31 +221,29 @@ class SaleService {
         total_items: normalizedItems.length,
       },
       include: {
-        branch: {
+        customer: {
           select: {
             id: true,
             name: true,
+            phone_number: true,
+            mobile_number: true,
           },
         },
       },
     });
   }
 
-  async retrieveHoldSale({
-    holdSaleId,
-    branchId,
-  }: {
-    holdSaleId: string;
-    branchId: string;
-  }) {
+  async retrieveHoldSale({ holdSaleId }: { holdSaleId: string }) {
     return prisma.$transaction(async (tx) => {
-      const holdSale = await tx.holdSale.findFirst({
-        where: { id: holdSaleId, branch_id: branchId },
+      const holdSale = await tx.holdSale.findUnique({
+        where: { id: holdSaleId },
         include: {
-          branch: {
+          customer: {
             select: {
               id: true,
               name: true,
+              phone_number: true,
+              mobile_number: true,
             },
           },
         },
@@ -262,23 +253,15 @@ class SaleService {
         throw new AppError(404, 'Hold sale not found');
       }
 
-      await tx.holdSale.delete({
-        where: { id: holdSaleId },
-      });
+      await tx.holdSale.delete({ where: { id: holdSaleId } });
 
       return holdSale;
     });
   }
 
-  async deleteHoldSale({
-    holdSaleId,
-    branchId,
-  }: {
-    holdSaleId: string;
-    branchId: string;
-  }) {
-    const holdSale = await prisma.holdSale.findFirst({
-      where: { id: holdSaleId, branch_id: branchId },
+  async deleteHoldSale({ holdSaleId }: { holdSaleId: string }) {
+    const holdSale = await prisma.holdSale.findUnique({
+      where: { id: holdSaleId },
       select: { id: true },
     });
 

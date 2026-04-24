@@ -655,8 +655,8 @@ model Discount {
 
 model HoldSale {
   id          String    @id @default(uuid())
-  branch_id   String
-  branch      Branch    @relation(fields: [branch_id], references: [id], onDelete: Cascade)
+  branch_id   String?
+  branch      Branch?   @relation(fields: [branch_id], references: [id], onDelete: SetNull)
   customer_id String?
   customer    Customer? @relation(fields: [customer_id], references: [id])
   created_by  String?

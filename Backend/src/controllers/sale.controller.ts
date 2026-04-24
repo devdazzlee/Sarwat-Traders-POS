@@ -160,23 +160,12 @@ const getRecentSaleItemProductNameAndPrice = asyncHandler(async (req: Request, r
 });
 
 const getHoldSalesController = asyncHandler(async (req: Request, res: Response) => {
-    const branchId = resolveBranchId(req);
-    if (!branchId) {
-        return new ApiResponse([], "No branch ID found for hold sales").send(res);
-    }
-
-    const holdSales = await saleService.getHoldSales({ branchId });
+    const holdSales = await saleService.getHoldSales();
     new ApiResponse(holdSales, "Held sales fetched successfully").send(res);
 });
 
 const createHoldSaleController = asyncHandler(async (req: Request, res: Response) => {
-    const branchId = resolveBranchId(req);
-    if (!branchId) {
-        return new ApiResponse(null, "No branch ID found for hold sale", 400, false).send(res);
-    }
-
     const holdSale = await saleService.createHoldSale({
-        branchId,
         customerId: req.body?.customerId,
         createdBy: req.user?.id,
         items: req.body?.items || [],
@@ -186,28 +175,16 @@ const createHoldSaleController = asyncHandler(async (req: Request, res: Response
 });
 
 const retrieveHoldSaleController = asyncHandler(async (req: Request, res: Response) => {
-    const branchId = resolveBranchId(req);
-    if (!branchId) {
-        return new ApiResponse(null, "No branch ID found for hold sale retrieval", 400, false).send(res);
-    }
-
     const holdSale = await saleService.retrieveHoldSale({
         holdSaleId: req.params.holdSaleId,
-        branchId,
     });
 
     new ApiResponse(holdSale, "Held sale retrieved successfully").send(res);
 });
 
 const deleteHoldSaleController = asyncHandler(async (req: Request, res: Response) => {
-    const branchId = resolveBranchId(req);
-    if (!branchId) {
-        return new ApiResponse(null, "No branch ID found for hold sale deletion", 400, false).send(res);
-    }
-
     await saleService.deleteHoldSale({
         holdSaleId: req.params.holdSaleId,
-        branchId,
     });
 
     new ApiResponse(null, "Held sale deleted successfully").send(res);

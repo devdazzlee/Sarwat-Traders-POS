@@ -153,6 +153,7 @@ export function NewSale() {
   // Global printer settings (configured in Printer Settings page)
   const { receiptPrinter, getReceiptPrinterObj, printers } = usePrinterSettings();
   const [showHeldSales, setShowHeldSales] = useState(false);
+  const [holdSearch, setHoldSearch] = useState("");
   const [checkoutSuccessData, setCheckoutSuccessData] = useState<InvoiceData | null>(null);
   const [manualWhatsAppNumber, setManualWhatsAppNumber] = useState("");
   const [isAskingWhatsApp, setIsAskingWhatsApp] = useState(false);
@@ -1965,8 +1966,25 @@ export function NewSale() {
 
           {holdSales.length > 0 && showHeldSales && !holdSalesLoading && (
             <div id="held-sales-list" className="mt-2 rounded-lg border border-dashed border-blue-200 bg-white p-3">
+              <div className="relative mb-2">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Search by name, phone, or Sale #..."
+                  value={holdSearch}
+                  onChange={(e) => setHoldSearch(e.target.value)}
+                  className="w-full rounded-md border border-gray-200 bg-gray-50 py-1.5 pl-8 pr-3 text-xs outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-200"
+                />
+              </div>
               <div className="max-h-60 pr-2 space-y-3 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-200">
                   {holdSales.map((sale, index) => {
+                    const q = holdSearch.trim().toLowerCase();
+                    if (q) {
+                      const matchesName = sale.customerName.toLowerCase().includes(q);
+                      const matchesPhone = sale.customerPhone.toLowerCase().includes(q);
+                      const matchesNumber = `sale #${index + 1}`.includes(q) || String(index + 1) === q;
+                      if (!matchesName && !matchesPhone && !matchesNumber) return null;
+                    }
                     const saleTotal = sale.items.reduce(
                       (sum, item) => sum + getSellingPrice(item as CartItem) * item.quantity,
                       0
@@ -1975,8 +1993,13 @@ export function NewSale() {
                       <div key={sale.id} className="flex flex-col gap-2 rounded-md border border-gray-200 p-2.5 bg-gray-50/50 hover:border-blue-300 transition-colors">
                         <div className="flex items-start justify-between">
                           <div className="flex flex-col leading-tight">
-                            <span className="font-semibold text-sm text-gray-800">Sale #{index + 1} - {sale.branchName}</span>
-                            <span className="text-xs text-gray-500 mt-1">
+                            <span className="font-semibold text-sm text-gray-800">
+                              Sale #{index + 1} — {sale.customerName}
+                            </span>
+                            {sale.customerPhone && (
+                              <span className="text-xs text-blue-600">{sale.customerPhone}</span>
+                            )}
+                            <span className="text-xs text-gray-500 mt-0.5">
                               {sale.items.length} items • Rs {saleTotal.toFixed(2)}
                             </span>
                           </div>

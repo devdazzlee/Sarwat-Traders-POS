@@ -46,7 +46,7 @@ import { usePosData } from "@/hooks/use-pos-data";
 import { Label } from "@/components/ui/label";
 
 // --- PREMIUM LOADER ---
-function PremiumLoader({ message = "Synchronizing Audit Trail..." }: { message?: string }) {
+function PremiumLoader({ message = "Loading history..." }: { message?: string }) {
   return (
     <div className="min-h-[60vh] flex flex-col items-center justify-center p-8 animate-in fade-in zoom-in duration-500">
       <div className="relative mb-8 pt-10">
@@ -59,7 +59,7 @@ function PremiumLoader({ message = "Synchronizing Audit Trail..." }: { message?:
       </div>
       <div className="text-center space-y-2">
         <h3 className="text-lg font-black text-slate-800 tracking-tight uppercase">{message}</h3>
-        <p className="text-slate-400 font-bold text-[9px] uppercase tracking-widest italic animate-pulse">Establishing Secure Socket · Retrieving Immutable Ledger Logs</p>
+        <p className="text-slate-400 font-bold text-[9px] tracking-tight animate-pulse">Retrieving stock records...</p>
       </div>
     </div>
   );
@@ -198,8 +198,8 @@ export function StockMovementLog() {
               <History className="h-6 w-6 text-white" />
             </div>
             <div>
-              <h1 className="text-2xl font-black text-slate-900 tracking-tight uppercase italic">Enterprise Audit Log</h1>
-              <p className="text-slate-400 font-bold text-[10px] uppercase tracking-widest italic">Immutable Stock Movement & Traceability Ledger</p>
+              <h1 className="text-2xl font-black text-slate-900 tracking-tight ">Stock Movement Log</h1>
+              <p className="text-slate-400 font-bold text-[10px] tracking-tight">Detailed history of stock changes</p>
             </div>
           </div>
         </div>
@@ -251,10 +251,10 @@ export function StockMovementLog() {
         <Card className="rounded-[32px] border-none shadow-sm bg-emerald-600 text-white overflow-hidden relative group">
            <CardContent className="p-6">
               <div className="relative z-10">
-                <p className="text-[10px] font-black uppercase tracking-widest text-emerald-100/60 mb-1 font-black italic">Stock Inbound</p>
-                <h3 className="text-3xl font-black italic">+{summary?.totalIncrease || 0}</h3>
+                <p className="text-[10px] font-bold tracking-widest text-emerald-100/60 mb-1 font-bold">Stock In</p>
+                <h3 className="text-3xl font-bold">+{summary?.totalIncrease || 0}</h3>
                 <div className="mt-4 flex items-center gap-2">
-                   <Badge className="bg-white/20 text-white border-none font-black text-[9px] uppercase tracking-widest">Receiving Activity</Badge>
+                   <Badge className="bg-white/20 text-white border-none font-black text-[9px] uppercase tracking-widest">Received</Badge>
                 </div>
               </div>
               <ArrowUpRight className="absolute -right-4 -bottom-4 h-32 w-32 text-white/10" />
@@ -264,10 +264,10 @@ export function StockMovementLog() {
         <Card className="rounded-[32px] border-none shadow-sm bg-rose-600 text-white overflow-hidden relative group">
            <CardContent className="p-6">
               <div className="relative z-10">
-                <p className="text-[10px] font-black uppercase tracking-widest text-rose-100/60 mb-1 font-black italic">Stock Outbound</p>
-                <h3 className="text-3xl font-black italic">-{summary?.totalDecrease || 0}</h3>
+                <p className="text-[10px] font-bold tracking-widest text-rose-100/60 mb-1 font-bold">Stock Out</p>
+                <h3 className="text-3xl font-bold">-{summary?.totalDecrease || 0}</h3>
                 <div className="mt-4 flex items-center gap-2">
-                   <Badge className="bg-white/20 text-white border-none font-black text-[9px] uppercase tracking-widest">Dispelling Activity</Badge>
+                   <Badge className="bg-white/20 text-white border-none font-black text-[9px] uppercase tracking-widest">Removed</Badge>
                 </div>
               </div>
               <ArrowDownRight className="absolute -right-4 -bottom-4 h-32 w-32 text-white/10" />
@@ -277,10 +277,10 @@ export function StockMovementLog() {
         <Card className="rounded-[32px] border-none shadow-sm bg-slate-900 text-white overflow-hidden relative group">
            <CardContent className="p-6">
               <div className="relative z-10">
-                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1 font-black italic">Net Flux</p>
-                <h3 className="text-3xl font-black italic">{(summary?.totalIncrease || 0) - (summary?.totalDecrease || 0)}</h3>
+                <p className="text-[10px] font-bold tracking-widest text-slate-500 mb-1 font-bold">Net Change</p>
+                <h3 className="text-3xl font-bold">{(summary?.totalIncrease || 0) - (summary?.totalDecrease || 0)}</h3>
                 <div className="mt-4 flex items-center gap-2 text-indigo-400 font-black text-[9px] italic tracking-widest uppercase">
-                   <RefreshCw className="h-3 w-3 mr-1" /> CURRENT FLOW TREND
+                   <RefreshCw className="h-3 w-3 mr-1" /> Current Trend
                 </div>
               </div>
               <Activity className="absolute -right-4 -bottom-4 h-32 w-32 text-white/5" />
@@ -290,10 +290,10 @@ export function StockMovementLog() {
         <Card className="rounded-[32px] border-none shadow-sm bg-white overflow-hidden relative group border border-slate-100">
            <CardContent className="p-6">
               <div className="relative z-10">
-                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 font-black italic">Activity Logged</p>
+                <p className="text-[10px] font-bold tracking-widest text-slate-400 mb-1 font-bold">Records</p>
                 <h3 className="text-3xl font-black text-slate-900 italic">{summary?.count || movements.length}</h3>
                 <div className="mt-4 flex items-center gap-2">
-                   <Badge variant="outline" className="border-slate-200 text-slate-400 font-black text-[9px] uppercase tracking-widest italic">Historical Trace</Badge>
+                   <Badge variant="outline" className="border-slate-200 text-slate-400 font-black text-[9px] tracking-tight">History</Badge>
                 </div>
               </div>
               <Archive className="absolute -right-4 -bottom-4 h-32 w-32 text-slate-50" />
@@ -304,15 +304,15 @@ export function StockMovementLog() {
       {/* SEARCH & DETAILED FILTER BAR */}
       <div className="flex flex-wrap gap-4 items-end bg-slate-50/50 p-6 rounded-[32px] border border-slate-100">
          <div className="flex-1 min-w-[200px] space-y-2">
-            <Label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Focus Activity</Label>
+            <Label className="text-[10px] font-bold tracking-widest text-slate-400 ml-1">Activity Type</Label>
             <Select value={filters.movementType} onValueChange={(v) => setFilters(f => ({...f, movementType: v}))}>
-              <SelectTrigger className="h-12 rounded-2xl bg-white border-slate-200 font-black text-slate-700 text-xs shadow-sm uppercase italic">
+              <SelectTrigger className="h-12 rounded-2xl bg-white border-slate-200 font-black text-slate-700 text-xs shadow-sm ">
                 <SelectValue placeholder="All Activities" />
               </SelectTrigger>
               <SelectContent className="rounded-2xl">
-                <SelectItem value="all" className="font-black text-[10px] uppercase italic">All Activity Types</SelectItem>
+                <SelectItem value="all" className="font-black text-[10px] ">All Activity Types</SelectItem>
                 {MOVEMENT_TYPES.map(t => (
-                  <SelectItem key={t.value} value={t.value} className="text-xs font-bold uppercase italic">
+                  <SelectItem key={t.value} value={t.value} className="text-xs font-bold ">
                     <div className="flex items-center gap-2">
                       <t.icon className="h-3.5 w-3.5 text-slate-400" />
                       {t.label}
@@ -324,7 +324,7 @@ export function StockMovementLog() {
          </div>
 
          <div className="flex-1 min-w-[350px] space-y-2 relative" ref={dropdownRef}>
-            <Label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Asset Traceability (SKU/Name)</Label>
+            <Label className="text-[10px] font-bold tracking-widest text-slate-400 ml-1">Search Product (SKU/Name)</Label>
             <div className="relative">
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
               <Input 
@@ -371,7 +371,7 @@ export function StockMovementLog() {
                   {productsLoading ? (
                     <div className="p-4 text-center"><Loader2 className="h-5 w-5 animate-spin mx-auto text-indigo-500" /></div>
                   ) : filteredProd.length === 0 ? (
-                    <div className="p-4 text-center text-xs font-black text-slate-400 uppercase italic">No Matches Found</div>
+                    <div className="p-4 text-center text-xs font-black text-slate-400 ">No Matches Found</div>
                   ) : (
                     filteredProd.map(p => (
                       <button
@@ -400,7 +400,7 @@ export function StockMovementLog() {
           className="h-12 rounded-2xl border-indigo-200 bg-indigo-50/30 text-indigo-600 font-black text-[10px] tracking-widest uppercase hover:bg-indigo-50 px-8 flex items-center gap-2"
          >
            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-           Sync Ledger
+           Refresh
          </Button>
       </div>
 
@@ -412,11 +412,11 @@ export function StockMovementLog() {
               <TableRow className="border-slate-50 hover:bg-transparent">
                 <TableHead className="p-8 py-5 font-black text-[10px] uppercase tracking-widest text-slate-400 w-[200px]">Timestamp</TableHead>
                 <TableHead className="py-5 font-black text-[10px] uppercase tracking-widest text-slate-400">Activity</TableHead>
-                <TableHead className="py-5 font-black text-[10px] uppercase tracking-widest text-slate-400">Core Asset</TableHead>
+                <TableHead className="py-5 font-black text-[10px] uppercase tracking-widest text-slate-400">Product</TableHead>
                 <TableHead className="py-5 font-black text-[10px] uppercase tracking-widest text-slate-400 text-right">Identifier</TableHead>
-                <TableHead className="py-5 font-black text-[10px] uppercase tracking-widest text-slate-400 text-right w-[150px]">Unit Flux (Delta)</TableHead>
+                <TableHead className="py-5 font-black text-[10px] uppercase tracking-widest text-slate-400 text-right w-[150px]">Quantity Change</TableHead>
                 <TableHead className="py-5 font-black text-[10px] uppercase tracking-widest text-slate-400 text-right">Prev / New</TableHead>
-                <TableHead className="py-5 font-black text-[10px] uppercase tracking-widest text-slate-400 text-right p-8">Location Node</TableHead>
+                <TableHead className="py-5 font-black text-[10px] uppercase tracking-widest text-slate-400 text-right p-8">Branch</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -427,7 +427,7 @@ export function StockMovementLog() {
                     <TableCell className="p-8 py-6">
                       <div className="flex flex-col">
                         <span className="font-bold text-slate-800 text-xs">{new Date(m.created_at).toLocaleDateString()}</span>
-                        <span className="text-[10px] font-medium text-slate-400 uppercase tracking-tighter italic">{new Date(m.created_at).toLocaleTimeString()}</span>
+                        <span className="text-[10px] font-medium text-slate-400 tracking-tight">{new Date(m.created_at).toLocaleTimeString()}</span>
                       </div>
                     </TableCell>
                     <TableCell>
@@ -443,11 +443,11 @@ export function StockMovementLog() {
                          </div>
                          <div>
                             <p className="font-black text-slate-800 text-sm italic">{m.product?.name}</p>
-                            <span className="text-[10px] font-bold text-slate-400 uppercase italic">Ref: {m.reference_id?.slice(0, 8) || "—"}</span>
+                            <span className="text-[10px] font-bold text-slate-400 ">Ref: {m.reference_id?.slice(0, 8) || "—"}</span>
                          </div>
                       </div>
                     </TableCell>
-                    <TableCell className="text-right font-black text-slate-400 text-[10px] uppercase italic">
+                    <TableCell className="text-right font-black text-slate-400 text-[10px] ">
                       {m.product?.sku || "N/A"}
                     </TableCell>
                     <TableCell className="text-right">
@@ -458,13 +458,13 @@ export function StockMovementLog() {
                     <TableCell className="text-right">
                        <div className="flex flex-col items-end">
                           <span className="text-xs font-black text-slate-800 tracking-tight italic">{m.new_qty} Units</span>
-                          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest italic">Was {m.previous_qty}</span>
+                          <span className="text-[9px] font-bold text-slate-400 tracking-tight">Was {m.previous_qty}</span>
                        </div>
                     </TableCell>
                     <TableCell className="p-8 py-6 text-right">
                        <div className="inline-flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-100">
                           <MapPin className="h-3 w-3 text-indigo-500" />
-                          <span className="text-xs font-black text-slate-700 tracking-tight uppercase italic">{m.branch?.name || "Neural Warehouse"}</span>
+                          <span className="text-xs font-black text-slate-700 tracking-tight ">{m.branch?.name || "Warehouse"}</span>
                        </div>
                     </TableCell>
                   </TableRow>
@@ -479,8 +479,8 @@ export function StockMovementLog() {
                    <Archive className="h-10 w-10 text-slate-200" />
                 </div>
                 <div className="space-y-1">
-                   <h4 className="text-sm font-black text-slate-400 uppercase tracking-widest italic">Immutable Proof Required</h4>
-                   <p className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">Adjust sequence filters to reveal historical ledger logs</p>
+                   <h4 className="text-sm font-black text-slate-400 tracking-tight">No records found</h4>
+                   <p className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">Try changing your filters or dates.</p>
                 </div>
              </div>
           )}
@@ -489,11 +489,11 @@ export function StockMovementLog() {
       
       {/* AUDIT FOOTER */}
       <div className="flex justify-between items-center px-4 pt-2">
-         <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] italic">Compliance Node: {filters.branchId === "all" ? "Root System Cluster" : `Branch Node-${filters.branchId.slice(0, 6)}`}</p>
+         <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] italic">System Node: {filters.branchId === "all" ? "Main System" : `Branch Node-${filters.branchId.slice(0, 6)}`}</p>
          <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">
                <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-               <span className="text-[10px] font-black text-slate-700 tracking-widest uppercase italic shadow-sm">Ledger Synchronized</span>
+               <span className="text-[10px] font-black text-slate-700 tracking-widest  shadow-sm">Data Updated</span>
             </div>
          </div>
       </div>

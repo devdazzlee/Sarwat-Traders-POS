@@ -257,9 +257,9 @@ export function StockOut() {
              <div className="bg-rose-600 p-2 rounded-xl">
                 <TrendingDown className="h-6 w-6 text-white" />
              </div>
-             <h1 className="text-3xl font-black text-slate-900 uppercase tracking-tighter italic">Dispatch Engine</h1>
+             <h1 className="text-3xl font-black text-slate-900 tracking-tight">Dispatched Stock</h1>
           </div>
-          <p className="text-slate-500 font-medium">Outbound inventory management & Stock-Out manifests</p>
+          <p className="text-slate-500 font-medium">View and manage stock leaving branches</p>
         </div>
         
         <div className="flex p-1 bg-white rounded-2xl shadow-sm border border-slate-200">
@@ -285,7 +285,7 @@ export function StockOut() {
            <Card className="rounded-3xl border-slate-200 shadow-sm bg-white p-6">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                  <div className="space-y-2">
-                   <Label className="text-[10px] font-black uppercase text-slate-400">Filter By Branch</Label>
+                   <Label className="text-[10px] font-bold text-slate-400">Filter By Branch</Label>
                    <Select value={historyFilters.branchId} onValueChange={(v) => setHistoryFilters({...historyFilters, branchId: v === "all" ? "" : v})}>
                       <SelectTrigger className="rounded-xl border-slate-200 bg-slate-50/50">
                          <SelectValue placeholder="All Branches" />
@@ -297,7 +297,7 @@ export function StockOut() {
                    </Select>
                  </div>
                  <div className="space-y-2">
-                   <Label className="text-[10px] font-black uppercase text-slate-400">Filter By Reason</Label>
+                   <Label className="text-[10px] font-bold text-slate-400">Filter By Reason</Label>
                    <Select value={historyFilters.reason} onValueChange={(v) => setHistoryFilters({...historyFilters, reason: v === "all" ? "" : v})}>
                       <SelectTrigger className="rounded-xl border-slate-200 bg-slate-50/50">
                          <SelectValue placeholder="All Reasons" />
@@ -360,7 +360,7 @@ export function StockOut() {
                          {Math.abs(h.quantity_change)}
                       </TableCell>
                       <TableCell>
-                         <Badge variant="outline" className={cn("rounded-lg text-[9px] font-black uppercase tracking-tighter", 
+                         <Badge variant="outline" className={cn("rounded-lg text-[9px] font-bold tracking-tighter", 
                             h.movement_type === "SALE" ? "bg-emerald-50 text-emerald-600 border-emerald-100" : "bg-rose-50 text-rose-600 border-rose-100")}>
                             {h.movement_type}
                          </Badge>
@@ -382,7 +382,7 @@ export function StockOut() {
                  <CardHeader className="bg-slate-900 text-white rounded-t-3xl">
                     <div className="flex items-center justify-between">
                        <div>
-                          <CardTitle className="text-xl font-black uppercase italic tracking-tighter">Dispatch Manifest</CardTitle>
+                          <CardTitle className="text-xl font-bold italic tracking-tighter">Dispatch Manifest</CardTitle>
                           <CardDescription className="text-slate-400 font-bold">Prepare inventory for shipment, sale, or disposal</CardDescription>
                        </div>
                        <Barcode className="h-10 w-10 text-slate-700" />
@@ -392,7 +392,7 @@ export function StockOut() {
                     {/* Header Logic */}
                     <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6 pb-6 border-b border-dashed border-slate-200">
                        <div className="space-y-2">
-                          <Label className="text-[10px] font-black uppercase text-slate-400 ml-1">Origin Branch *</Label>
+                          <Label className="text-[10px] font-bold text-slate-400 ml-1">Origin Branch *</Label>
                           <Select value={header.branchId} onValueChange={(v) => { setHeader({...header, branchId: v}); setStagedItems([]); }}>
                              <SelectTrigger className="rounded-xl border-slate-200 bg-slate-50/30">
                                 <SelectValue placeholder="Select Branch" />
@@ -403,7 +403,7 @@ export function StockOut() {
                           </Select>
                        </div>
                        <div className="space-y-2">
-                          <Label className="text-[10px] font-black uppercase text-slate-400 ml-1">Dispatch Type *</Label>
+                          <Label className="text-[10px] font-bold text-slate-400 ml-1">Dispatch Type *</Label>
                           <Select value={header.reason} onValueChange={(v) => setHeader({...header, reason: v})}>
                              <SelectTrigger className="rounded-xl border-slate-200 bg-slate-50/30">
                                 <SelectValue placeholder="Select Reason" />
@@ -418,7 +418,7 @@ export function StockOut() {
                        </div>
                        {header.reason === "SALE" && (
                           <div className="space-y-2">
-                            <Label className="text-[10px] font-black uppercase text-slate-400 ml-1">Target Customer</Label>
+                            <Label className="text-[10px] font-bold text-slate-400 ml-1">Target Customer</Label>
                             <Select value={header.customerId} onValueChange={(v) => setHeader({...header, customerId: v})}>
                                <SelectTrigger className="rounded-xl border-slate-200 bg-slate-50/30">
                                   <SelectValue placeholder="Walk-in Customer" />
@@ -431,18 +431,18 @@ export function StockOut() {
                           </div>
                        )}
                        <div className="space-y-2">
-                          <Label className="text-[10px] font-black uppercase text-slate-400 ml-1">Dispatch Date</Label>
+                          <Label className="text-[10px] font-bold text-slate-400 ml-1">Dispatch Date</Label>
                           <Input type="date" value={header.date} onChange={(e) => setHeader({...header, date: e.target.value})} className="rounded-xl border-slate-200 bg-slate-50/30" />
                        </div>
                        <div className="space-y-2">
-                          <Label className="text-[10px] font-black uppercase text-slate-400 ml-1">Ref / Invoice #</Label>
+                          <Label className="text-[10px] font-bold text-slate-400 ml-1">Ref / Invoice #</Label>
                           <Input value={header.reference} onChange={(e) => setHeader({...header, reference: e.target.value})} placeholder="INV-0000" className="rounded-xl border-slate-200 bg-slate-50/30" />
                        </div>
                     </div>
 
                     {/* Line Item Entry */}
                     <div className="space-y-4">
-                       <p className="text-[10px] font-black uppercase text-slate-900 tracking-widest flex items-center gap-2">
+                       <p className="text-[10px] font-bold text-slate-900 tracking-widest flex items-center gap-2">
                           <Plus className="h-3 w-3" /> ADD LINE ASSET
                        </p>
                        <div className="bg-slate-50 p-6 rounded-3xl border border-slate-200 space-y-6">
@@ -477,7 +477,7 @@ export function StockOut() {
                                 </Popover>
                                 {selectedProduct && (
                                    <div className="flex justify-between items-center px-1">
-                                      <span className="text-[9px] font-black uppercase text-slate-400">Available in Branch:</span>
+                                      <span className="text-[9px] font-bold text-slate-400">Available in Branch:</span>
                                       <span className={cn("text-[10px] font-black", availableStock > 0 ? "text-emerald-600" : "text-rose-600")}>
                                          {availableStock} Units
                                       </span>
@@ -510,7 +510,7 @@ export function StockOut() {
                     {/* Staging Area */}
                     <div className="space-y-4">
                         <div className="flex items-center justify-between">
-                           <p className="text-[10px] font-black uppercase text-slate-900 tracking-widest flex items-center gap-2">
+                           <p className="text-[10px] font-bold text-slate-900 tracking-widest flex items-center gap-2">
                               <ShoppingCart className="h-3 w-3" /> STAGING GRID ({stagedItems.length})
                            </p>
                            <Button variant="ghost" className="text-[10px] font-black text-rose-500 p-0 h-auto" onClick={() => setStagedItems([])}>CLEAR ALL</Button>
@@ -520,10 +520,10 @@ export function StockOut() {
                               <Table>
                                  <TableHeader className="bg-slate-100">
                                     <TableRow>
-                                       <TableHead className="text-[9px] font-black uppercase tracking-widest">Asset Details</TableHead>
-                                       <TableHead className="text-[9px] font-black uppercase tracking-widest text-right">Qty</TableHead>
-                                       <TableHead className="text-[9px] font-black uppercase tracking-widest text-right">Selling Rate</TableHead>
-                                       <TableHead className="text-[9px] font-black uppercase tracking-widest text-right">Valuation</TableHead>
+                                       <TableHead className="text-[9px] font-bold tracking-widest">Asset Details</TableHead>
+                                       <TableHead className="text-[9px] font-bold tracking-widest text-right">Qty</TableHead>
+                                       <TableHead className="text-[9px] font-bold tracking-widest text-right">Selling Rate</TableHead>
+                                       <TableHead className="text-[9px] font-bold tracking-widest text-right">Valuation</TableHead>
                                        <TableHead className="w-[50px]"></TableHead>
                                     </TableRow>
                                  </TableHeader>
@@ -568,7 +568,7 @@ export function StockOut() {
                      <div className="bg-rose-100 p-2 rounded-xl">
                         <Calculator className="h-5 w-5 text-rose-600" />
                      </div>
-                     <h2 className="text-xl font-black italic uppercase tracking-tighter">Manifest Totals</h2>
+                     <h2 className="text-xl font-bold uppercase tracking-tighter">Manifest Totals</h2>
                   </div>
 
                   <div className="space-y-4">
@@ -587,7 +587,7 @@ export function StockOut() {
                   </div>
 
                   <div className="space-y-2">
-                     <Label className="text-[10px] font-black uppercase text-slate-400 ml-1 italic">Dispatch Remarks / Reference</Label>
+                     <Label className="text-[10px] font-bold text-slate-400 ml-1 italic">Dispatch Remarks / Reference</Label>
                      <Textarea 
                        value={header.notes} 
                        onChange={(e) => setHeader({...header, notes: e.target.value})} 
@@ -618,7 +618,7 @@ export function StockOut() {
 
                   <div className="p-4 bg-orange-50 rounded-2xl border border-orange-100 border-dashed flex gap-3">
                      <AlertCircle className="h-5 w-5 text-orange-500 shrink-0 mt-0.5" />
-                     <p className="text-[10px] text-orange-700 font-medium leading-relaxed uppercase tracking-tight italic">
+                     <p className="text-[10px] text-orange-700 font-medium leading-relaxed tracking-tight">
                         Authorizing will instantly deduct quantities from the selected branch and log professional movement entries.
                      </p>
                   </div>

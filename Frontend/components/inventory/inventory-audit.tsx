@@ -168,7 +168,7 @@ export function InventoryAudit() {
   const exportAudit = () => {
     // ... same as before ...
     if (!data || !summary) return;
-    const headers = ["Branch", "Transactions", "Revenue", "COGS", "Gross Profit", "Margin (%)"];
+    const headers = ["Branch", "Transactions", "Revenue", "COGS", "Total Profit", "Margin (%)"];
     const rows = data.map(b => [
       b.name,
       b.count,
@@ -201,8 +201,8 @@ export function InventoryAudit() {
           </div>
         </div>
         <div className="text-center space-y-3">
-          <h2 className="text-2xl font-black text-slate-900 tracking-tight uppercase">Processing Business Intelligence</h2>
-          <p className="text-slate-400 font-bold text-[10px] uppercase tracking-widest italic animate-pulse">Running Financial Audit Algorithms · Verifying Branch Margins</p>
+          <h2 className="text-2xl font-black text-slate-900 tracking-tight uppercase">Loading reports...</h2>
+          <p className="text-slate-400 font-bold text-[10px] tracking-tight animate-pulse">Analyzing financial data...</p>
         </div>
       </div>
     );
@@ -217,9 +217,9 @@ export function InventoryAudit() {
             <div className="bg-blue-600 p-2 rounded-xl shadow-lg shadow-blue-200">
               <BarChart3 className="h-5 w-5 text-white" />
             </div>
-            <h1 className="text-2xl font-black text-slate-900 tracking-tight">Inventory Financial Audit</h1>
+            <h1 className="text-2xl font-black text-slate-900 tracking-tight">Stock Profit Report</h1>
           </div>
-          <p className="text-slate-500 text-sm font-medium">Enterprise Intelligence & Profitability Analysis</p>
+          <p className="text-slate-500 text-sm font-medium">Revenue, cost, and profit analysis</p>
         </div>
 
         <div className="flex flex-wrap items-center gap-4">
@@ -268,7 +268,7 @@ export function InventoryAudit() {
         <Card className="rounded-3xl border-none shadow-sm bg-gradient-to-br from-blue-600 to-blue-700 text-white overflow-hidden relative group">
           <CardContent className="p-6">
             <div className="relative z-10">
-              <p className="text-[10px] font-black uppercase tracking-widest text-blue-100 opacity-80 mb-1">Gross Revenue</p>
+              <p className="text-[10px] font-bold tracking-widest text-blue-100 opacity-80 mb-1">Total Sales</p>
               <h3 className="text-3xl font-black">{formatCurrency(summary?.totalRevenue || 0)}</h3>
               <div className="mt-4 flex items-center gap-2">
                 <Badge className="bg-white/20 text-white border-none text-[10px] font-bold">
@@ -284,9 +284,9 @@ export function InventoryAudit() {
         <Card className="rounded-3xl border-none shadow-sm bg-slate-900 text-white overflow-hidden relative group">
           <CardContent className="p-6">
             <div className="relative z-10">
-              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">COGS (Total Cost)</p>
+              <p className="text-[10px] font-bold tracking-widest text-slate-400 mb-1">Stock Cost</p>
               <h3 className="text-3xl font-black">{formatCurrency(summary?.totalCOGS || 0)}</h3>
-              <p className="mt-4 text-[10px] font-bold text-slate-500 uppercase tracking-tighter">Inventory Consumption Value</p>
+              <p className="mt-4 text-[10px] font-bold text-slate-500 uppercase tracking-tighter">Total value of stock used</p>
             </div>
             <RefreshCw className="absolute -right-4 -bottom-4 h-32 w-32 text-white/5 group-hover:rotate-45 transition-transform duration-700" />
           </CardContent>
@@ -295,11 +295,11 @@ export function InventoryAudit() {
         <Card className="rounded-3xl border-slate-100 shadow-sm bg-white overflow-hidden relative group">
           <CardContent className="p-6">
             <div className="relative z-10">
-              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Gross Profit</p>
+              <p className="text-[10px] font-bold tracking-widest text-slate-400 mb-1">Total Profit</p>
               <h3 className="text-3xl font-black text-slate-900">{formatCurrency(summary?.grossProfit || 0)}</h3>
               <div className="mt-4 flex items-center gap-1 text-emerald-600 font-black text-xs italic">
                 <ArrowUpRight className="h-4 w-4" />
-                NET EARNINGS
+                Net Profit
               </div>
             </div>
             <TrendingUp className="absolute -right-4 -bottom-4 h-32 w-32 text-slate-50 group-hover:translate-x-2 transition-transform duration-500" />
@@ -309,7 +309,7 @@ export function InventoryAudit() {
         <Card className="rounded-3xl border-slate-100 shadow-sm bg-white overflow-hidden relative group">
           <CardContent className="p-6">
             <div className="relative z-10">
-              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Profit Margin</p>
+              <p className="text-[10px] font-bold tracking-widest text-slate-400 mb-1">Profit %</p>
               <h3 className="text-3xl font-black text-slate-900">{(summary?.profitMargin || 0).toFixed(1)}<span className="text-xl text-slate-300 ml-1">%</span></h3>
               <div className="mt-4 h-2 w-full bg-slate-100 rounded-full overflow-hidden">
                 <div 
@@ -323,7 +323,7 @@ export function InventoryAudit() {
         </Card>
       </div>
 
-      {/* BRANCH DETAILS */}
+      {/* Branch NameS */}
       <Card className="rounded-3xl border-none shadow-sm overflow-hidden">
         <CardHeader className="bg-slate-50/50 px-8 py-6 border-b border-slate-100">
           <div className="flex justify-between items-center">
@@ -344,9 +344,9 @@ export function InventoryAudit() {
                     <div className="bg-slate-100 p-2 rounded-xl">
                       <Filter className="h-4 w-4 text-slate-600" />
                     </div>
-                    <SheetTitle className="text-xl font-black text-slate-900 tracking-tight uppercase">Audit Intelligence Filters</SheetTitle>
+                    <SheetTitle className="text-xl font-black text-slate-900 tracking-tight uppercase">Report Filters</SheetTitle>
                   </div>
-                  <SheetDescription className="text-xs font-bold text-slate-400 uppercase tracking-widest italic">
+                  <SheetDescription className="text-xs font-bold text-slate-400 tracking-tight">
                     Narrow down your financial performance analysis
                   </SheetDescription>
                 </SheetHeader>
@@ -354,7 +354,7 @@ export function InventoryAudit() {
                 <div className="space-y-10 flex-1 overflow-y-auto px-1 custom-scrollbar">
                   {/* CATEGORY SEARCH DROPDOWN */}
                   <div className="space-y-4 relative" ref={catRef}>
-                    <Label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 ml-1">Asset Category Cluster</Label>
+                    <Label className="text-[10px] font-bold tracking-[0.2em] text-slate-400 ml-1">Category</Label>
                     <div className="relative">
                       <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
                       <Input 
@@ -380,7 +380,7 @@ export function InventoryAudit() {
 
                   {/* PRODUCT SEARCH DROPDOWN */}
                   <div className="space-y-4 relative" ref={prodRef}>
-                    <Label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 ml-1">Identity Filter (Product/SKU)</Label>
+                    <Label className="text-[10px] font-bold tracking-[0.2em] text-slate-400 ml-1">Search Product</Label>
                     <div className="relative">
                       <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
                       <Input 
@@ -408,7 +408,7 @@ export function InventoryAudit() {
                   </div>
 
                   <div className="space-y-4">
-                    <Label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 ml-1">Operational Period</Label>
+                    <Label className="text-[10px] font-bold tracking-[0.2em] text-slate-400 ml-1">Active Period</Label>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div className="space-y-2">
                         <Label className="text-[9px] font-bold text-slate-500 uppercase ml-1">Start Date</Label>
@@ -434,10 +434,10 @@ export function InventoryAudit() {
 
                 <SheetFooter className="mt-8 flex flex-col gap-3 sm:flex-col">
                   <Button 
-                    className="w-full h-12 rounded-2xl bg-slate-900 border-none text-white font-black uppercase tracking-widest shadow-xl shadow-slate-900/20"
+                    className="w-full h-12 rounded-2xl bg-slate-900 border-none text-white font-bold tracking-widest shadow-xl shadow-slate-900/20"
                     onClick={() => { fetchAuditData(); setIsFilterOpen(false); }}
                   >
-                    Apply Neural Filters
+                    Apply Filters
                   </Button>
                   <Button 
                     variant="ghost"
@@ -455,11 +455,11 @@ export function InventoryAudit() {
           <Table>
             <TableHeader className="bg-slate-50/30">
               <TableRow className="hover:bg-transparent border-slate-100">
-                <TableHead className="font-black text-[10px] uppercase tracking-widest text-slate-400 p-8 py-4">Branch Detail</TableHead>
+                <TableHead className="font-black text-[10px] uppercase tracking-widest text-slate-400 p-8 py-4">Branch Name</TableHead>
                 <TableHead className="text-right font-black text-[10px] uppercase tracking-widest text-slate-400 py-4">Transactions</TableHead>
                 <TableHead className="text-right font-black text-[10px] uppercase tracking-widest text-slate-400 py-4">Revenue</TableHead>
-                <TableHead className="text-right font-black text-[10px] uppercase tracking-widest text-slate-400 py-4">Inventory Cost</TableHead>
-                <TableHead className="text-right font-black text-[10px] uppercase tracking-widest text-slate-400 py-4">Actual Profit</TableHead>
+                <TableHead className="text-right font-black text-[10px] uppercase tracking-widest text-slate-400 py-4">Cost Price</TableHead>
+                <TableHead className="text-right font-black text-[10px] uppercase tracking-widest text-slate-400 py-4">Profit</TableHead>
                 <TableHead className="text-right font-black text-[10px] uppercase tracking-widest text-slate-400 p-8 py-4">Profitability</TableHead>
               </TableRow>
             </TableHeader>
@@ -475,7 +475,7 @@ export function InventoryAudit() {
                         </div>
                         <div>
                           <p className="font-black text-slate-800 text-sm">{b.name}</p>
-                          <Badge variant="outline" className="text-[8px] font-bold uppercase py-0 px-2 mt-1 border-slate-200 text-slate-400">Operational</Badge>
+                          <Badge variant="outline" className="text-[8px] font-bold uppercase py-0 px-2 mt-1 border-slate-200 text-slate-400">Active</Badge>
                         </div>
                       </div>
                     </TableCell>
@@ -489,7 +489,7 @@ export function InventoryAudit() {
                     </TableCell>
                     <TableCell className="p-8 py-6 text-right">
                       <div className="flex flex-col items-end gap-1">
-                        <span className={`text-xs font-black italic ${margin > 20 ? 'text-blue-600' : 'text-slate-500'}`}>
+                        <span className={`text-xs font-bold ${margin > 20 ? 'text-blue-600' : 'text-slate-500'}`}>
                           {margin.toFixed(1)}%
                         </span>
                         <div className="w-24 h-1 bg-slate-100 rounded-full overflow-hidden">
@@ -523,15 +523,15 @@ export function InventoryAudit() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card className="rounded-3xl border-slate-100 shadow-sm p-6 bg-white">
            <div className="flex items-center justify-between mb-6">
-              <h4 className="font-black text-slate-800 text-sm uppercase tracking-tight">Audit Insights</h4>
-              <Badge className="bg-blue-50 text-blue-600 border-none font-bold text-[9px] uppercase tracking-widest">AI Assisted</Badge>
+              <h4 className="font-black text-slate-800 text-sm uppercase tracking-tight">Summary</h4>
+              <Badge className="bg-blue-50 text-blue-600 border-none font-bold text-[9px] uppercase tracking-widest">Calculated</Badge>
            </div>
            <div className="space-y-4">
               <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100">
                 <div className="flex gap-3">
                   <ArrowUpRight className="h-5 w-5 text-emerald-600 shrink-0" />
                   <div>
-                    <p className="text-xs font-black text-emerald-900 uppercase mb-0.5 tracking-tight">Profitability Lead</p>
+                    <p className="text-xs font-black text-emerald-900 uppercase mb-0.5 tracking-tight">Profit Trend</p>
                     <p className="text-xs text-emerald-700 font-medium leading-relaxed italic">Inventory turnover is currently healthy. Your average gross margin of {(summary?.profitMargin || 0).toFixed(1)}% outperforms last month's performance.</p>
                   </div>
                 </div>
@@ -540,7 +540,7 @@ export function InventoryAudit() {
                 <div className="flex gap-3">
                   <Activity className="h-5 w-5 text-blue-600 shrink-0" />
                   <div>
-                    <p className="text-xs font-black text-blue-900 uppercase mb-0.5 tracking-tight">Supply Chain Health</p>
+                    <p className="text-xs font-black text-blue-900 uppercase mb-0.5 tracking-tight">Stock Status</p>
                     <p className="text-xs text-blue-700 font-medium leading-relaxed italic">Purchase records indicate consistent valuation across branches with no major anomalies detected in stock movement.</p>
                   </div>
                 </div>
@@ -550,8 +550,8 @@ export function InventoryAudit() {
         
         <Card className="rounded-3xl border-slate-100 shadow-sm p-6 bg-slate-900 text-white relative overflow-hidden">
            <div className="relative z-10">
-              <h4 className="font-black text-white text-sm uppercase tracking-tight mb-2">Total System Valuation</h4>
-              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-6">Aggregate Value of Current Assets</p>
+              <h4 className="font-black text-white text-sm uppercase tracking-tight mb-2">Total Stock Value</h4>
+              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-6">Total value of all items in stock</p>
               
               <div className="space-y-6">
                 <div>
@@ -570,7 +570,7 @@ export function InventoryAudit() {
                         <DollarSign className="h-5 w-5 text-yellow-400" />
                       </div>
                       <div>
-                        <p className="text-xs font-black uppercase tracking-tight">Projected Earnings</p>
+                        <p className="text-xs font-bold tracking-tight">Projected Earnings</p>
                         <p className="text-[10px] font-medium text-slate-500">Based on current stock labels</p>
                       </div>
                    </div>
