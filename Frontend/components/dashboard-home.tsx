@@ -123,6 +123,9 @@ export function DashboardHome({ onNavigate }: DashboardHomeProps) {
     loadAllData()
   }, [])
 
+  const formatCurrency = (n: number) =>
+    `Rs ${Number(n).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+
   const handleRefreshData = async () => {
     await withRefreshLoading(async () => {
       try {
@@ -241,7 +244,9 @@ export function DashboardHome({ onNavigate }: DashboardHomeProps) {
     })
   }
 
-  const formatCurrency = (amount: string | number) => `Rs ${Number(amount).toFixed(2)}`
+  if (initialLoading) {
+    return <PageLoader message="Opening Dashboard..." />;
+  }
 
   return (
     <div className="p-4 md:p-6 space-y-4 md:space-y-6">

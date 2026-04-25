@@ -64,17 +64,17 @@ export class SupplierService {
 
     async listSuppliers({
         page = 1,
-        limit = 10,
+        limit = 100,
         search,
-        is_active = true,
-        display_on_pos = true,
+        is_active,
+        display_on_pos,
     }: {
         page?: number;
         limit?: number;
         search?: string;
         is_active?: boolean;
         display_on_pos?: boolean;
-    }) {
+    } = {}) {
         const where: Prisma.SupplierWhereInput = {};
 
         if (search) {

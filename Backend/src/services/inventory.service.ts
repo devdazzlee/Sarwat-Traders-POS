@@ -531,6 +531,32 @@ export class InventoryService {
           });
         });
 
+        // --- NEW: Calculate Real Stock Value & Projections ---
+        const allStocks = await prisma.stock.findMany({
+          where: params.branchId ? { branch_id: params.branchId } : {},
+          include: { product: true }
+        });
+
+        let totalStockValue = 0;
+        let totalProjectedValue = 0;
+        for (const s of allStocks) {
+          const qty = asNumber(s.current_quantity);
+          const cost = asNumber(s.product.purchase_rate);
+          const retail = asNumber(s.product.sales_rate_inc_dis_and_tax);
+          totalStockValue += qty * cost;
+          totalProjectedValue += qty * retail;
+        }
+
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        const [movedProdCount, activeProdCount] = await Promise.all([
+          prisma.stockMovement.groupBy({
+            by: ['product_id'],
+            where: { created_at: { gte: thirtyDaysAgo } }
+          }).then(res => res.length),
+          prisma.product.count({ where: { is_active: true } })
+        ]);
+
         return {
           data: Object.values(branchPerformance),
           summary: {
@@ -538,7 +564,10 @@ export class InventoryService {
             totalCOGS,
             grossProfit: totalRevenue - totalCOGS,
             profitMargin: totalRevenue > 0 ? ((totalRevenue - totalCOGS) / totalRevenue) * 100 : 0,
-            transactionCount: sales.length
+            transactionCount: sales.length,
+            totalStockValue,
+            projectedValue: totalProjectedValue,
+            equityHealthy: activeProdCount > 0 ? (movedProdCount / activeProdCount) * 100 : 0
           }
         };
       }

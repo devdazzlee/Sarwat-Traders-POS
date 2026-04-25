@@ -277,8 +277,8 @@ export function StockManagement() {
       ? (addForm.quantity === "" ? 0 : Number(addForm.quantity) || 0)
       : addForm.quantity;
 
-    if (!addForm.productId || !addForm.branchId || !quantity || quantity <= 0) {
-      toast.error("Please fill all required fields");
+    if (!addForm.productId || !quantity || quantity <= 0) {
+      toast.error("Please select a product and enter quantity");
       return;
     }
 
@@ -309,8 +309,8 @@ export function StockManagement() {
       ? (adjustForm.quantityChange === "" || adjustForm.quantityChange === "-" ? 0 : Number(adjustForm.quantityChange) || 0)
       : adjustForm.quantityChange;
 
-    if (!adjustForm.productId || !adjustForm.branchId || quantityChange === 0) {
-      toast.error("Please enter a valid change amount");
+    if (!adjustForm.productId || quantityChange === 0) {
+      toast.error("Please select a product and enter an adjustment amount");
       return;
     }
 
@@ -342,8 +342,8 @@ export function StockManagement() {
       ? (removeForm.quantity === "" ? 0 : Number(removeForm.quantity) || 0)
       : removeForm.quantity;
 
-    if (!removeForm.productId || !removeForm.branchId || !quantity || quantity <= 0) {
-      toast.error("Please fill all required fields");
+    if (!removeForm.productId || !quantity || quantity <= 0) {
+      toast.error("Please select a product and enter quantity to remove");
       return;
     }
 
@@ -497,10 +497,10 @@ export function StockManagement() {
                   <Plus className="h-3.5 w-3.5" /> RECORD
                 </Button>
               </DialogTrigger>
-              <DialogContent className="max-w-lg bg-white rounded-2xl border-none shadow-2xl p-0 overflow-hidden">
-                <DialogHeader className="p-6 bg-indigo-600">
+              <DialogContent className="max-w-lg bg-white rounded-2xl border-none shadow-2xl p-0 overflow-hidden [&>button]:text-white [&>button]:opacity-80 [&>button]:hover:opacity-100 [&>button]:top-5 [&>button]:right-5">
+                <DialogHeader className="p-6 bg-slate-900">
                   <DialogTitle className="text-lg font-black text-white uppercase tracking-tight">Add Stock</DialogTitle>
-                  <p className="text-indigo-100 text-[10px] font-bold uppercase tracking-widest mt-0.5 opacity-80">Add new stock entry</p>
+                  <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mt-0.5">Add new stock entry</p>
                 </DialogHeader>
                 <div className="p-6 space-y-6">
                   {/* PRODUCT SELECTOR */}
@@ -552,31 +552,17 @@ export function StockManagement() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label className="text-[10px] font-black uppercase text-slate-500 tracking-wider">Branch</Label>
-                      <Select value={addForm.branchId} onValueChange={(v) => setAddForm({ ...addForm, branchId: v })}>
-                        <SelectTrigger className="h-12 bg-slate-50 border-none rounded-xl font-bold text-slate-700 focus:ring-2 focus:ring-indigo-600/20">
-                          <SelectValue placeholder="Select Branch" />
-                        </SelectTrigger>
-                        <SelectContent className="rounded-xl border-none shadow-xl">
-                          {branches.map(b => <SelectItem key={b.id} value={b.id} className="font-bold text-[11px] py-2">{b.name}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label className="text-[10px] font-black uppercase text-slate-500 tracking-wider">Quantity</Label>
-                      <div className="relative">
-                        <Input
-                          type="number"
-                          placeholder="0"
-                          value={addForm.quantity}
-                          onChange={(e) => setAddForm({ ...addForm, quantity: e.target.value })}
-                          className="h-12 bg-slate-50 border-none rounded-xl font-black text-indigo-600 text-lg pr-12 focus:ring-2 focus:ring-indigo-600/20"
-                        />
-                        <span className="absolute right-4 top-1/2 -translate-y-1/2 text-[9px] font-black text-slate-400 uppercase">Qty</span>
-                      </div>
+                  <div className="space-y-2">
+                    <Label className="text-[10px] font-black uppercase text-slate-500 tracking-wider">Quantity</Label>
+                    <div className="relative">
+                      <Input
+                        type="number"
+                        placeholder="0"
+                        value={addForm.quantity}
+                        onChange={(e) => setAddForm({ ...addForm, quantity: e.target.value })}
+                        className="h-12 bg-slate-50 border-none rounded-xl font-black text-slate-900 text-lg pr-12"
+                      />
+                      <span className="absolute right-4 top-1/2 -translate-y-1/2 text-[9px] font-black text-slate-400 uppercase">Qty</span>
                     </div>
                   </div>
 
@@ -604,7 +590,7 @@ export function StockManagement() {
                     </div>
                   </div>
 
-                  <Button className="w-full h-14 bg-indigo-600 hover:bg-slate-900 text-white font-black rounded-xl shadow-lg shadow-indigo-100 text-xs tracking-widest uppercase transition-all gap-2" onClick={handleAddStock} disabled={isTransferring}>
+                  <Button className="w-full h-14 bg-slate-900 hover:bg-black text-white font-black rounded-xl shadow-lg text-xs tracking-widest uppercase transition-all gap-2" onClick={handleAddStock} disabled={isTransferring}>
                     {isTransferring ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
                     Save Stock
                   </Button>
@@ -624,9 +610,10 @@ export function StockManagement() {
                   <Edit className="h-3.5 w-3.5 text-amber-500" /> ADJUST
                 </Button>
               </DialogTrigger>
-              <DialogContent className="max-w-md bg-white rounded-3xl border-none shadow-2xl p-0 overflow-hidden">
-                <DialogHeader className="p-8 bg-amber-500">
-                  <DialogTitle className="text-xl font-black text-white uppercase tracking-tight text-center">Adjust Stock</DialogTitle>
+              <DialogContent className="max-w-md bg-white rounded-2xl border-none shadow-2xl p-0 overflow-hidden [&>button]:text-white [&>button]:opacity-80 [&>button]:hover:opacity-100 [&>button]:top-5 [&>button]:right-5">
+                <DialogHeader className="p-6 bg-slate-900">
+                  <DialogTitle className="text-lg font-black text-white uppercase tracking-tight">Adjust Stock</DialogTitle>
+                  <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mt-0.5">Modify existing stock quantity</p>
                 </DialogHeader>
                 <div className="p-8 space-y-6">
                   <div className="space-y-2 relative" ref={adjustProductDropdownRef}>
@@ -674,28 +661,15 @@ export function StockManagement() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label className="text-[11px] font-black uppercase text-slate-400 tracking-wider">Branch</Label>
-                      <Select value={adjustForm.branchId} onValueChange={(v) => setAdjustForm({ ...adjustForm, branchId: v })}>
-                        <SelectTrigger className="h-12 bg-slate-50 border-none rounded-xl font-bold text-slate-700">
-                          <SelectValue placeholder="Branch" />
-                        </SelectTrigger>
-                        <SelectContent className="rounded-xl border-none shadow-xl">
-                          {branches.map(b => <SelectItem key={b.id} value={b.id} className="font-bold text-xs py-2">{b.name}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-2">
-                      <Label className="text-[11px] font-black uppercase text-slate-400 tracking-wider">Adjustment (Â±)</Label>
-                      <Input
-                        type="number"
-                        placeholder="Delta"
-                        value={adjustForm.quantityChange}
-                        onChange={(e) => setAdjustForm({ ...adjustForm, quantityChange: e.target.value })}
-                        className="h-12 bg-slate-50 border-none rounded-xl font-black text-amber-600 text-xl text-center"
-                      />
-                    </div>
+                  <div className="space-y-2">
+                    <Label className="text-[11px] font-black uppercase text-slate-400 tracking-wider">Adjustment (±)</Label>
+                    <Input
+                      type="number"
+                      placeholder="Enter delta (e.g. +5 or -3)"
+                      value={adjustForm.quantityChange}
+                      onChange={(e) => setAdjustForm({ ...adjustForm, quantityChange: e.target.value })}
+                      className="h-12 bg-slate-50 border-none rounded-xl font-black text-slate-900 text-xl text-center"
+                    />
                   </div>
 
                   <div className="space-y-2">
@@ -713,7 +687,7 @@ export function StockManagement() {
                     </Select>
                   </div>
 
-                  <Button className="w-full h-14 bg-amber-500 hover:bg-amber-600 text-white font-black rounded-xl shadow-lg shadow-amber-100 uppercase tracking-widest text-xs gap-3" onClick={handleAdjustStock} disabled={isTransferring}>
+                  <Button className="w-full h-14 bg-slate-900 hover:bg-black text-white font-black rounded-xl shadow-lg uppercase tracking-widest text-xs gap-3" onClick={handleAdjustStock} disabled={isTransferring}>
                     {isTransferring ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                     Execute Delta Update
                   </Button>
@@ -732,9 +706,10 @@ export function StockManagement() {
                   <TrendingDown className="h-3.5 w-3.5 text-rose-500" /> DISPOSE
                 </Button>
               </DialogTrigger>
-              <DialogContent className="max-w-lg bg-white rounded-2xl border-none shadow-2xl p-0 overflow-hidden">
-                <DialogHeader className="p-6 bg-rose-600">
-                  <DialogTitle className="text-lg font-black text-white uppercase tracking-tight text-center">Remove Stock</DialogTitle>
+              <DialogContent className="max-w-lg bg-white rounded-2xl border-none shadow-2xl p-0 overflow-hidden [&>button]:text-white [&>button]:opacity-80 [&>button]:hover:opacity-100 [&>button]:top-5 [&>button]:right-5">
+                <DialogHeader className="p-6 bg-slate-900">
+                  <DialogTitle className="text-lg font-black text-white uppercase tracking-tight">Remove Stock</DialogTitle>
+                  <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mt-0.5">Dispose or write off inventory</p>
                 </DialogHeader>
                 <div className="p-6 space-y-6">
                   <div className="space-y-2 relative" ref={removeProductDropdownRef}>
@@ -782,28 +757,15 @@ export function StockManagement() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label className="text-[11px] font-black uppercase text-slate-400 tracking-wider">Branch</Label>
-                      <Select value={removeForm.branchId} onValueChange={(v) => setRemoveForm({ ...removeForm, branchId: v })}>
-                        <SelectTrigger className="h-12 bg-slate-50 border-none rounded-xl font-bold text-slate-700">
-                          <SelectValue placeholder="Branch" />
-                        </SelectTrigger>
-                        <SelectContent className="rounded-xl border-none shadow-xl">
-                          {branches.map(b => <SelectItem key={b.id} value={b.id} className="font-bold text-xs py-2">{b.name}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-2">
-                      <Label className="text-[11px] font-black uppercase text-slate-400 tracking-wider">Quantity to Remove</Label>
-                      <Input
-                        type="number"
-                        placeholder="0"
-                        value={removeForm.quantity}
-                        onChange={(e) => setRemoveForm({ ...removeForm, quantity: e.target.value })}
-                        className="h-12 bg-slate-50 border-none rounded-xl font-black text-rose-600 text-xl text-center"
-                      />
-                    </div>
+                  <div className="space-y-2">
+                    <Label className="text-[11px] font-black uppercase text-slate-400 tracking-wider">Quantity to Remove</Label>
+                    <Input
+                      type="number"
+                      placeholder="0"
+                      value={removeForm.quantity}
+                      onChange={(e) => setRemoveForm({ ...removeForm, quantity: e.target.value })}
+                      className="h-12 bg-slate-50 border-none rounded-xl font-black text-slate-900 text-xl text-center"
+                    />
                   </div>
 
                   <div className="space-y-2">
@@ -821,7 +783,7 @@ export function StockManagement() {
                     </Select>
                   </div>
 
-                  <Button className="w-full h-14 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-xl shadow-lg shadow-rose-100 uppercase tracking-widest text-xs gap-3" onClick={handleRemoveStock} disabled={isTransferring}>
+                  <Button className="w-full h-14 bg-slate-900 hover:bg-black text-white font-black rounded-xl shadow-lg uppercase tracking-widest text-xs gap-3" onClick={handleRemoveStock} disabled={isTransferring}>
                     {isTransferring ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
                     Authorize Elimination
                   </Button>
@@ -840,7 +802,7 @@ export function StockManagement() {
                   <ArrowRightLeft className="h-3.5 w-3.5 text-indigo-500" /> TRANSFER
                 </Button>
               </DialogTrigger>
-              <DialogContent className="max-w-lg bg-white rounded-2xl border-none shadow-2xl p-0 overflow-hidden">
+              <DialogContent className="max-w-lg bg-white rounded-2xl border-none shadow-2xl p-0 overflow-hidden [&>button]:text-white [&>button]:opacity-80 [&>button]:hover:opacity-100 [&>button]:top-5 [&>button]:right-5">
                 <DialogHeader className="p-6 bg-slate-900">
                   <DialogTitle className="text-lg font-black text-white uppercase tracking-tight">Inter-Branch Logistic Flow</DialogTitle>
                   <p className="text-slate-400 text-[9px] font-bold uppercase tracking-widest mt-0.5">Multi-Node Movement</p>
@@ -1016,7 +978,7 @@ export function StockManagement() {
                 {isLoading ? (
                   <div className="h-9 w-24 bg-emerald-50 animate-pulse rounded-lg mt-1" />
                 ) : (
-                  <h3 className="text-3xl font-black text-emerald-600 tracking-tighter">{formatQty(totalUnits)}</h3>
+                  <h3 className={`text-3xl font-black tracking-tighter ${totalUnits < 0 ? 'text-rose-600' : 'text-slate-900'}`}>{formatQty(totalUnits)}</h3>
                 )}
               </div>
               <div className="h-10 w-10 rounded-xl bg-emerald-50 flex items-center justify-center">
@@ -1081,17 +1043,6 @@ export function StockManagement() {
         </div>
 
         <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-          <Select value={branchFilter || "all"} onValueChange={setBranchFilter}>
-            <SelectTrigger className="w-full md:w-48 h-12 rounded-2xl border-slate-100 bg-white font-bold text-slate-600 shadow-sm transition-all focus:ring-2 focus:ring-indigo-500/10">
-              <MapPin className="h-3.5 w-3.5 mr-2 text-indigo-500 shadow-sm" />
-              <SelectValue placeholder="All Branches" />
-            </SelectTrigger>
-            <SelectContent className="rounded-2xl shadow-xl border-slate-100">
-              <SelectItem value="all" className="font-bold text-xs uppercase tracking-tight">All Locations</SelectItem>
-              {branches.map((b) => <SelectItem key={b.id} value={b.id} className="font-bold text-xs uppercase tracking-tight">{b.name}</SelectItem>)}
-            </SelectContent>
-          </Select>
-
           <Select value={categoryFilter} onValueChange={setCategoryFilter}>
             <SelectTrigger className="w-full md:w-48 h-12 rounded-2xl border-slate-100 bg-white font-bold text-slate-600 shadow-sm transition-all focus:ring-2 focus:ring-indigo-500/10">
               <Filter className="h-3.5 w-3.5 mr-2 text-indigo-500 shadow-sm" />
@@ -1116,14 +1067,14 @@ export function StockManagement() {
       <Tabs defaultValue="stock" className="space-y-6">
         <div className="flex px-1">
           <TabsList className="bg-white p-1 rounded-xl border border-slate-200 shadow-sm h-11 shrink-0 w-full max-w-md grid grid-cols-3">
-            <TabsTrigger value="stock" className="rounded-lg h-9 font-black text-[10px] uppercase tracking-widest data-[state=active]:bg-indigo-600 data-[state=active]:text-white transition-all">Stock List</TabsTrigger>
-            <TabsTrigger value="history" className="rounded-lg h-9 font-black text-[10px] uppercase tracking-widest data-[state=active]:bg-indigo-600 data-[state=active]:text-white transition-all">Movement Log</TabsTrigger>
-            <TabsTrigger value="today" className="rounded-lg h-9 font-black text-[10px] uppercase tracking-widest data-[state=active]:bg-indigo-600 data-[state=active]:text-white transition-all">Today's Phase</TabsTrigger>
+            <TabsTrigger value="stock" className="rounded-lg h-9 font-black text-[10px] uppercase tracking-widest data-[state=active]:bg-slate-900 data-[state=active]:text-white transition-all">Stock List</TabsTrigger>
+            <TabsTrigger value="history" className="rounded-lg h-9 font-black text-[10px] uppercase tracking-widest data-[state=active]:bg-slate-900 data-[state=active]:text-white transition-all">Movement Log</TabsTrigger>
+            <TabsTrigger value="today" className="rounded-lg h-9 font-black text-[10px] uppercase tracking-widest data-[state=active]:bg-slate-900 data-[state=active]:text-white transition-all">Today's Phase</TabsTrigger>
           </TabsList>
         </div>
 
         {/* Current Stock Tab Content */}
-        <TabsContent value="stock" className="mt-0 outline-none animate-in fade-in duration-500">
+        <TabsContent value="stock" className="mt-0 outline-none">
           <Card className="border-none shadow-sm rounded-3xl overflow-hidden bg-white">
             <CardHeader className="bg-slate-50/50 px-8 py-5 border-b border-slate-100">
               <div className="flex items-center justify-between">
@@ -1244,7 +1195,7 @@ export function StockManagement() {
         </TabsContent>
 
         {/* Movement History Tab Content */}
-        <TabsContent value="history" className="mt-0 outline-none animate-in fade-in duration-500">
+        <TabsContent value="history" className="mt-0 outline-none">
           <Card className="border-none shadow-sm rounded-3xl overflow-hidden bg-white">
             <Table>
               <TableHeader className="bg-slate-50/30">
@@ -1299,7 +1250,7 @@ export function StockManagement() {
         </TabsContent>
 
         {/* Today's Movement Tab */}
-        <TabsContent value="today" className="mt-0 outline-none animate-in fade-in duration-500">
+        <TabsContent value="today" className="mt-0 outline-none">
           <Card className="border-none shadow-sm rounded-3xl overflow-hidden bg-white">
             <Table>
               <TableHeader className="bg-slate-50/30">

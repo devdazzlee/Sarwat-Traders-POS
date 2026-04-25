@@ -52,6 +52,7 @@ import {
 } from "@/components/ui/dialog";
 import { printReceiptViaServer, type ReceiptData } from "@/lib/print-server";
 import { usePrinterSettings } from "@/hooks/use-printer-settings";
+import { downloadA4Invoice, generateA4InvoicePDF, type InvoiceData } from "@/lib/pdf-generator";
 import { SaleEditor } from "./sale-editor";
 
 interface SaleItem {
@@ -382,41 +383,62 @@ export function SalesHistory() {
       };
     });
 
-    const storeName = sale.branch?.name || branch.name || "SARWAT TRADERS";
-    const storeAddress = sale.branch?.address || branch.address || "";
-
     return {
       storeName,
-      tagline: "Quality • Service • Value",
       address: storeAddress,
       transactionId: sale.sale_number,
-      timestamp: sale.created_at || sale.sale_date,
-      cashier: "Walk-in",
-      customerType: sale.customer?.email || "Walk-in",
       items,
       subtotal,
-      discount: discount > 0 ? discount : undefined,
-      taxPercent,
       total,
-      paymentMethod: sale.payment_method,
-      amountPaid: total,
-      changeAmount: 0,
-      promo: sale.notes,
-      thankYouMessage: "Thank you for shopping!",
-      footerMessage: "Visit us again soon!",
+    } as any;
+  };
+
+  const mapSaleToInvoiceData = (sale: any): InvoiceData => {
+    const subtotal = parseFloat(sale.subtotal || "0");
+    const discount = parseFloat(sale.discount || "0");
+    const total = parseFloat(sale.total_payable || "0");
+
+    const items = sale.sale_items.map((item: any) => {
+      const lineTotal = parseFloat(item.line_total || "0");
+      const unitPrice = item.unit_price !== undefined ? parseFloat(item.unit_price) : (lineTotal / Math.max(1, item.quantity));
+      
+      const unitLabel = 
+        (item.product as any)?.unit?.name || 
+        (item as any)?.unit?.name || 
+        (item as any)?.unit_name || 
+        "pcs";
+
+      return {
+        name: item.product?.name || "Unnamed Item",
+        quantity: item.quantity,
+        price: unitPrice,
+        lineTotal: lineTotal,
+        unit: unitLabel,
+      };
+    });
+
+    return {
+      storeName: sale.branch?.name || "SARWAT TRADERS",
+      storeAddress: sale.branch?.address || "Karachi, Pakistan",
+      storePhone: "021 34892110",
+      customerName: sale.customer?.name || "Walk-in Customer",
+      customerPhone: sale.customer?.phone_number || "",
+      customerWhatsApp: sale.customer?.whatsapp_number || sale.customer?.phone_number || "",
+      saleNumber: sale.sale_number,
+      date: parseISO(sale.sale_date),
+      items,
+      subtotal,
+      discount,
+      total,
+      paymentMethod: sale.payment_method || "CASH",
+      balanceDue: sale.payment_method === "CREDIT"
+        ? Math.max(0, total - parseFloat(sale.payment_received || "0"))
+        : 0,
+      amountPaid: parseFloat(sale.payment_received || "0") || total,
     };
   };
 
-  const generateReceiptHtml = (data: ReceiptData) => {
-    const subtotal = Number(data.subtotal || 0);
-    const discount = Number(data.discount || 0);
-    const taxPercent = data.taxPercent || 0;
-    const tax = taxPercent > 0 ? (subtotal - discount) * (taxPercent / 100) : 0;
-    const total = data.total ?? Math.max(0, subtotal - discount + tax);
-    const paid = data.amountPaid ?? total;
-    const change = data.changeAmount ?? 0;
-    const timestamp = data.timestamp ? new Date(data.timestamp) : new Date();
-    
+  const generatePremiumInvoiceHtml = (data: InvoiceData) => {
     const money = (n: number) => {
       return Number(n).toLocaleString('en-US', {
         minimumFractionDigits: 2,
@@ -425,129 +447,183 @@ export function SalesHistory() {
     };
     
     const itemsHtml = (data.items || [])
-      .map((item) => {
-        const name = String(item.name || '');
-        const qty = (item.quantity ?? 0).toString() + (item.unit ? ` ${item.unit}` : '');
-        const rate = money(Number(item.price || 0) * Number(item.quantity || 0));
-        return `<div class="item-row">
-  <div class="item-name">${name}</div>
-  <div class="item-qty">${qty}</div>
-  <div class="item-rate">${rate}</div>
-</div>`;
-      })
-      .join("");
-    
-    const promoHtml = data.promo ? `<div class="promo">Promo: ${data.promo}</div>` : "";
-    const branchLine = buildReceiptBranchLine(data.storeName, data.address);
-    
-    const footerLines = [
-      'Branch: 021 34892110',
-      'Delivery Hotline WhatsApp: +92 342 3344040',
-      'Website: sarwattraders.com'
-    ];
-    
-    const footerHtml = footerLines.map(line => `<div class="footer-line">${line}</div>`).join('');
-    
-    const aceHtml = `
-<div class="divider-thin"></div>
-<div class="powered-by">Powered by Ace Studios</div>
-<div class="ace-line">+92 336 2500357</div>`;
-    
+      .map((item, idx) => `
+        <tr style="background-color: ${idx % 2 === 1 ? '#f8fafc' : '#ffffff'}; border-bottom: 1px solid #f1f5f9;">
+          <td style="padding: 12px; font-size: 11px; color: #64748b;">${String(idx + 1).padStart(2, '0')}</td>
+          <td style="padding: 12px; font-size: 11px; font-weight: 700; color: #0f172a;">${item.name}</td>
+          <td style="padding: 12px; font-size: 11px; text-align: center; color: #1e293b;">${item.quantity} ${item.unit || ''}</td>
+          <td style="padding: 12px; font-size: 11px; text-align: right; color: #475569;">${money(item.price)}</td>
+          <td style="padding: 12px; font-size: 11px; text-align: right; font-weight: 800; color: #0f172a;">${money(item.lineTotal)}</td>
+        </tr>
+      `).join("");
+
     return `
-<div class="receipt">
-<div class="logo">
-<img 
-  src="${window.location.origin}/logo.png" 
-  alt="Logo" 
-  class="logo-img" />
-</div>
-<div class="store-name">${branchLine}</div>
-<div class="tagline">${data.tagline || "Quality - Service - Value"}</div>
-${data.strn ? `<div class="strn">${data.strn}</div>` : ''}
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="UTF-8">
+          <style>
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap');
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { 
+              font-family: 'Inter', -apple-system, sans-serif; 
+              background: #ffffff;
+              color: #0f172a;
+              line-height: 1.5;
+            }
+            .invoice-wrap { display: flex; min-height: 100vh; width: 100%; }
+            .sidebar { width: 12px; background: #0f172a; flex-shrink: 0; }
+            .content { flex: 1; display: flex; flex-direction: column; }
+            .header { background: #1e293b; color: #ffffff; padding: 40px; display: flex; justify-content: space-between; align-items: center; }
+            .header-left h1 { font-size: 28px; font-weight: 900; letter-spacing: -0.025em; text-transform: uppercase; margin-bottom: 4px; }
+            .header-left p { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: #94a6b8; }
+            .header-right { text-align: right; }
+            .header-right h2 { font-size: 36px; font-weight: 900; letter-spacing: -0.05em; color: #f8fafc; }
+            .header-right p { font-size: 10px; font-weight: 700; color: #38bdf8; }
+            .section { padding: 40px; }
+            .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin-bottom: 32px; }
+            .label-tiny { font-size: 10px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.05em; color: #64748b; margin-bottom: 4px; }
+            .text-bold { font-size: 13px; font-weight: 700; color: #0f172a; }
+            .text-muted { font-size: 11px; color: #64748b; margin-top: 2px; }
+            .customer-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; margin: 0 40px; display: grid; grid-template-columns: 1fr 1fr; }
+            .status-val { font-size: 20px; font-weight: 900; margin-top: 4px; }
+            .table-wrap { padding: 40px; flex: 1; }
+            table { width: 100%; border-collapse: collapse; }
+            th { background: #0f172a; color: #ffffff; padding: 12px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; text-align: left; }
+            .th-right { text-align: right; }
+            .th-center { text-align: center; }
+            .summary-section { padding: 0 40px 40px 40px; display: flex; justify-content: flex-end; }
+            .summary-box { width: 280px; }
+            .summary-row { display: flex; justify-content: space-between; margin-bottom: 8px; }
+            .summary-label { font-size: 11px; font-weight: 600; color: #64748b; text-transform: uppercase; }
+            .summary-val { font-size: 12px; font-weight: 700; }
+            .total-row { border-top: 2px solid #0f172a; margin-top: 16px; padding-top: 16px; align-items: baseline; }
+            .footer { background: #0f172a; color: #ffffff; padding: 24px 40px; display: flex; justify-content: space-between; align-items: flex-end; margin-top: auto; }
+            @media print { .sidebar { display: none; } .content { width: 100%; } }
+          </style>
+        </head>
+        <body>
+          <div class="invoice-wrap">
+            <div class="sidebar"></div>
+            <div class="content">
+              <div class="header">
+                <div class="header-left">
+                  <img src="/logo.png" style="height: 50px; margin-bottom: 12px; display: block;" />
+                  <h1>SARWAT TRADERS</h1>
+                </div>
+                <div class="header-right">
+                  <h2>INVOICE</h2>
+                  <p>Official Transaction Record</p>
+                </div>
+              </div>
+              
+              <div class="section info-grid">
+                <div>
+                  <div class="label-tiny">From:</div>
+                  <div class="text-bold">SARWAT TRADERS</div>
+                  <div class="text-muted">${data.storeAddress}</div>
+                  <div class="text-bold" style="margin-top: 4px; font-size: 11px;">Contact: ${data.storePhone}</div>
+                </div>
+                <div style="text-align: right;">
+                  <div class="label-tiny">Invoice Details:</div>
+                  <div class="text-bold">No: <span style="color: #2563eb;">#${data.saleNumber}</span></div>
+                  <div class="text-muted">Date: ${new Date(data.date).toLocaleDateString('en-GB', { dateStyle: 'full' })}</div>
+                  <div class="text-bold" style="font-size: 11px;">Time: ${new Date(data.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                </div>
+              </div>
 
-<div class="divider"></div>
+              <div class="customer-card">
+                <div>
+                  <div class="label-tiny">Billed To:</div>
+                  <div style="font-size: 16px; font-weight: 900; color: #0f172a;">${data.customerName || 'Walk-in Customer'}</div>
+                  ${data.customerPhone ? `<div class="text-muted" style="margin-top: 8px; font-weight: 600;">Contact: ${data.customerPhone}</div>` : ''}
+                </div>
+                <div style="text-align: right;">
+                  <div class="label-tiny">Payment Status:</div>
+                  <div class="status-val" style="color: ${data.paymentMethod === 'CREDIT' ? '#dc2626' : '#059669'};">${data.paymentMethod}</div>
+                </div>
+              </div>
 
-<div class="row-lr">
-  <span class="label">Receipt #</span>
-  <span class="value">${data.transactionId}</span>
-</div>
-<div class="row-lr">
-  <span class="label">Date</span>
-  <span class="value">${timestamp.toLocaleDateString()} ${timestamp.toLocaleTimeString()}</span>
-</div>
-<div class="row-lr">
-  <span class="label">Cashier</span>
-  <span class="value">${data.cashier || "Walk-in"}</span>
-</div>
-<div class="row-lr">
-  <span class="label">Customer</span>
-  <span class="value">${data.customerType || "Walk-in"}</span>
-</div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th style="width: 60px;">SR.</th>
+                      <th>Product Description</th>
+                      <th class="th-center">Qty</th>
+                      <th class="th-right">Unit Price</th>
+                      <th class="th-right">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${itemsHtml}
+                  </tbody>
+                </table>
+              </div>
 
-<div class="divider"></div>
+              <div class="summary-section">
+                <div class="summary-box">
+                  <div class="summary-row">
+                    <span class="summary-label">Gross Subtotal:</span>
+                    <span class="summary-val">Rs ${money(data.subtotal)}</span>
+                  </div>
+                  ${data.discount > 0 ? `
+                    <div class="summary-row" style="color: #dc2626;">
+                      <span class="summary-label" style="color: #dc2626; font-weight: 800;">Trade Discount:</span>
+                      <span class="summary-val" style="font-weight: 800;">-Rs ${money(data.discount)}</span>
+                    </div>
+                  ` : ''}
+                  ${data.paymentMethod === 'CREDIT' ? `
+                  <div class="summary-row total-row">
+                    <span style="font-size: 13px; font-weight: 900;">TOTAL AMOUNT:</span>
+                    <span style="font-size: 20px; font-weight: 900; line-height: 1;">Rs ${money(data.total)}</span>
+                  </div>
+                  ${(data.amountPaid ?? 0) > 0 ? `
+                  <div class="summary-row" style="margin-top: 8px;">
+                    <span class="summary-label" style="color: #16a34a; font-weight: 800;">AMOUNT PAID:</span>
+                    <span class="summary-val" style="color: #16a34a;">Rs ${money(data.amountPaid ?? 0)}</span>
+                  </div>` : ''}
+                  <div class="summary-row" style="margin-top: 8px; border-top: 2px solid #dc2626; padding-top: 12px;">
+                    <span style="font-size: 13px; font-weight: 900; color: #dc2626;">BALANCE DUE:</span>
+                    <span style="font-size: 24px; font-weight: 900; line-height: 1; color: #dc2626;">Rs ${money(data.balanceDue)}</span>
+                  </div>
+                  ` : `
+                  <div class="summary-row total-row">
+                    <span style="font-size: 13px; font-weight: 900;">TOTAL AMOUNT:</span>
+                    <span style="font-size: 20px; font-weight: 900; line-height: 1;">Rs ${money(data.total)}</span>
+                  </div>
+                  <div class="summary-row" style="margin-top: 8px;">
+                    <span class="summary-label" style="color: #16a34a; font-weight: 800;">AMOUNT PAID:</span>
+                    <span class="summary-val" style="color: #16a34a;">Rs ${money(data.total)}</span>
+                  </div>
+                  <div class="summary-row" style="margin-top: 8px; border-top: 2px solid #0f172a; padding-top: 12px;">
+                    <span style="font-size: 13px; font-weight: 900;">NET PAYABLE:</span>
+                    <span style="font-size: 24px; font-weight: 900; line-height: 1;">Rs 0.00</span>
+                  </div>
+                  ${(data.amountPaid ?? 0) > data.total ? `
+                  <div class="summary-row" style="margin-top: 8px;">
+                    <span class="summary-label" style="color: #16a34a; font-weight: 800;">CHANGE RETURNED:</span>
+                    <span class="summary-val" style="color: #16a34a;">Rs ${money((data.amountPaid ?? 0) - data.total)}</span>
+                  </div>` : ''}
+                  `}
+                </div>
+              </div>
 
-<div class="items-header">
-  <div class="item-col">ITEM</div>
-  <div class="qty-col">QTY</div>
-  <div class="rate-col">RATE</div>
-</div>
-<div class="items-divider"></div>
-
-${itemsHtml}
-
-<div class="divider"></div>
-
-<div class="row-lr">
-  <span class="label">Subtotal</span>
-  <span class="value">PKR ${money(subtotal)}</span>
-</div>
-${discount > 0
-        ? `<div class="row-lr">
-  <span class="label">Discount</span>
-  <span class="value">- PKR ${money(discount)}</span>
-</div>`
-        : ""
-      }
-<div class="row-lr total-row">
-  <span class="label">Grand Total</span>
-  <span class="value">PKR ${money(total)}</span>
-</div>
-
-<div class="divider"></div>
-
-<div class="row-lr">
-  <span class="label">Payment</span>
-  <span class="value">${(data.paymentMethod || "CASH").toUpperCase()}</span>
-</div>
-${paid !== undefined && paid !== null
-        ? `<div class="row-lr">
-  <span class="label">Paid</span>
-  <span class="value">PKR ${money(paid)}</span>
-</div>`
-        : ""
-      }
-${change > 0
-        ? `<div class="row-lr">
-  <span class="label">Change</span>
-  <span class="value">PKR ${money(change)}</span>
-</div>`
-        : ""
-      }
-
-${promoHtml}
-
-<div class="divider"></div>
-
-<div class="barcode-section">
-  <svg id="barcode-svg"></svg>
-  <div class="barcode-number" id="barcode-number">${data.transactionId}</div>
-</div>
-
-<div class="thank-you">${data.thankYouMessage || "Thank you for shopping!"}</div>
-${footerHtml}
-${aceHtml}
-</div>
-`;
+              <div class="footer">
+                <div>
+                  <div class="label-tiny" style="color: #94a3b8; margin-bottom: 2px;">Powered by</div>
+                  <div style="font-weight: 800; font-size: 14px;">ACE STUDIOS</div>
+                </div>
+                <div style="text-align: right;">
+                  <div style="font-weight: 800; font-size: 12px; color: #cbd5e1; margin-bottom: 2px;">Support: +92 336 2500357</div>
+                  <div style="font-size: 10px; color: #64748b; font-weight: 700;">www.acestudios.pk</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </body>
+      </html>
+    `;
   };
 
   const receiptPageWrapper = (content: string) => `
@@ -828,10 +904,9 @@ ${aceHtml}
 
   useEffect(() => {
     if (viewSale) {
-      const data = prepareReceiptDataFromSale(viewSale, branchInfo);
-      const content = generateReceiptHtml(data);
-      setReceiptData(data);
-      setReceiptHtml(receiptPageWrapper(content));
+      const invoiceData = mapSaleToInvoiceData(viewSale);
+      const htmlContent = generatePremiumInvoiceHtml(invoiceData);
+      setReceiptHtml(htmlContent);
     } else {
       setReceiptHtml("");
       setReceiptData(null);
@@ -1025,7 +1100,6 @@ ${aceHtml}
                   <TableRow>
                     <TableHead className="min-w-[120px]">Sale #</TableHead>
                     <TableHead className="min-w-[120px]">Date</TableHead>
-                    <TableHead className="min-w-[150px]">Branch</TableHead>
                     <TableHead className="min-w-[150px]">Customer</TableHead>
                     <TableHead className="min-w-[100px]">Payment</TableHead>
                     <TableHead className="min-w-[100px]">Total</TableHead>
@@ -1037,14 +1111,14 @@ ${aceHtml}
               <TableBody>
                 {loading ? (
                   <TableRow>
-                    <TableCell colSpan={9} className="text-center py-10">
+                    <TableCell colSpan={8} className="text-center py-10">
                       <PageLoader message="Loading sales..." />
                     </TableCell>
                   </TableRow>
                 ) : sales.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={9}
+                      colSpan={8}
                       className="text-center py-10 text-gray-500"
                     >
                       No sales found
@@ -1065,9 +1139,6 @@ ${aceHtml}
                         </TableCell>
                         <TableCell>
                           {format(parseISO(s.sale_date), "MM/dd/yyyy")}
-                        </TableCell>
-                        <TableCell>
-                          {s.branch?.name || "—"}
                         </TableCell>
                         <TableCell>{s.customer?.email || "—"}</TableCell>
                         <TableCell>{s.payment_method}</TableCell>
@@ -1254,7 +1325,7 @@ ${aceHtml}
                           ref={receiptIframeRef}
                           title="Receipt Preview"
                           srcDoc={receiptHtml}
-                          className="block w-full bg-white"
+                          className="block w-full bg-white rounded-lg shadow-inner"
                           style={{
                             width: "100%",
                             minHeight: "400px",
@@ -1291,24 +1362,25 @@ ${aceHtml}
                   {/* Second line: Action buttons */}
                   <div className="flex items-center justify-between gap-2.5 w-full">
                     <div className="flex items-center gap-2.5">
-                      {(printers.length > 0 || kioskMode) && (
-                        <Button 
-                          onClick={handleServerPrint} 
-                          disabled={!receiptPrinter && !kioskMode}
-                          className="whitespace-nowrap shadow-sm hover:shadow-md transition-all"
-                          size="default"
-                        >
-                          <Printer className="h-4 w-4 mr-2" />
-                          Print to Printer
-                        </Button>
-                      )}
+                      <Button 
+                        onClick={() => downloadA4Invoice(mapSaleToInvoiceData(viewSale))} 
+                        className="whitespace-nowrap shadow-sm hover:shadow-md transition-all bg-blue-600 hover:bg-blue-700"
+                        size="default"
+                      >
+                        <Download className="h-4 w-4 mr-2" />
+                        Download A4 Invoice
+                      </Button>
                       <Button 
                         variant="outline" 
-                        onClick={handleBrowserPrintReceipt}
+                        onClick={() => {
+                          if (receiptIframeRef.current) {
+                            receiptIframeRef.current.contentWindow?.print();
+                          }
+                        }}
                         className="whitespace-nowrap shadow-sm hover:shadow-md transition-all"
                         size="default"
                       >
-                        Browser Print
+                        Print Invoice
                       </Button>
                     </div>
                     <Button 

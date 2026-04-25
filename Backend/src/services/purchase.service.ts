@@ -6,7 +6,7 @@ import { Prisma } from '@prisma/client';
 export class PurchaseService {
   async createBulkPurchase(data: {
     supplierId: string;
-    warehouseBranchId: string;
+    warehouseBranchId?: string;
     purchaseDate: Date;
     invoiceRef?: string;
     notes?: string;
@@ -21,6 +21,14 @@ export class PurchaseService {
     }>;
     createdBy: string;
   }) {
+    // RESOLVE BRANCH ID
+    let finalBranchId = data.warehouseBranchId;
+    if (!finalBranchId) {
+      const firstBranch = await prisma.branch.findFirst({ where: { is_active: true } });
+      if (!firstBranch) throw new AppError(404, 'No active branch found in system');
+      finalBranchId = firstBranch.id;
+    }
+
     return prisma.$transaction(async (tx) => {
       const results = [];
       for (const item of data.items) {
@@ -28,7 +36,7 @@ export class PurchaseService {
           data: {
             product_id: item.productId,
             supplier_id: data.supplierId,
-            warehouse_branch_id: data.warehouseBranchId,
+            warehouse_branch_id: finalBranchId,
             quantity: item.quantity,
             cost_price: item.costPrice,
             sale_price: item.salePrice,
@@ -44,7 +52,7 @@ export class PurchaseService {
 
         // Update Stock
         let stock = await tx.stock.findUnique({
-          where: { product_id_branch_id: { product_id: item.productId, branch_id: data.warehouseBranchId } },
+          where: { product_id_branch_id: { product_id: item.productId, branch_id: finalBranchId } },
         });
 
         const qty = item.quantity;
@@ -53,14 +61,14 @@ export class PurchaseService {
 
         if (stock) {
           await tx.stock.update({
-            where: { product_id_branch_id: { product_id: item.productId, branch_id: data.warehouseBranchId } },
+            where: { product_id_branch_id: { product_id: item.productId, branch_id: finalBranchId } },
             data: { current_quantity: newQty },
           });
         } else {
           await tx.stock.create({
             data: {
               product_id: item.productId,
-              branch_id: data.warehouseBranchId,
+              branch_id: finalBranchId,
               current_quantity: qty,
             },
           });
@@ -70,7 +78,7 @@ export class PurchaseService {
         await tx.stockMovement.create({
           data: {
             product_id: item.productId,
-            branch_id: data.warehouseBranchId,
+            branch_id: finalBranchId,
             movement_type: "PURCHASE",
             reference_id: purchase.id,
             reference_type: "purchase",

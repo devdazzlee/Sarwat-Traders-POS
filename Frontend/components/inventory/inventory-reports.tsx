@@ -13,8 +13,7 @@ import {
   Filter, 
   TrendingUp, 
   Package, 
-  AlertTriangle, 
-  ArrowRightLeft, 
+  AlertTriangle,
   Calendar,
   History,
   Clock,
@@ -32,7 +31,6 @@ import { Badge } from "@/components/ui/badge";
 const REPORT_TYPES = [
   { value: "valuation", label: "Stock Valuation", icon: Box, desc: "Current inventory worth and quantities across locations." },
   { value: "purchase", label: "purchase History", icon: Truck, desc: "Log of all incoming stock and purchase orders." },
-  { value: "transfer", label: "Inter-Branch Logistics", icon: ArrowRightLeft, desc: "Stock movement between branches and warehouses." },
   { value: "stockout", label: "Outflow Analytics", icon: TrendingUp, desc: "Sales, damages, and losses tracking." },
   { value: "lowstock", label: "Critical Alerts", icon: AlertTriangle, desc: "Items below minimum threshold levels." },
   { value: "aging", label: "Stock Aging", icon: Clock, desc: "Identify slow-moving and dead stock items." },
@@ -43,23 +41,18 @@ export function InventoryReports() {
   const { toast } = useToast();
   const [reportType, setReportType] = useState("valuation");
   const [data, setData] = useState<any>(null);
-  const [branches, setBranches] = useState<any[]>([]);
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [filters, setFilters] = useState({
-    branchId: "",
     supplierId: "",
     startDate: "",
     endDate: "",
   });
-  const [userRole, setUserRole] = useState<string | null>(null);
-  const [userBranchId, setUserBranchId] = useState<string | null>(null);
 
   const fetchReport = useCallback(async () => {
     setLoading(true);
     try {
       const params: any = { type: reportType };
-      if (filters.branchId) params.branchId = filters.branchId;
       if (filters.supplierId) params.supplierId = filters.supplierId;
       if (filters.startDate) params.startDate = filters.startDate;
       if (filters.endDate) params.endDate = filters.endDate;
@@ -78,11 +71,7 @@ export function InventoryReports() {
 
   const fetchMeta = useCallback(async () => {
     try {
-      const [bRes, sRes] = await Promise.all([
-        apiClient.get("/branches", { params: { fetch_all: true } }),
-        apiClient.get("/suppliers"),
-      ]);
-      setBranches(bRes.data?.data || bRes.data || []);
+      const sRes = await apiClient.get("/suppliers");
       setSuppliers(sRes.data?.data || []);
     } catch (e: any) {
       console.error(e);
@@ -90,22 +79,6 @@ export function InventoryReports() {
   }, []);
 
   useEffect(() => {
-    const role = localStorage.getItem("role");
-    setUserRole(role);
-    const b = localStorage.getItem("branch");
-    if (b && b !== "Not Found") {
-      let bId = "";
-      try {
-        const obj = JSON.parse(b);
-        bId = obj.id || b;
-      } catch {
-        bId = b;
-      }
-      setUserBranchId(bId);
-      if (role === "BRANCH_MANAGER") {
-        setFilters(prev => ({ ...prev, branchId: bId }));
-      }
-    }
     fetchMeta();
   }, [fetchMeta]);
 
@@ -120,11 +93,10 @@ export function InventoryReports() {
     const ts = new Date().toISOString().split('T')[0];
 
     if (reportType === "valuation" && data.byLocation) {
-      headers = ["Product", "SKU", "Branch", "Qty", "Value"];
-      Object.entries(data.byLocation).forEach(([bid, loc]: [string, any]) => {
-        const branchName = branches.find(b => b.id === bid)?.name || bid;
+      headers = ["Product", "SKU", "Qty", "Value"];
+      Object.entries(data.byLocation).forEach(([, loc]: [string, any]) => {
         (loc.items || []).forEach((item: any) => {
-          rows.push([item.product?.name, item.product?.sku, branchName, item.quantity, item.value]);
+          rows.push([item.product?.name, item.product?.sku, item.quantity, item.value]);
         });
       });
     } else if (data.data) {
@@ -132,9 +104,6 @@ export function InventoryReports() {
       if (reportType === "purchase") {
         headers = ["Date", "Product", "Supplier", "Qty", "Cost", "Warehouse"];
         rows = list.map((d: any) => [new Date(d.purchase_date).toLocaleDateString(), d.product?.name, d.supplier?.name, d.quantity, d.cost_price, d.warehouse_branch?.name]);
-      } else if (reportType === "transfer") {
-        headers = ["Date", "Product", "From", "To", "Qty", "Status"];
-        rows = list.map((d: any) => [new Date(d.transfer_date).toLocaleDateString(), d.product?.name, d.from_branch?.name, d.to_branch?.name, d.quantity, d.status]);
       } else if (reportType === "stockout") {
         headers = ["Date", "Product", "Branch", "Qty", "Type"];
         rows = list.map((d: any) => [new Date(d.created_at).toLocaleDateString(), d.product?.name, d.branch?.name, d.quantity_change, d.movement_type]);
@@ -230,22 +199,6 @@ export function InventoryReports() {
           </div>
 
           <div className="flex flex-wrap items-end gap-3 pt-4 border-t border-slate-100">
-            <div className="space-y-1.5 flex-1 min-w-[160px]">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider ml-1">Location</label>
-              <Select
-                value={filters.branchId || "all"}
-                onValueChange={(v) => setFilters({ ...filters, branchId: v === "all" ? "" : v })}
-              >
-                <SelectTrigger className="h-9 border-slate-200 bg-slate-50/50 font-semibold text-xs">
-                  <SelectValue placeholder="All Branches" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Branches</SelectItem>
-                  {branches.map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-
             <div className="space-y-1.5 flex-1 min-w-[120px]">
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider ml-1">From Date</label>
               <Input
@@ -350,7 +303,7 @@ export function InventoryReports() {
              ) : reportType === "valuation" && data?.byLocation ? (
                 <div className="divide-y divide-slate-100">
                   {Object.entries(data.byLocation).map(([bid, loc]: [string, any]) => {
-                    const branchName = branches.find(b => b.id === bid)?.name || "Main Site";
+                    const branchName = (loc as any).branchName || "Main Site";
                     return (
                       <div key={bid} className="p-8">
                         <div className="flex items-center justify-between mb-4">

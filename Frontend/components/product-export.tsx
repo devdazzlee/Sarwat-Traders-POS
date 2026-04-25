@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Download, Loader2 } from "lucide-react"
+import { PageLoader } from "@/components/ui/page-loader"
 import apiClient from "@/lib/apiClient"
 import { API_ENDPOINTS } from "@/config/constants"
 import { useToast } from "@/hooks/use-toast"
@@ -77,6 +78,7 @@ const EXPORT_COLUMNS = [
 export function ProductExport() {
   const { toast } = useToast()
   const [isExporting, setIsExporting] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
   const [categories, setCategories] = useState<DropdownOption[]>([])
   const [subcategories, setSubcategories] = useState<DropdownOption[]>([])
   const [suppliers, setSuppliers] = useState<DropdownOption[]>([])
@@ -116,7 +118,7 @@ export function ProductExport() {
       }
     }
 
-    loadFiltersData()
+    loadFiltersData().finally(() => setIsLoading(false))
   }, [toast])
 
   const clearFilters = () => {
@@ -194,6 +196,10 @@ export function ProductExport() {
     } finally {
       setIsExporting(false)
     }
+  }
+
+  if (isLoading) {
+    return <PageLoader message="Preparing export filters..." />
   }
 
   return (

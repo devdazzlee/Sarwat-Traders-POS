@@ -9,12 +9,20 @@ type StockOutReason = (typeof STOCK_OUT_TYPES)[number];
 export class StockOutService {
   async logStockOut(data: {
     productId: string;
-    branchId: string;
+    branchId?: string;
     quantity: number;
     reason: StockOutReason;
     notes?: string;
     createdBy: string;
   }) {
+    // RESOLVE BRANCH ID
+    let finalBranchId = data.branchId;
+    if (!finalBranchId) {
+      const firstBranch = await prisma.branch.findFirst({ where: { is_active: true } });
+      if (!firstBranch) throw new AppError(404, 'No active branch found in system');
+      finalBranchId = firstBranch.id;
+    }
+
     if (data.quantity <= 0) {
       throw new AppError(400, 'Quantity must be greater than 0');
     }
@@ -27,7 +35,7 @@ export class StockOutService {
         where: {
           product_id_branch_id: {
             product_id: data.productId,
-            branch_id: data.branchId,
+            branch_id: finalBranchId,
           },
         },
       });
@@ -45,7 +53,7 @@ export class StockOutService {
         where: {
           product_id_branch_id: {
             product_id: data.productId,
-            branch_id: data.branchId,
+            branch_id: finalBranchId,
           },
         },
         data: { current_quantity: newQty },
@@ -54,7 +62,7 @@ export class StockOutService {
       await tx.stockMovement.create({
         data: {
           product_id: data.productId,
-          branch_id: data.branchId,
+          branch_id: finalBranchId,
           movement_type: data.reason,
           quantity_change: -data.quantity,
           previous_qty: stock.current_quantity,
@@ -70,11 +78,19 @@ export class StockOutService {
 
   async logReturn(data: {
     productId: string;
-    branchId: string;
+    branchId?: string;
     quantity: number;
     notes?: string;
     createdBy: string;
   }) {
+    // RESOLVE BRANCH ID
+    let finalBranchId = data.branchId;
+    if (!finalBranchId) {
+      const firstBranch = await prisma.branch.findFirst({ where: { is_active: true } });
+      if (!firstBranch) throw new AppError(404, 'No active branch found in system');
+      finalBranchId = firstBranch.id;
+    }
+
     if (data.quantity <= 0) {
       throw new AppError(400, 'Quantity must be greater than 0');
     }
@@ -84,7 +100,7 @@ export class StockOutService {
         where: {
           product_id_branch_id: {
             product_id: data.productId,
-            branch_id: data.branchId,
+            branch_id: finalBranchId,
           },
         },
       });
@@ -99,7 +115,7 @@ export class StockOutService {
           where: {
             product_id_branch_id: {
               product_id: data.productId,
-              branch_id: data.branchId,
+              branch_id: finalBranchId,
             },
           },
           data: { current_quantity: newQty },
@@ -108,7 +124,7 @@ export class StockOutService {
         await tx.stock.create({
           data: {
             product_id: data.productId,
-            branch_id: data.branchId,
+            branch_id: finalBranchId,
             current_quantity: data.quantity,
           },
         });
@@ -117,7 +133,7 @@ export class StockOutService {
       await tx.stockMovement.create({
         data: {
           product_id: data.productId,
-          branch_id: data.branchId,
+          branch_id: finalBranchId,
           movement_type: 'RETURN',
           quantity_change: data.quantity,
           previous_qty: previousQty,
@@ -131,7 +147,7 @@ export class StockOutService {
     });
   }
   async createBulkStockOut(data: {
-    branchId: string;
+    branchId?: string;
     reason: StockOutReason;
     notes?: string;
     createdBy: string;
@@ -142,6 +158,14 @@ export class StockOutService {
       notes?: string;
     }>;
   }) {
+    // RESOLVE BRANCH ID
+    let finalBranchId = data.branchId;
+    if (!finalBranchId) {
+      const firstBranch = await prisma.branch.findFirst({ where: { is_active: true } });
+      if (!firstBranch) throw new AppError(404, 'No active branch found in system');
+      finalBranchId = firstBranch.id;
+    }
+
     if (data.items.length === 0) {
       throw new AppError(400, 'At least one item is required');
     }
@@ -154,22 +178,24 @@ export class StockOutService {
           throw new AppError(400, `Invalid quantity for product ${item.productId}`);
         }
 
-        // 1. Get current stock
-        const stock = await tx.stock.findUnique({
+        // 1. Get or create stock record
+        const stock = await tx.stock.upsert({
           where: {
             product_id_branch_id: {
               product_id: item.productId,
-              branch_id: data.branchId,
+              branch_id: finalBranchId!,
             },
           },
+          create: {
+            product_id: item.productId,
+            branch_id: finalBranchId!,
+            current_quantity: 0,
+          },
+          update: {},
         });
 
-        if (!stock) {
-          throw new AppError(404, `Stock record not found for product ${item.productId} in this branch`);
-        }
-
         const currentQty = asNumber(stock.current_quantity);
-        if (currentQty < item.quantity) {
+        if (data.reason === 'SALE' && currentQty < item.quantity) {
           throw new AppError(400, `Insufficient stock for product ${item.productId}. Available: ${currentQty}`);
         }
 
@@ -180,7 +206,7 @@ export class StockOutService {
           where: {
             product_id_branch_id: {
               product_id: item.productId,
-              branch_id: data.branchId,
+              branch_id: finalBranchId!,
             },
           },
           data: { current_quantity: newQty },
@@ -190,7 +216,7 @@ export class StockOutService {
         await tx.stockMovement.create({
           data: {
             product_id: item.productId,
-            branch_id: data.branchId,
+            branch_id: finalBranchId,
             movement_type: data.reason,
             quantity_change: -item.quantity,
             previous_qty: stock.current_quantity,

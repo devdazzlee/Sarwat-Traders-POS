@@ -28,14 +28,12 @@ import { MultiLocation } from "@/components/multi-location";
 import { Reservations } from "@/components/reservations";
 import { LayawayHolds } from "@/components/layaway-holds";
 import { Pricing } from "@/components/pricing";
-import { Branches } from "./branches";
 import Inventory from "./inventory";
 import { Stocks } from "./Stocks";
 import { StockManagement } from "./StockManagement";
 import {
   InventoryDashboard,
   Purchases,
-  Transfers,
   StockOut,
   StockMovementLog,
   StockAdjustment,
@@ -112,8 +110,6 @@ export function Dashboard({ onLogout }: DashboardProps) {
         return <Categories />;
       case "sub-categories":
         return <Subcategories />;
-      case "branches":
-        return <Branches />;
       case "suppliers":
         return <Suppliers />;
       case "purchase-orders":
@@ -147,8 +143,6 @@ export function Dashboard({ onLogout }: DashboardProps) {
         return <InventoryDashboard onNavigate={setActiveTab} />;
       case "purchases":
         return <Purchases />;
-      case "transfers":
-        return <Transfers />;
       case "stock-out":
         return <StockOut />;
       case "stock-movement-log":

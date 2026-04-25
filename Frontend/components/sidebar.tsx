@@ -27,7 +27,6 @@ import {
   CreditCard,
   Clock,
   Shield,
-  ListOrdered,
   StoreIcon,
   Barcode,
   X,
@@ -119,7 +118,6 @@ const menuSections: SidebarMenuSection[] = [
         icon: History,
         roles: SALES_ROLES,
       },
-      { id: "orders", label: "Orders", icon: ListOrdered, roles: ADMIN_ROLES },
       {
         id: "returns",
         label: "Returns & Exchange",
@@ -170,12 +168,6 @@ const menuSections: SidebarMenuSection[] = [
         roles: PURCHASE_ROLES,
       },
       {
-        id: "transfers",
-        label: "Transfers",
-        icon: Truck,
-        roles: TRANSFER_ROLES,
-      },
-      {
         id: "stock-out",
         label: "Stock Out",
         icon: Package,
@@ -216,12 +208,6 @@ const menuSections: SidebarMenuSection[] = [
         label: "Sub-Categories",
         icon: Grid3X3,
         roles: ADMIN_ROLES,
-      },
-      {
-        id: "branches",
-        label: "Branches",
-        icon: Grid3X3,
-        roles: BRANCH_DATA_ROLES,
       },
       { id: "units", label: "Units", icon: Package, roles: ADMIN_ROLES },
       { id: "brand", label: "Brands", icon: StoreIcon, roles: ADMIN_ROLES },

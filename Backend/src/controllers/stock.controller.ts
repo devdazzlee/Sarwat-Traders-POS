@@ -37,8 +37,9 @@ const getStocksController = asyncHandler(async (req: Request, res: Response) => 
 
 const getStockMovementsController = asyncHandler(async (req: Request, res: Response) => {
     const branchId = req.query.branchId as string;
+    const productId = req.query.productId as string;
     const userRole = req.user?.role as string | undefined;
-    const movements = await stockService.getStockMovements(branchId || "", userRole);
+    const movements = await stockService.getStockMovements(branchId || "", userRole, productId);
     new ApiResponse(movements, "Stock movement history retrieved").send(res);
 });
 

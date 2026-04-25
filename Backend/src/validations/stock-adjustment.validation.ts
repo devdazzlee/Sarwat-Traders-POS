@@ -3,7 +3,7 @@ import { z } from 'zod';
 export const createAdjustmentSchema = z.object({
   body: z.object({
     productId: z.string().min(1, 'Product is required'),
-    branchId: z.string().min(1, 'Branch is required'),
+    branchId: z.string().optional(),
     systemQuantity: z.number(),
     adjustmentType: z.enum(['ADDITION', 'SUBTRACTION', 'RECONCILIATION']),
     adjustmentCategory: z.enum(['CORRECTION', 'DAMAGE', 'EXPIRED', 'THEFT', 'RETURN_TO_SUPPLIER', 'ADMINISTRATIVE']),

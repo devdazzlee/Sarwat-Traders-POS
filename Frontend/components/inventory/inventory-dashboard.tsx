@@ -27,6 +27,7 @@ import {
   Gauge,
   Zap,
 } from "lucide-react";
+import { PageLoader } from "@/components/ui/page-loader";
 import {
   PieChart,
   Pie,
@@ -65,31 +66,19 @@ interface DashboardStats {
 
 const COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6"];
 
-function PageLoader() {
-  return (
-    <div className="min-h-[70vh] flex flex-col items-center justify-center p-8">
-      <RefreshCw className="h-8 w-8 text-blue-600 animate-spin mb-4" />
-      <p className="text-gray-500 text-sm">Loading inventory data...</p>
-    </div>
-  );
-}
 
 export function InventoryDashboard({ onNavigate }: { onNavigate?: (tab: string) => void | any }) {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [switchingBranch, setSwitchingBranch] = useState(false);
-  const [branches, setBranches] = useState<any[]>([]);
-  const [selectedBranchId, setSelectedBranchId] = useState<string>("");
   const [userRole, setUserRole] = useState<string | null>(null);
   const { toast } = useToast();
 
-  const fetchStats = async (bid?: string, isInternal = false) => {
+  const fetchStats = async (isInternal = false) => {
     if (isInternal) setSwitchingBranch(true);
     else setLoading(true);
     try {
-      const res = await apiClient.get(`${API_BASE}/inventory/dashboard`, {
-        params: bid ? { branchId: bid } : {},
-      });
+      const res = await apiClient.get(`${API_BASE}/inventory/dashboard`);
       setStats(res.data?.data || null);
     } catch (e: any) {
       toast({
@@ -103,36 +92,10 @@ export function InventoryDashboard({ onNavigate }: { onNavigate?: (tab: string) 
     }
   };
 
-  const fetchBranches = async () => {
-    try {
-      const res = await apiClient.get(`${API_BASE}/branches`, { params: { fetch_all: true } });
-      setBranches(res.data?.data || res.data || []);
-    } catch (e) {
-      console.error("Failed to load branches", e);
-    }
-  };
-
   useEffect(() => {
     const role = localStorage.getItem("role");
     setUserRole(role);
-    const b = localStorage.getItem("branch");
-    let initialBranchId = "";
-    if (b && b !== "Not Found") {
-      try {
-        const obj = JSON.parse(b);
-        initialBranchId = obj.id || b;
-      } catch {
-        initialBranchId = b;
-      }
-    }
-    if (role === "BRANCH_MANAGER" && initialBranchId) {
-      setSelectedBranchId(initialBranchId);
-      fetchStats(initialBranchId);
-    } else {
-      setSelectedBranchId("");
-      fetchStats();
-    }
-    fetchBranches();
+    fetchStats();
   }, []);
 
   const formatCurrency = (n: number) =>
@@ -160,31 +123,10 @@ export function InventoryDashboard({ onNavigate }: { onNavigate?: (tab: string) 
         </div>
 
         <div className="flex items-center gap-2">
-          {(userRole === "SUPER_ADMIN" || userRole === "ADMIN" || userRole === "WAREHOUSE_MANAGER" || userRole === "PURCHASE_MANAGER") && (
-            <Select
-              value={selectedBranchId || "all"}
-              onValueChange={(v) => {
-                const bid = v === "all" ? "" : v;
-                setSelectedBranchId(bid);
-                fetchStats(bid, true);
-              }}
-            >
-              <SelectTrigger className="w-[180px] h-9 text-sm">
-                <MapPin className="h-3.5 w-3.5 mr-2 text-gray-400" />
-                <SelectValue placeholder="All Branches" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Branches</SelectItem>
-                {branches.map((b) => (
-                  <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
           <Button
             variant="outline"
             size="sm"
-            onClick={() => fetchStats(selectedBranchId, true)}
+            onClick={() => fetchStats(true)}
           >
             <RefreshCw className={`h-4 w-4 mr-2 ${switchingBranch ? "animate-spin" : ""}`} />
             Refresh
@@ -290,27 +232,6 @@ export function InventoryDashboard({ onNavigate }: { onNavigate?: (tab: string) 
               </CardContent>
             </Card>
 
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-sm font-semibold text-gray-900">Stock by Location</CardTitle>
-              </CardHeader>
-              <CardContent className="p-0">
-                <div className="divide-y max-h-[240px] overflow-y-auto">
-                  {stats?.branchSummary.map((b, i) => (
-                    <div key={b.branchId} className="px-4 py-3 flex items-center justify-between hover:bg-gray-50">
-                      <div className="flex items-center gap-3">
-                        <span className="h-6 w-6 rounded-full bg-gray-100 flex items-center justify-center text-xs font-medium text-gray-500">{i + 1}</span>
-                        <div>
-                          <p className="text-sm font-medium text-gray-800">{b.name}</p>
-                          <p className="text-xs text-gray-400">{totalValue > 0 ? (b.value / totalValue * 100).toFixed(1) : 0}% of total</p>
-                        </div>
-                      </div>
-                      <p className="text-sm font-semibold text-gray-900">{formatCurrency(b.value)}</p>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
           </div>
         </div>
 

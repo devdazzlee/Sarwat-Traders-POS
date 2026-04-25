@@ -23,6 +23,7 @@ interface HoldSaleRecord {
   totalItems: number;
   customerName: string;
   customerPhone: string;
+  customerId: string | null;
   createdAt: string;
 }
 
@@ -52,6 +53,7 @@ export function useHoldSales() {
     totalItems: Number(holdSale.total_items || 0),
     customerName: holdSale.customer?.name || "Walk-in",
     customerPhone: holdSale.customer?.phone_number || holdSale.customer?.mobile_number || "",
+    customerId: holdSale.customer?.id || holdSale.customerId || null,
     createdAt: holdSale.created_at || new Date().toISOString(),
   });
 
@@ -96,7 +98,7 @@ export function useHoldSales() {
     }
   }, [refreshHoldSales]);
 
-  const retrieveHoldSale = useCallback(async (index: number): Promise<CartItem[] | null> => {
+  const retrieveHoldSale = useCallback(async (index: number): Promise<HoldSaleRecord | null> => {
     if (index < 0 || index >= holdSales.length) return null;
     const holdSaleRecord = holdSales[index];
 
@@ -104,7 +106,7 @@ export function useHoldSales() {
       const response = await apiClient.post(`/sale/hold/${holdSaleRecord.id}/retrieve`, {});
       const retrieved = response?.data?.data ? mapHoldSale(response.data.data) : null;
       setHoldSales((prev) => prev.filter((item) => item.id !== holdSaleRecord.id));
-      return retrieved?.items || null;
+      return retrieved;
     } catch (error) {
       console.error("Failed to retrieve hold sale from DB:", error);
       return null;

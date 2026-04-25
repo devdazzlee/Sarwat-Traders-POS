@@ -3,7 +3,7 @@ import { z } from 'zod';
 export const createPurchaseSchema = z.object({
   body: z.object({
     supplierId: z.string().min(1, 'Supplier is required'),
-    warehouseBranchId: z.string().min(1, 'Warehouse branch is required'),
+    warehouseBranchId: z.string().optional(),
     purchaseDate: z.union([z.string(), z.date()]).optional(),
     invoiceRef: z.string().optional(),
     notes: z.string().optional(),

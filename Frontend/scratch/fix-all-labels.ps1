@@ -1,4 +1,4 @@
-# Fix all inventory + customer pages — replace confusing jargon with plain POS language
+r\# Fix all inventory + customer pages — replace confusing jargon with plain POS language
 $files = @(
     "components\inventory\purchases.tsx",
     "components\inventory\transfers.tsx",

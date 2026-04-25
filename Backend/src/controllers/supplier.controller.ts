@@ -26,12 +26,13 @@ export const toggleSupplierStatus = asyncHandler(async (req: Request, res: Respo
 });
 
 export const listSuppliers = asyncHandler(async (req: Request, res: Response) => {
-    const { page = 1, limit = 10, search } = req.query;
+    const { page = 1, limit = 100, search, is_active } = req.query;
 
     const result = await supplierService.listSuppliers({
         page: Number(page),
         limit: Number(limit),
         search: search as string | undefined,
+        is_active: is_active !== undefined ? is_active === 'true' : undefined,
     });
 
     new ApiResponse(result.data, 'Suppliers retrieved successfully', 200).send(res);

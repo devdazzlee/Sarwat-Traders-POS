@@ -147,7 +147,7 @@ class CustomerLedgerService {
     };
 
     const skip = (page - 1) * limit;
-    const [total, entries] = await Promise.all([
+    const [total, rawEntries, allEntries] = await Promise.all([
       prisma.customerLedger.count({ where }),
       prisma.customerLedger.findMany({
         where,
@@ -155,11 +155,58 @@ class CustomerLedgerService {
         skip,
         take: limit,
       }),
+      prisma.customerLedger.findMany({
+        where: { customer_id: customerId },
+        select: { entry_type: true, amount: true },
+      }),
     ]);
+
+    // Compute summary from all entries (not just this page)
+    let totalSales = 0;
+    let totalPayments = 0;
+    for (const e of allEntries) {
+      const amt = Number(e.amount);
+      if (e.entry_type === 'CREDIT_SALE') totalSales += amt;
+      else if (e.entry_type === 'PAYMENT_RECEIVED') totalPayments += amt;
+    }
+
+    // Fetch sale numbers for entries that have sale_id
+    const saleIds = rawEntries.map((e) => e.sale_id).filter(Boolean) as string[];
+    const salesMap: Record<string, { sale_number: string; payment_method: string }> = {};
+    if (saleIds.length > 0) {
+      const sales = await prisma.sale.findMany({
+        where: { id: { in: saleIds } },
+        select: { id: true, sale_number: true, payment_method: true },
+      });
+      for (const s of sales) {
+        salesMap[s.id] = { sale_number: s.sale_number, payment_method: s.payment_method };
+      }
+    }
+
+    // Map entries to a frontend-friendly shape
+    const entries = rawEntries.map((e) => {
+      const saleInfo = e.sale_id ? salesMap[e.sale_id] : null;
+      return {
+        id: e.id,
+        date: e.created_at.toISOString(),
+        type: e.entry_type,
+        description: e.description ?? '',
+        reference_no: e.reference_no ?? saleInfo?.sale_number ?? null,
+        debit: e.entry_type === 'CREDIT_SALE' ? Number(e.amount) : 0,
+        credit: e.entry_type === 'PAYMENT_RECEIVED' ? Number(e.amount) : 0,
+        balance: Number(e.balance_after),
+        payment_method: saleInfo?.payment_method ?? null,
+      };
+    });
 
     return {
       customer,
       entries,
+      summary: {
+        totalSales,
+        totalPayments,
+        currentBalance: Number(customer.outstanding_balance),
+      },
       meta: {
         total,
         page,

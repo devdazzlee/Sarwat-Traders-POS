@@ -6,7 +6,7 @@ import { StockAdjustmentType, StockAdjustmentCategory } from '@prisma/client';
 export class StockAdjustmentService {
   async createAdjustment(data: {
     productId: string;
-    branchId: string;
+    branchId?: string;
     systemQuantity: number;
     adjustmentType: StockAdjustmentType;
     adjustmentCategory: StockAdjustmentCategory;
@@ -16,6 +16,30 @@ export class StockAdjustmentService {
     referenceNo?: string;
     adjustedBy: string;
   }) {
+    // RESOLVE BRANCH ID
+    let finalBranchId = data.branchId;
+    if (!finalBranchId) {
+      const firstBranch = await prisma.branch.findFirst({ where: { is_active: true } });
+      if (!firstBranch) throw new AppError(404, 'No active branch found in system');
+      finalBranchId = firstBranch.id;
+    }
+
+    // DEBUG: LOG IDs
+    console.log(`[StockAdjustment] Resolving IDs - Product: ${data.productId}, Branch: ${finalBranchId}`);
+
+    // VERIFY PRODUCT & BRANCH EXISTENCE
+    const [productExists, branchExists] = await Promise.all([
+      prisma.product.findUnique({ where: { id: data.productId } }),
+      prisma.branch.findUnique({ where: { id: finalBranchId } })
+    ]);
+
+    if (!productExists) {
+      throw new AppError(404, `Product not found with ID: ${data.productId}`);
+    }
+    if (!branchExists) {
+      throw new AppError(404, `Branch not found with ID: ${finalBranchId}`);
+    }
+
     let difference = 0;
     let newQty = data.systemQuantity;
 
@@ -45,7 +69,7 @@ export class StockAdjustmentService {
         where: {
           product_id_branch_id: {
             product_id: data.productId,
-            branch_id: data.branchId,
+            branch_id: finalBranchId,
           },
         },
       });
@@ -57,7 +81,7 @@ export class StockAdjustmentService {
           where: {
             product_id_branch_id: {
               product_id: data.productId,
-              branch_id: data.branchId,
+              branch_id: finalBranchId,
             },
           },
           data: { current_quantity: newQty },
@@ -69,7 +93,7 @@ export class StockAdjustmentService {
         await tx.stock.create({
           data: {
             product_id: data.productId,
-            branch_id: data.branchId,
+            branch_id: finalBranchId,
             current_quantity: newQty,
           },
         });
@@ -78,7 +102,7 @@ export class StockAdjustmentService {
       await tx.stockMovement.create({
         data: {
           product_id: data.productId,
-          branch_id: data.branchId,
+          branch_id: finalBranchId,
           movement_type: 'ADJUSTMENT',
           reference_type: 'adjustment',
           quantity_change: difference,
@@ -92,7 +116,7 @@ export class StockAdjustmentService {
       const adjustment = await tx.stockAdjustment.create({
         data: {
           product_id: data.productId,
-          branch_id: data.branchId,
+          branch_id: finalBranchId,
           system_quantity: data.systemQuantity,
           physical_count: data.physicalCount,
           change_quantity: data.changeQuantity,

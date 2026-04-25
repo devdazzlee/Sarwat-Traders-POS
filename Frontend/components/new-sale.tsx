@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo, startTransition } from "react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { LoadingButton } from "@/components/ui/loading-button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
@@ -41,6 +42,7 @@ import {
   FileText,
   Share2,
   CheckCircle2,
+  Users,
 } from "lucide-react";
 import { downloadA4Invoice, shareOnWhatsApp, type InvoiceData } from "@/lib/pdf-generator";
 import apiClient from "@/lib/apiClient";
@@ -58,6 +60,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Check, ChevronsUpDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useHoldSales } from "@/hooks/use-hold-sales";
 
@@ -113,6 +129,7 @@ export function NewSale() {
   const [paymentMethodPending, setPaymentMethodPending] = useState<"Cash" | "Credit" | null>(null);
   const [tenderedAmount, setTenderedAmount] = useState("");
   const [calculatedChange, setCalculatedChange] = useState(0);
+  const [calculatedCredit, setCalculatedCredit] = useState(0);
   const [paymentError, setPaymentError] = useState("");
   const { holdSales, holdSale, retrieveHoldSale, deleteHoldSale, holdSalesLoading, refreshHoldSales } =
     useHoldSales();
@@ -124,6 +141,7 @@ export function NewSale() {
   // Refs for cart items and scrollable container
   const cartItemRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const cartScrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const [customerSearchOpen, setCustomerSearchOpen] = useState(false);
   // Ref to track scan timeout for rapid scanning
   const scanTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   // Ref to prevent duplicate processing of the same scan
@@ -798,12 +816,17 @@ export function NewSale() {
     const heldSale = await retrieveHoldSale(index);
     if (heldSale) {
       setCart(
-        heldSale.map((item) => ({
+        heldSale.items.map((item) => ({
           ...item,
           originalPrice: Number(item.originalPrice ?? item.price ?? 0),
           actualUnitPrice: Number(item.actualUnitPrice ?? item.price ?? 0),
         }))
       );
+      if (heldSale.customerId) {
+        setSelectedCustomer(heldSale.customerId);
+      } else {
+        setSelectedCustomer(null);
+      }
     }
     setResumingHoldIndex(null);
   };
@@ -878,14 +901,17 @@ export function NewSale() {
       return;
     }
 
-    const numericValue = parseFloat(tenderedAmount);
-    if (Number.isNaN(numericValue)) {
-      setCalculatedChange(0);
-      return;
-    }
+    const parsed = parseFloat(tenderedAmount);
+    const numericValue = Number.isNaN(parsed) ? 0 : parsed;
 
-    setCalculatedChange(Math.max(0, numericValue - total));
-  }, [paymentDialogOpen, tenderedAmount, total]);
+    if (paymentMethodPending === "Credit") {
+      setCalculatedChange(Math.max(0, numericValue - total));
+      setCalculatedCredit(Math.max(0, total - numericValue));
+    } else {
+      setCalculatedChange(Number.isNaN(parsed) ? 0 : Math.max(0, numericValue - total));
+      setCalculatedCredit(0);
+    }
+  }, [paymentDialogOpen, tenderedAmount, total, paymentMethodPending]);
 
   const generateTransactionId = () => {
     return `TXN${Date.now().toString().slice(-6)}`;
@@ -920,6 +946,7 @@ export function NewSale() {
     setPaymentMethodPending(null);
     setTenderedAmount("");
     setCalculatedChange(0);
+    setCalculatedCredit(0);
     setPaymentError("");
   };
 
@@ -933,9 +960,10 @@ export function NewSale() {
 
   const startPayment = (method: "Cash" | "Credit") => {
     setPaymentMethodPending(method);
-    setTenderedAmount(total.toFixed(2));
+    setTenderedAmount(method === "Credit" ? "0" : total.toFixed(2));
     setPaymentError("");
     setCalculatedChange(0);
+    setCalculatedCredit(method === "Credit" ? total : 0);
     setPaymentDialogOpen(true);
   };
 
@@ -951,13 +979,10 @@ export function NewSale() {
       return;
     }
 
-    const amountNumber = parseFloat(tenderedAmount);
-    if (Number.isNaN(amountNumber)) {
-      setPaymentError("Enter a valid amount received.");
-      return;
-    }
+    const parsed = parseFloat(tenderedAmount);
+    const amountNumber = Number.isNaN(parsed) ? 0 : parsed;
 
-    if (amountNumber < total) {
+    if (paymentMethodPending !== "Credit" && amountNumber < total) {
       setPaymentError("Received amount cannot be less than the payable total.");
       return;
     }
@@ -968,7 +993,15 @@ export function NewSale() {
     const result = await handlePayment(paymentMethodPending, amountNumber, change);
     if (result) {
       resetPaymentState();
+      // Clear cart AFTER dialog closes so the total doesn't flicker to 0 while processing
+      setCart([]);
+      setGlobalDiscountValue("");
+      setSelectedCustomer(null);
       setCheckoutSuccessData(result);
+      // Auto-download A4 Invoice instead of thermal print
+      if (result) {
+        downloadA4Invoice(result);
+      }
     }
   };
 
@@ -1005,6 +1038,9 @@ export function NewSale() {
         };
         if (selectedCustomer) {
           payload.customerId = selectedCustomer;
+        }
+        if (method === "Credit") {
+          payload.paidAmount = amountPaid;
         }
 
         // Check if online
@@ -1106,85 +1142,10 @@ export function NewSale() {
         localStorage.setItem("transactions", JSON.stringify(transactions));
 
         setLastTransactionId(transactionId);
-        setCart([]);
-        setGlobalDiscountValue("");
 
         let receiptDataForServer: any = null;
-
-        // Auto-print receipt
-        try {
-          // Get branch name from localStorage (correct source)
-          const storedBranchName = localStorage.getItem("branchName");
-          
-          console.log("🏢 Current Branch:", storedBranchName);
-          
-          // Use DB branch address when available instead of hardcoded city text
-          const fullAddress = "Karachi, Pakistan";
-         
-          console.log("fullAddress", fullAddress);
-          receiptDataForServer = {
-            storeName: storedBranchName || "SARWAT TRADERS",
-            tagline: "Quality • Service • Value",
-            address: fullAddress,
-            transactionId: transactionId,
-            timestamp: new Date().toISOString(),
-            cashier: receiptData.cashier || "Walk-in",
-            customerType: selectedCustomer
-              ? customers.find((c) => c.id === selectedCustomer)?.name ||
-                "Walk-in"
-              : "Walk-in",
-            items: cartSnapshot.map((item) => {
-              const unitLabel =
-                (item as any)?.unit?.name ||
-                (item as any)?.unitName ||
-                (item as any)?.unit_name ||
-                (item as any)?.unit ||
-                undefined;
-              return {
-                name: item.name,
-                quantity: item.quantity,
-                price: getSellingPrice(item),
-                unit: unitLabel,
-              };
-            }),
-            subtotal: subtotal,
-            discount: globalDiscountAmount > 0 ? globalDiscountAmount : undefined,
-            total: total,
-            paymentMethod: method === "Cash" ? "CASH" : "CARD",
-            amountPaid,
-            changeAmount: changeAmount > 0 ? changeAmount : undefined,
-            thankYouMessage: "Thank you for shopping!",
-            footerMessage: "Visit us again soon!",
-          };
-
-          // Get printer from global settings (Printer Settings page)
-          const printerToUse = getReceiptPrinterObj();
-          if (!printerToUse) {
-            throw new Error("No receipt printer configured. Go to Printer Settings to select one.");
-          }
-
-          const printerObj = {
-            ...printerToUse,
-            columns: printerToUse.receiptProfile?.columns || { fontA: 48, fontB: 64 },
-          };
-
-          const job = {
-            copies: 1,
-            cut: true,
-            openDrawer: false,
-          };
-
-          // Print via print server
-          // Use same API format as backend: printer, receiptData, job
-          await printReceiptViaServer(
-            printerObj,
-            receiptDataForServer,
-            job
-          );
-        } catch (printError) {
-          console.error("Print error:", printError);
-          // Print failed - no toast shown
-        }
+        const storedBranchName = localStorage.getItem("branchName");
+        const fullAddress = "Karachi, Pakistan";
 
         const selectedCustomerObj = customers.find((c) => c.id === selectedCustomer);
 
@@ -1207,8 +1168,9 @@ export function NewSale() {
           subtotal: subtotal,
           discount: globalDiscountAmount,
           total: total,
-          paymentMethod: method === "Cash" ? "CASH" : "CREDIT",
-          balanceDue: method === "Credit" ? total : 0, // Simplified: Sale amount added to balance
+          paymentMethod: method === "Cash" ? "CASH" : method === "Credit" ? "CREDIT" : "CARD",
+          balanceDue: method === "Credit" ? Math.max(0, total - amountPaid) : 0,
+          amountPaid: method === "Credit" ? amountPaid : total,
         };
       } catch (error) {
         console.error("Payment error:", error);
@@ -1765,34 +1727,90 @@ export function NewSale() {
           )}
 
         {/* Customer Selection */}
-        <div className="mb-4 max-w-sm bg-white text-black rounded-lg border border-gray-200 shadow-sm p-3">
-          <label className="block text-sm font-semibold text-gray-800 mb-1">
-            Customer (optional for Cash, <span className="text-blue-600 font-bold">required for Credit</span>)
+        <div className="mb-4 bg-white text-black rounded-lg border border-gray-200 shadow-sm p-4">
+          <label className="block text-sm font-bold text-slate-800 mb-2">
+            Customer <span className="text-[10px] text-slate-400 font-medium ml-1">(Optional/Required for Credit)</span>
           </label>
           <div className="flex gap-2">
-            <Select
-              value={selectedCustomer || "none"}
-              onValueChange={(value) => setSelectedCustomer(value === "none" ? null : value)}
-            >
-              <SelectTrigger className="w-full font-medium">
-                <SelectValue placeholder="Walk-in Customer" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none" className="italic font-medium text-gray-500">Walk-in Customer</SelectItem>
-                {customers.map((customer: any) => (
-                  <SelectItem key={customer.id} value={customer.id} className="font-medium">
-                    {customer.name} {customer.phone_number ? `(${customer.phone_number})` : ''}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button variant="outline" size="icon" className="shrink-0" onClick={() => setIsAddCustomerOpen(true)}>
+            <Popover open={customerSearchOpen} onOpenChange={setCustomerSearchOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  role="combobox"
+                  aria-expanded={customerSearchOpen}
+                  className="w-full justify-between font-medium text-left bg-white border-gray-200 hover:bg-slate-50 overflow-hidden"
+                >
+                  <div className="flex items-center gap-2 truncate">
+                    <Users className="h-4 w-4 text-slate-400" />
+                    <span className="truncate">
+                      {selectedCustomer
+                        ? customers.find((c) => c.id === selectedCustomer)?.name
+                        : "Walk-in Customer"}
+                    </span>
+                  </div>
+                  <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-[300px] p-0" align="start">
+                <Command className="border-none shadow-none">
+                  <CommandInput placeholder="Search customer by name or phone..." className="h-10" />
+                  <CommandList className="max-h-[300px]">
+                    <CommandEmpty>No customer found.</CommandEmpty>
+                    <CommandGroup>
+                      <CommandItem
+                        value="none"
+                        onSelect={() => {
+                          setSelectedCustomer(null);
+                          setCustomerSearchOpen(false);
+                        }}
+                        className="flex items-center gap-2 py-2.5"
+                      >
+                        <Check
+                          className={cn(
+                            "h-4 w-4 text-blue-600",
+                            !selectedCustomer ? "opacity-100" : "opacity-0"
+                          )}
+                        />
+                        <span className="italic text-gray-500 font-medium">Walk-in Customer</span>
+                      </CommandItem>
+                      {customers.map((customer: any) => (
+                        <CommandItem
+                          key={customer.id}
+                          value={`${customer.name} ${customer.phone_number || ""}`}
+                          onSelect={() => {
+                            setSelectedCustomer(customer.id);
+                            setCustomerSearchOpen(false);
+                          }}
+                          className="flex items-center gap-2 py-2.5"
+                        >
+                          <Check
+                            className={cn(
+                              "h-4 w-4 text-blue-600",
+                              selectedCustomer === customer.id ? "opacity-100" : "opacity-0"
+                            )}
+                          />
+                          <div className="flex flex-col">
+                            <span className="font-semibold text-slate-900">{customer.name}</span>
+                            {customer.phone_number && (
+                              <span className="text-[10px] text-blue-600 font-medium tracking-tight">
+                                📞 {customer.phone_number}
+                              </span>
+                            )}
+                          </div>
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
+            <Button variant="outline" size="icon" className="shrink-0 border-gray-200 hover:bg-blue-50" onClick={() => setIsAddCustomerOpen(true)}>
               <Plus className="h-4 w-4" />
             </Button>
           </div>
           
           {selectedCustomer && (
-            <div className="mt-3 pt-3 border-t border-gray-100 flex flex-col gap-1">
+            <div className="mt-4 pt-3 border-t border-slate-100 flex flex-col gap-1.5">
               {(() => {
                 const customer = customers.find((c) => c.id === selectedCustomer);
                 if (!customer) return null;
@@ -1802,22 +1820,22 @@ export function NewSale() {
 
                 return (
                   <>
-                    <div className="flex justify-between items-center text-xs">
-                      <span className="text-gray-500 font-medium tracking-wide uppercase">Current Balance</span>
-                      <span className={`font-bold ${balance > 0 ? 'text-orange-600' : 'text-green-600'}`}>
+                    <div className="flex justify-between items-center">
+                      <span className="text-[11px] text-slate-400 font-bold uppercase tracking-wider">Current Due</span>
+                      <span className={`text-sm font-black ${balance > 0 ? 'text-red-600' : 'text-emerald-600'}`}>
                         Rs {balance.toLocaleString()}
                       </span>
                     </div>
                     {limit > 0 && (
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="text-gray-500 font-medium tracking-wide uppercase">Credit Limit</span>
-                        <span className="font-bold text-gray-700">Rs {limit.toLocaleString()}</span>
+                      <div className="flex justify-between items-center">
+                        <span className="text-[11px] text-slate-400 font-bold uppercase tracking-wider">Credit limit</span>
+                        <span className="text-sm font-bold text-slate-700">Rs {limit.toLocaleString()}</span>
                       </div>
                     )}
                     {isOverLimit && (
-                      <div className="mt-1 px-2 py-1.5 bg-red-50 text-red-700 text-[11px] rounded flex items-start gap-1.5 leading-snug font-medium">
-                        <span className="mt-0.5">⚠️</span> 
-                        <span>This sale exceeds the customer's credit limit. Authorized personnel limits apply.</span>
+                      <div className="mt-2 px-3 py-2 bg-rose-50 text-rose-700 text-[11px] rounded-xl border border-rose-100 flex items-start gap-2 leading-relaxed font-bold">
+                        <span className="mt-0.5 shrink-0">⚠️</span> 
+                        <span>Sale exceeds customer's credit limit.</span>
                       </div>
                     )}
                   </>
@@ -2545,28 +2563,44 @@ export function NewSale() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {paymentMethodPending ? `${paymentMethodPending} Payment` : "Payment"}
+              {paymentMethodPending === "Credit" ? "Credit Invoice" : paymentMethodPending ? `${paymentMethodPending} Payment` : "Payment"}
             </DialogTitle>
             <DialogDescription>
-              Enter the amount received to calculate the change due.
+              {paymentMethodPending === "Credit"
+                ? "Enter the amount paid by the customer. The remaining balance will be recorded as credit."
+                : "Enter the amount received to calculate the change due."}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="rounded-lg bg-slate-50 p-3 text-sm">
+            <div className="rounded-lg bg-slate-50 p-3 text-sm space-y-2">
               <div className="flex items-center justify-between text-gray-600">
                 <span>Payable Amount</span>
                 <span className="font-semibold text-gray-900">
                   Rs {formatMoney(total)}
                 </span>
               </div>
-              <div className="mt-2 flex items-center justify-between text-green-600 font-semibold">
-                <span>Change Due</span>
-                <span>Rs {calculatedChange.toFixed(2)}</span>
-              </div>
+              {paymentMethodPending === "Credit" && calculatedCredit > 0 && (
+                <div className="flex items-center justify-between text-amber-600 font-semibold">
+                  <span>Credit Balance</span>
+                  <span>Rs {calculatedCredit.toFixed(2)}</span>
+                </div>
+              )}
+              {calculatedChange > 0 && (
+                <div className="flex items-center justify-between text-green-600 font-semibold">
+                  <span>Change Due</span>
+                  <span>Rs {calculatedChange.toFixed(2)}</span>
+                </div>
+              )}
+              {paymentMethodPending === "Credit" && calculatedCredit === 0 && calculatedChange === 0 && (
+                <div className="flex items-center justify-between text-emerald-600 font-semibold">
+                  <span>Credit Balance</span>
+                  <span>Rs 0.00</span>
+                </div>
+              )}
             </div>
             <div>
               <label className="text-xs font-semibold uppercase tracking-wide text-gray-500">
-                Amount Received
+                {paymentMethodPending === "Credit" ? "Amount Paid (0 for full credit)" : "Amount Received"}
               </label>
               <Input
                 type="number"
@@ -2828,15 +2862,22 @@ export function NewSale() {
                         className="bg-white border-green-200 focus-visible:ring-green-500"
                         autoFocus
                       />
-                      <Button 
+                      <Button
                         size="sm"
                         className="bg-[#25D366] hover:bg-[#128C7E] text-white px-4 font-bold"
                         onClick={async () => {
                           if (!manualWhatsAppNumber) return;
-                          await shareOnWhatsApp({
+                          const result = await shareOnWhatsApp({
                             ...checkoutSuccessData!,
                             customerWhatsApp: manualWhatsAppNumber
                           });
+                          if (result.method === 'desktop') {
+                            toast({
+                              title: "PDF Downloaded",
+                              description: "Invoice saved to your Downloads. Attach it in the WhatsApp chat that just opened.",
+                              duration: 6000,
+                            });
+                          }
                           setIsAskingWhatsApp(false);
                         }}
                       >
@@ -2861,7 +2902,7 @@ export function NewSale() {
                       <FileText className="h-5 w-5" />
                       PDF Invoice
                     </Button>
-                    <Button 
+                    <Button
                       className="w-full flex items-center justify-center gap-2 h-12 bg-[#25D366] hover:bg-[#128C7E] text-white"
                       onClick={async () => {
                         const number = checkoutSuccessData.customerWhatsApp || checkoutSuccessData.customerPhone;
@@ -2869,7 +2910,16 @@ export function NewSale() {
                           setIsAskingWhatsApp(true);
                           return;
                         }
-                        await shareOnWhatsApp(checkoutSuccessData);
+                        const result = await shareOnWhatsApp(checkoutSuccessData);
+                        if (result.method === 'desktop') {
+                          toast({
+                            title: "PDF Downloaded",
+                            description: result.whatsappOpened
+                              ? "Invoice saved to Downloads. Attach it in the WhatsApp chat that just opened."
+                              : "Invoice saved to your Downloads folder.",
+                            duration: 6000,
+                          });
+                        }
                       }}
                     >
                       <Share2 className="h-5 w-5" />

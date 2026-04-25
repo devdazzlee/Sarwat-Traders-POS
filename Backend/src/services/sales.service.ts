@@ -279,6 +279,7 @@ class SaleService {
     items,
     discountAmount,
     createdBy,
+    paidAmount,
   }: {
     branchId: string;
     customerId?: string;
@@ -286,6 +287,7 @@ class SaleService {
     items: Array<{ productId: string; quantity: number; price: number }>;
     discountAmount?: number;
     createdBy: string;
+    paidAmount?: number; // for credit sales: amount actually paid upfront
   }) {
     const isCreditSale = paymentMethod === 'CREDIT';
 
@@ -295,12 +297,17 @@ class SaleService {
     }
 
     // 1) Validate OUTSIDE any interactive transaction
-    const [customer, branch] = await Promise.all([
-      customerId ? prisma.customer.findUnique({ where: { id: customerId } }) : null,
-      prisma.branch.findUnique({ where: { id: branchId } }),
-    ]);
+    // Resolve effective branchId: use provided value, or fall back to the first available branch
+    let effectiveBranchId = branchId;
+    if (!effectiveBranchId) {
+      const defaultBranch = await prisma.branch.findFirst({ select: { id: true } });
+      if (defaultBranch) effectiveBranchId = defaultBranch.id;
+    }
+
+    const customer = customerId
+      ? await prisma.customer.findUnique({ where: { id: customerId } })
+      : null;
     if (customerId && !customer) throw new AppError(400, 'Invalid customer');
-    if (!branch) throw new AppError(400, 'Invalid branch');
     if (!items.length) throw new AppError(400, 'No items provided');
 
     // Warn if over credit limit (but allow — per business decision)
@@ -330,11 +337,11 @@ class SaleService {
     }
   
     // 3) Pre-fetch stock snapshot once
-    const stocks = await prisma.stock.findMany({
-      where: { product_id: { in: productIds }, branch_id: branchId },
-    });
+    const stocks = effectiveBranchId
+      ? await prisma.stock.findMany({ where: { product_id: { in: productIds }, branch_id: effectiveBranchId } })
+      : [];
     const stockMap = new Map(stocks.map(s => [s.product_id, s]));
-  
+
     // 4) Group same product lines and compute movements in memory
     const grouped = items.reduce<Record<string, { productId: string; qty: Prisma.Decimal }>>(
       (acc, it) => {
@@ -345,14 +352,14 @@ class SaleService {
       },
       {}
     );
-  
+
     type MoveRow = {
       product_id: string;
       previous_qty: Prisma.Decimal;
       new_qty: Prisma.Decimal;
       quantity_change: Prisma.Decimal;
     };
-  
+
     const movements: MoveRow[] = [];
     for (const gp of Object.values(grouped)) {
       const existing = stockMap.get(gp.productId);
@@ -360,7 +367,9 @@ class SaleService {
       const change = gp.qty.mul(-1);
       const next = prev.plus(change);
       movements.push({ product_id: gp.productId, previous_qty: prev, new_qty: next, quantity_change: change });
-      stockMap.set(gp.productId, { ...(existing ?? ({} as any)), product_id: gp.productId, branch_id: branchId, current_quantity: next });
+      if (effectiveBranchId) {
+        stockMap.set(gp.productId, { ...(existing ?? ({} as any)), product_id: gp.productId, branch_id: effectiveBranchId, current_quantity: next });
+      }
     }
   
     // 5) Prepare all writes as a single non-interactive transaction
@@ -372,22 +381,28 @@ class SaleService {
   
     // Determine payment_method and payment_status for DB
     const dbPaymentMethod = isCreditSale ? 'CREDIT' : paymentMethod as Prisma.SaleCreateInput['payment_method'];
-    const dbPaymentStatus = isCreditSale ? 'PENDING' : 'PAID';
     const saleNumber = `SALE-${Date.now()}`;
+
+    // For credit sales: compute how much is actually paid vs going to credit
+    const creditPaidAmount = isCreditSale ? Math.min(Math.max(0, paidAmount ?? 0), finalTotal) : finalTotal;
+    const creditOwedAmount = isCreditSale ? finalTotal - creditPaidAmount : 0;
+    const dbPaymentStatus = isCreditSale
+      ? creditPaidAmount >= finalTotal ? 'PAID' : creditPaidAmount > 0 ? 'PARTIAL' : 'PENDING'
+      : 'PAID';
 
     // (a) Sale + items
     ops.push(
       prisma.sale.create({
         data: {
           sale_number: saleNumber,
-          branch_id: branchId,
+          branch_id: effectiveBranchId ?? null,
           customer_id: customerId,
           total_amount: new Prisma.Decimal(finalTotal),
           subtotal: new Prisma.Decimal(subtotalAmt),
           discount_amount: new Prisma.Decimal(finalDiscount),
           payment_method: dbPaymentMethod,
           payment_status: dbPaymentStatus,
-          payment_received: isCreditSale ? new Prisma.Decimal(0) : new Prisma.Decimal(finalTotal),
+          payment_received: new Prisma.Decimal(creditPaidAmount),
           status: 'COMPLETED',
           created_by: createdBy,
           sale_items: {
@@ -403,64 +418,94 @@ class SaleService {
       })
     );
   
-    // (b) Stock upserts
-    for (const m of movements) {
-      const decAbs = m.quantity_change.abs();
-      ops.push(
-        prisma.stock.upsert({
-          where: { product_id_branch_id: { product_id: m.product_id, branch_id: branchId } },
-          update: { current_quantity: { decrement: decAbs } },
-          create: {
-            product_id: m.product_id,
-            branch_id: branchId,
-            current_quantity: m.new_qty,
-            minimum_quantity: new Prisma.Decimal(0),
-            maximum_quantity: new Prisma.Decimal(1000),
-            reserved_quantity: new Prisma.Decimal(0),
-          },
-        })
-      );
-    }
-  
-    // (c) Stock movements
-    for (const m of movements) {
-      ops.push(
-        prisma.stockMovement.create({
-          data: {
-            product_id: m.product_id,
-            branch_id: branchId,
-            movement_type: 'SALE',
-            quantity_change: m.quantity_change,
-            previous_qty: m.previous_qty,
-            new_qty: m.new_qty,
-            created_by: createdBy,
-          },
-        })
-      );
+    // (b) Stock upserts — only if we have a branch to track stock against
+    if (effectiveBranchId) {
+      for (const m of movements) {
+        const decAbs = m.quantity_change.abs();
+        ops.push(
+          prisma.stock.upsert({
+            where: { product_id_branch_id: { product_id: m.product_id, branch_id: effectiveBranchId } },
+            update: { current_quantity: { decrement: decAbs } },
+            create: {
+              product_id: m.product_id,
+              branch_id: effectiveBranchId,
+              current_quantity: m.new_qty,
+              minimum_quantity: new Prisma.Decimal(0),
+              maximum_quantity: new Prisma.Decimal(1000),
+              reserved_quantity: new Prisma.Decimal(0),
+            },
+          })
+        );
+      }
+
+      // (c) Stock movements
+      for (const m of movements) {
+        ops.push(
+          prisma.stockMovement.create({
+            data: {
+              product_id: m.product_id,
+              branch_id: effectiveBranchId,
+              movement_type: 'SALE',
+              quantity_change: m.quantity_change,
+              previous_qty: m.previous_qty,
+              new_qty: m.new_qty,
+              created_by: createdBy,
+            },
+          })
+        );
+      }
     }
 
-    // (d) Credit ledger entry — update customer outstanding balance
-    if (isCreditSale && customerId && customer) {
-      const newBalance = new Prisma.Decimal(customer.outstanding_balance).plus(finalTotal);
+    // (d) Credit ledger entries — record credit owed + any upfront partial payment
+    if (isCreditSale && customerId && customer && creditOwedAmount > 0) {
+      const baseBalance = new Prisma.Decimal(customer.outstanding_balance);
+      // After adding the full credit owed and subtracting any upfront payment
+      const balanceAfterCredit = baseBalance.plus(creditOwedAmount);
+      const finalBalance = creditPaidAmount > 0
+        ? balanceAfterCredit.minus(creditPaidAmount)
+        : balanceAfterCredit;
+
+      // Single customer balance update (net effect)
       ops.push(
         prisma.customer.update({
           where: { id: customerId },
-          data: { outstanding_balance: newBalance },
+          data: { outstanding_balance: finalBalance },
         })
       );
+
+      // CREDIT_SALE row: the full owed amount is debited against the customer
       ops.push(
         prisma.customerLedger.create({
           data: {
             customer_id: customerId,
             entry_type: LedgerEntryType.CREDIT_SALE,
-            amount: new Prisma.Decimal(finalTotal),
-            description: `Credit sale - ${saleNumber}`,
-            sale_id: saleNumber, // will be updated by reference
-            balance_after: newBalance,
+            amount: new Prisma.Decimal(creditOwedAmount),
+            description: creditPaidAmount > 0
+              ? `Partial credit sale - ${saleNumber}`
+              : `Credit sale - ${saleNumber}`,
+            sale_id: saleNumber,
+            balance_after: balanceAfterCredit,
             created_by: createdBy,
           },
         })
       );
+
+      // PAYMENT_RECEIVED row: the upfront paid amount is credited back
+      if (creditPaidAmount > 0) {
+        ops.push(
+          prisma.customerLedger.create({
+            data: {
+              customer_id: customerId,
+              entry_type: LedgerEntryType.PAYMENT_RECEIVED,
+              amount: new Prisma.Decimal(creditPaidAmount),
+              description: `Upfront payment on ${saleNumber}`,
+              sale_id: saleNumber,
+              balance_after: finalBalance,
+              created_by: createdBy,
+            },
+          })
+        );
+      }
     }
   
     const [sale] = await prisma.$transaction(ops);

@@ -22,9 +22,10 @@ export interface InvoiceData {
   total: number;
   paymentMethod: string;
   balanceDue: number; // if credit sale
+  amountPaid?: number; // actual amount received
 }
 
-export const generateA4InvoicePDF = (data: InvoiceData): string => {
+const buildInvoiceDoc = (data: InvoiceData): jsPDF => {
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
@@ -46,16 +47,26 @@ export const generateA4InvoicePDF = (data: InvoiceData): string => {
   doc.setFillColor(30, 41, 59); // Slate-800
   doc.rect(10, 0, pageWidth - 10, 45, 'F');
   
-  // Logo placeholder text / Store Name
-  doc.setTextColor(255, 255, 255);
-  doc.setFontSize(26);
-  doc.setFont('helvetica', 'bold');
-  doc.text(data.storeName.toUpperCase(), 20, 25);
-  
-  doc.setFontSize(10);
-  doc.setFont('helvetica', 'normal');
-  doc.setTextColor(148, 163, 184); // Slate-400
-  doc.text('WHOLESALE & RETAIL MERCHANTS', 20, 32);
+  // Header background
+  doc.setFillColor(30, 41, 59);
+  doc.rect(0, 0, pageWidth, 45, 'F');
+
+  try {
+    // Add Logo
+    doc.addImage('/logo.png', 'PNG', 20, 10, 20, 20);
+    
+    // Store Name next to logo
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(26);
+    doc.setFont('helvetica', 'bold');
+    doc.text('SARWAT TRADERS', 45, 25);
+  } catch (e) {
+    // Fallback if image fails to load
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(26);
+    doc.setFont('helvetica', 'bold');
+    doc.text('SARWAT TRADERS', 20, 25);
+  }
   
   // Invoice Label
   doc.setTextColor(255, 255, 255);
@@ -74,7 +85,7 @@ export const generateA4InvoicePDF = (data: InvoiceData): string => {
   // Store Details (Left)
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
-  doc.text('SARWAT TRADERS KARACHI', 20, 55);
+  doc.text('SARWAT TRADERS', 20, 55);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
   doc.text(data.storeAddress, 20, 60);
@@ -189,8 +200,55 @@ export const generateA4InvoicePDF = (data: InvoiceData): string => {
   currentY += 10;
   doc.setFontSize(14);
   doc.setFont('helvetica', 'bold');
-  doc.text('NET PAYABLE:', summaryX, currentY);
-  doc.text(`Rs ${data.total.toLocaleString()}`, pageWidth - 25, currentY, { align: 'right' });
+
+  if (data.paymentMethod === 'CREDIT') {
+    // Show total, amount paid (if any), and balance due
+    doc.setFontSize(11);
+    doc.text('TOTAL AMOUNT:', summaryX, currentY);
+    doc.text(`Rs ${data.total.toLocaleString()}`, pageWidth - 25, currentY, { align: 'right' });
+
+    if ((data.amountPaid ?? 0) > 0) {
+      currentY += 8;
+      doc.setTextColor(22, 163, 74); // green
+      doc.text('AMOUNT PAID:', summaryX, currentY);
+      doc.text(`Rs ${(data.amountPaid ?? 0).toLocaleString()}`, pageWidth - 25, currentY, { align: 'right' });
+      doc.setTextColor(30, 41, 59);
+    }
+
+    currentY += 8;
+    doc.setFontSize(14);
+    doc.setTextColor(220, 38, 38); // red
+    doc.text('BALANCE DUE:', summaryX, currentY);
+    doc.text(`Rs ${data.balanceDue.toLocaleString()}`, pageWidth - 25, currentY, { align: 'right' });
+    doc.setTextColor(30, 41, 59);
+  } else {
+    doc.setFontSize(11);
+    doc.text('TOTAL AMOUNT:', summaryX, currentY);
+    doc.text(`Rs ${data.total.toLocaleString()}`, pageWidth - 25, currentY, { align: 'right' });
+
+    currentY += 8;
+    doc.setTextColor(22, 163, 74); // green
+    doc.text('AMOUNT PAID:', summaryX, currentY);
+    doc.text(`Rs ${data.total.toLocaleString()}`, pageWidth - 25, currentY, { align: 'right' });
+    doc.setTextColor(30, 41, 59);
+
+    currentY += 8;
+    doc.setFontSize(14);
+    doc.setFont('helvetica', 'bold');
+    doc.text('NET PAYABLE:', summaryX, currentY);
+    doc.text('Rs 0.00', pageWidth - 25, currentY, { align: 'right' });
+
+    const change = (data.amountPaid ?? 0) - data.total;
+    if (change > 0) {
+      currentY += 8;
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(22, 163, 74);
+      doc.text('CHANGE RETURNED:', summaryX, currentY);
+      doc.text(`Rs ${change.toLocaleString()}`, pageWidth - 25, currentY, { align: 'right' });
+      doc.setTextColor(30, 41, 59);
+    }
+  }
   
   // --- Terms & Notes ---
   currentY += 20;
@@ -211,17 +269,16 @@ export const generateA4InvoicePDF = (data: InvoiceData): string => {
   doc.setFont('helvetica', 'bold');
   doc.text('POWERED BY ACE STUDIOS', 20, pageHeight - 10);
   
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  doc.setTextColor(148, 163, 184);
-  doc.text('Technological Partners for Sarwat Traders POS', 20, pageHeight - 6);
-  
   doc.setTextColor(255, 255, 255);
   doc.setFontSize(9);
   doc.text('Support: +92 336 2500357', pageWidth - 20, pageHeight - 10, { align: 'right' });
   doc.text('www.acestudios.pk', pageWidth - 20, pageHeight - 6, { align: 'right' });
 
-  // Output
+  return doc;
+};
+
+export const generateA4InvoicePDF = (data: InvoiceData): string => {
+  const doc = buildInvoiceDoc(data);
   const pdfBlob = doc.output('blob');
   return URL.createObjectURL(pdfBlob);
 };
@@ -235,57 +292,53 @@ export const downloadA4Invoice = (data: InvoiceData) => {
   setTimeout(() => URL.revokeObjectURL(url), 100);
 };
 
-export const shareOnWhatsApp = async (data: InvoiceData) => {
-  const number = data.customerWhatsApp || data.customerPhone;
-  
-  // Try Native Share API first (best for Mobile PDF sharing)
-  if (typeof navigator !== 'undefined' && navigator.share && navigator.canShare) {
-    try {
-      // We need to re-generate the blob for sharing
-      const doc = new jsPDF({
-        orientation: 'portrait',
-        unit: 'mm',
-        format: 'a4',
-      });
-      
-      // ... (This is redundant logic, ideally we'd refactor generateA4InvoicePDF to return blob)
-      // For now, let's just use the text fallback for speed, 
-      // but I'll add the File object support here.
-      
-      const text = `*SARWAT TRADERS - INVOICE*\n\n` + 
-        `*Invoice:* #${data.saleNumber}\n` + 
-        `*Total:* Rs ${data.total.toLocaleString()}\n\n` +
-        `Hello ${data.customerName || 'valued customer'},\n` + 
-        `Your invoice summary is ready. Thank you for your continued trust in Sarwat Traders.\n\n` +
-        `_Powered by Ace Studios_`;
+type ShareResult =
+  | { method: 'native' }
+  | { method: 'desktop'; pdfDownloaded: true; whatsappOpened: boolean }
+  | { method: 'no-number' };
 
-      // Many mobile browsers allow sharing text + link or files
-      // We attempt to share text at least
-      await navigator.share({
-        title: `Invoice #${data.saleNumber}`,
-        text: text,
-      });
-      return;
-    } catch (err) {
-      console.log("Native share failed or cancelled", err);
-      // Fallback to wa.me link
+export const shareOnWhatsApp = async (data: InvoiceData): Promise<ShareResult> => {
+  const doc = buildInvoiceDoc(data);
+  const pdfBlob = doc.output('blob');
+  const fileName = `Sarwat-Invoice-${data.saleNumber}.pdf`;
+  const pdfFile = new File([pdfBlob], fileName, { type: 'application/pdf' });
+
+  // Try Web Share API with PDF file — works on mobile and some desktops (e.g. Chrome on Windows with WhatsApp installed)
+  if (
+    typeof navigator !== 'undefined' &&
+    navigator.share &&
+    navigator.canShare &&
+    navigator.canShare({ files: [pdfFile] })
+  ) {
+    try {
+      await navigator.share({ title: `Invoice #${data.saleNumber}`, files: [pdfFile] });
+      return { method: 'native' };
+    } catch (err: any) {
+      if (err?.name === 'AbortError') return { method: 'native' }; // user cancelled
+      // fall through to desktop path
     }
   }
 
-  if (!number) return;
-  
+  // Desktop fallback: auto-download the PDF then open the WhatsApp Web chat directly
+  const blobUrl = URL.createObjectURL(pdfBlob);
+  const a = document.createElement('a');
+  a.href = blobUrl;
+  a.download = fileName;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 100);
+
+  const number = data.customerWhatsApp || data.customerPhone;
+  if (!number) return { method: 'desktop', pdfDownloaded: true, whatsappOpened: false };
+
   let cleanNumber = number.replace(/\D/g, '');
   if (cleanNumber.startsWith('0')) {
-      cleanNumber = '92' + cleanNumber.substring(1);
+    cleanNumber = '92' + cleanNumber.substring(1);
   }
-  
-  const text = `*SARWAT TRADERS - INVOICE*\n\n` + 
-    `*Invoice:* #${data.saleNumber}\n` + 
-    `*Total:* Rs ${data.total.toLocaleString()}\n\n` +
-    `Hello ${data.customerName || 'valued customer'},\n` + 
-    `Your invoice summary is ready. Thank you for your continued trust in Sarwat Traders.\n\n` +
-    `_Powered by Ace Studios_`;
 
-  const url = `https://wa.me/${cleanNumber}?text=${encodeURIComponent(text)}`;
-  window.open(url, '_blank');
+  // Open WhatsApp Web with the specific contact's chat pre-selected
+  setTimeout(() => {
+    window.open(`https://web.whatsapp.com/send?phone=${cleanNumber}`, '_blank');
+  }, 500);
+
+  return { method: 'desktop', pdfDownloaded: true, whatsappOpened: true };
 };

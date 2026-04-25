@@ -3,13 +3,21 @@ import { prisma } from '../prisma/client';
 import { AppError } from "../utils/apiError";
 import { addDecimal, asNumber } from "../utils/helpers";
 
+async function resolveDefaultBranchId(branchId?: string): Promise<string> {
+    if (branchId) return branchId;
+    const branch = await prisma.branch.findFirst({ where: { is_active: true }, orderBy: { created_at: 'asc' } });
+    if (!branch) throw new AppError(404, 'No active branch found');
+    return branch.id;
+}
+
 class StockService {
     async createStock({ productId, branchId, quantity, createdBy }: {
         productId: Stock["product_id"];
-        branchId: Stock["branch_id"];
+        branchId?: Stock["branch_id"];
         quantity: Stock["current_quantity"];
         createdBy: StockMovement["created_by"];
     }) {
+        branchId = await resolveDefaultBranchId(branchId);
         return prisma.$transaction(async (tx) => {
             const exists = await tx.stock.findUnique({
                 where: { product_id_branch_id: { product_id: productId, branch_id: branchId } },
@@ -59,11 +67,12 @@ class StockService {
 
     async adjustStock({ productId, branchId, quantityChange, reason, createdBy }: {
         productId: string;
-        branchId: string;
+        branchId?: string;
         quantityChange: number;
         reason?: string;
         createdBy: string;
     }) {
+        branchId = await resolveDefaultBranchId(branchId);
         return prisma.$transaction(async (tx) => {
             const stock = await tx.stock.findUnique({
                 where: { product_id_branch_id: { product_id: productId, branch_id: branchId } },
@@ -205,11 +214,12 @@ class StockService {
 
     async removeStock({ productId, branchId, quantity, reason, createdBy }: {
         productId: string;
-        branchId: string;
+        branchId?: string;
         quantity: number;
         reason?: string;
         createdBy: string;
     }) {
+        branchId = await resolveDefaultBranchId(branchId);
         if (quantity <= 0) {
             throw new AppError(400, "Quantity must be greater than 0");
         }
@@ -220,11 +230,6 @@ class StockService {
             });
 
             if (!stock) throw new AppError(404, "Stock not found");
-
-            const currentQty = asNumber(stock.current_quantity);
-            if (currentQty < quantity) {
-                throw new AppError(400, "Insufficient stock to remove");
-            }
 
             const newQty = addDecimal(stock.current_quantity, -quantity);
             
@@ -316,18 +321,25 @@ class StockService {
         };
     }
 
-    async getStockMovements(branchId: string, userRole?: string) {
+    async getStockMovements(branchId: string, userRole?: string, productId?: string) {
         const where: any = {};
         
         // Only filter by branch if branchId is provided AND user is not admin
         if (branchId && branchId.trim() !== "" && userRole !== "ADMIN" && userRole !== "SUPER_ADMIN") {
             where.branch_id = branchId;
+        } else if (branchId && branchId.trim() !== "") {
+            where.branch_id = branchId;
+        }
+
+        if (productId) {
+            where.product_id = productId;
         }
         
         return prisma.stockMovement.findMany({
             where,
             include: { product: true, branch: true, user: { select: { email: true } } },
             orderBy: { created_at: "desc" },
+            take: 50, // Limit history for performance
         });
     }
 

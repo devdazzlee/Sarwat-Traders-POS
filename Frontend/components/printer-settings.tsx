@@ -28,6 +28,7 @@ import {
   Wifi,
   WifiOff,
 } from "lucide-react";
+import { PageLoader } from "@/components/ui/page-loader";
 
 export function PrinterSettings() {
   const { toast } = useToast();
@@ -179,10 +180,13 @@ export function PrinterSettings() {
     }
   };
 
-  // First load – also check server
   useState(() => {
     checkServer();
   });
+
+  if (loading && printers.length === 0) {
+    return <PageLoader message="Scanning for printers..." />;
+  }
 
   return (
     <div className="p-4 md:p-6 max-w-4xl mx-auto space-y-6">
