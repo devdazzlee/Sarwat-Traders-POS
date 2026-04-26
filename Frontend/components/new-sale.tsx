@@ -934,7 +934,7 @@ export function NewSale() {
       total,
       paymentMethod,
       cashier: "Muhammad",
-      store: "Sarwat Traders #001",
+      store: "Sarwat Trader #001",
       amountPaid,
       changeAmount,
     };

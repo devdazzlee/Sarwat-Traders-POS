@@ -3,7 +3,7 @@ import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 
 async function main() {
-  console.log('Seeding 6 products for Sarwat Traders...');
+  console.log('Seeding 6 products for Sarwat Trader...');
 
   // 1. Get or Create a Category
   let category = await prisma.category.findFirst();

@@ -43,7 +43,7 @@ export class EmailService {
    */
   static async sendOrderConfirmationToCustomer(orderData: OrderEmailData): Promise<void> {
     const mailOptions = {
-      from: `"Sarwat Traders" <${EMAIL_USER}>`,
+      from: `"Sarwat Trader" <${EMAIL_USER}>`,
       to: orderData.customerEmail,
       subject: `Order Confirmation - ${orderData.orderNumber}`,
       html: `
@@ -139,7 +139,7 @@ export class EmailService {
    */
   static async sendOrderNotificationToAdmin(orderData: OrderEmailData): Promise<void> {
     const mailOptions = {
-      from: `"Sarwat Traders" <${EMAIL_USER}>`,
+      from: `"Sarwat Trader" <${EMAIL_USER}>`,
       to: ADMIN_EMAIL,
       subject: `New Order Received - ${orderData.orderNumber}`,
       html: `

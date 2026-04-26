@@ -374,7 +374,7 @@ export function Sidebar({
           <div className="flex items-center space-x-3">
             <img src="/logo.png" alt="Logo" className="h-10 w-auto" />
             <div>
-              <h1 className="text-xl font-bold text-gray-900">Sarwat Traders</h1>
+              <h1 className="text-xl font-bold text-gray-900">Sarwat Trader</h1>
               <p className="text-sm text-gray-500">Enterprise POS</p>
             </div>
           </div>

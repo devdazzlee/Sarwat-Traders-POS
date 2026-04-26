@@ -72,6 +72,12 @@ interface PurchaseItem {
   batchNo: string;
   expiryDate: string;
   total: number;
+  ctns?: number;
+  piecePerCtn?: number;
+  cbmPerCtn?: number;
+  tCbm?: number;
+  gwPerCtn?: number;
+  tGw?: number;
 }
 
 interface PurchaseResponse {
@@ -116,6 +122,10 @@ export function Purchases() {
 
   const [stagedItems, setStagedItems] = useState<PurchaseItem[]>([]);
   const [submitting, setSubmitting] = useState(false);
+
+  // Bulk import progress
+  const [importing, setImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState({ current: 0, total: 0, label: "" });
 
   // Selector States
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
@@ -219,7 +229,20 @@ export function Purchases() {
     try {
       await apiClient.post('/purchases', {
         ...header,
-        items: stagedItems
+        items: stagedItems.map((item) => ({
+          productId: item.productId,
+          quantity: item.quantity,
+          costPrice: item.costPrice,
+          salePrice: item.salePrice,
+          batchNo: item.batchNo || undefined,
+          expiryDate: item.expiryDate || undefined,
+          ctns: item.ctns,
+          piecePerCtn: item.piecePerCtn,
+          cbmPerCtn: item.cbmPerCtn,
+          tCbm: item.tCbm,
+          gwPerCtn: item.gwPerCtn,
+          tGw: item.tGw,
+        })),
       });
       toast({ title: "Stock Updated", description: `Successfully logged ${stagedItems.length} items to inventory.` });
       setStagedItems([]);
@@ -250,19 +273,110 @@ export function Purchases() {
   const handleBulkImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    // Reset input so same file can be re-selected
+    e.target.value = "";
 
     const data = await file.arrayBuffer();
     const workbook = XLSX.read(data);
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
     const json = XLSX.utils.sheet_to_json(sheet) as any[];
 
+    if (json.length === 0) {
+      toast({ title: "Empty File", description: "No data rows found in the sheet.", variant: "destructive" });
+      return;
+    }
+
+    // Filter out truly blank rows upfront
+    // Skip instruction/example rows: row 2 starts with "---" or "REQUIRED"
+    const validRows = json.filter((row: any) => {
+      const sku = String(row["Item no"] || row["Item No (SKU)"] || row.sku || row.SKU || "").trim();
+      const name = String(row.Name || row["Product Name"] || row.name || row.product_name || "").trim();
+      if (!sku && !name) return false;
+      if (sku === "---" || name.startsWith("REQUIRED") || sku.startsWith("REQUIRED")) return false;
+      return true;
+    });
+
+    setImporting(true);
+    setImportProgress({ current: 0, total: validRows.length, label: "Reading file…" });
+
+    // Keep a fresh copy of products so newly created ones are findable
+    let productsCopy = [...products];
     const newItems: PurchaseItem[] = [];
-    for (const row of json) {
-      const sku = (row as any).sku || (row as any).SKU;
-      const product = products.find(p => p.sku === sku || p.name === (row as any).product_name);
-      if (product) {
-        const qty = parseFloat((row as any).quantity || 0);
-        const cost = parseFloat((row as any).cost_price || product.purchase_rate);
+    let created = 0;
+
+    for (let i = 0; i < validRows.length; i++) {
+      const row = validRows[i] as any;
+      // Supports both packing list schema and the client template schema
+      const sku     = String(row["Item No (SKU)"] || row["Item no"] || row.sku || row.SKU || "").trim();
+      const nameCol = String(row["Product Name"] || row.Name || row.name || row.product_name || "").trim();
+      // "Initial Stock Qty" takes priority over T Pieces for qty; T Pieces used as packing info
+      const initialStockQty = parseFloat(row["Initial Stock Qty"] ?? 0) || 0;
+      const tPieces = parseFloat(row["T Pieces"] ?? row.quantity ?? 0) || 0;
+      const qty     = initialStockQty || tPieces;
+      const minStock  = parseFloat(row["Min Stock (Reorder)"] ?? row.min_qty ?? 0) || 0;
+      const buyPrice  = parseFloat(row["Buy Price (Rs)"] || row.cost_price || row.purchase_rate || 0) || 0;
+      const sellPrice = parseFloat(row["Sell Price (Rs)"] || row.sale_price || row.sales_rate_inc_dis_and_tax || 0) || 0;
+      const ctns        = parseFloat(row.Ctns ?? 0) || undefined;
+      const piecePerCtn = parseFloat(row["Pieces Per Ctn"] ?? row.Pieces ?? 0) || undefined;
+      const cbmPerCtn   = parseFloat(row["Cbm Per Ctn"] ?? row.Cbm ?? 0) || undefined;
+      const tCbm        = parseFloat(row["T Cbm"] ?? row["T cbm"] ?? 0) || undefined;
+      const gwPerCtn    = parseFloat(row["GW Per Ctn"] ?? row.GW ?? 0) || undefined;
+      const tGw         = parseFloat(row["T GW"] ?? 0) || undefined;
+      const categoryName = String(row.Category || row.category_name || row.category || "").trim() || undefined;
+      const unitName     = String(row.Unit || row.unit_name || row.unit || "").trim() || undefined;
+
+      const displayName = nameCol || sku;
+      setImportProgress({ current: i + 1, total: validRows.length, label: displayName });
+
+      // 1. Try to find existing product
+      let product = productsCopy.find(
+        (p) => (sku && p.sku === sku) || (nameCol && p.name === nameCol)
+      );
+
+      // 2. If not found, auto-create it
+      if (!product && (sku || nameCol)) {
+        try {
+          const res = await apiClient.post("/products", {
+            name: nameCol || sku,
+            sku: sku || undefined,
+            purchase_rate: buyPrice,
+            sales_rate_exc_dis_and_tax: sellPrice,
+            sales_rate_inc_dis_and_tax: sellPrice,
+            min_qty: minStock || 10,
+            max_qty: minStock ? minStock * 3 : 10,
+            category_name: categoryName,
+            unit_name: unitName,
+          });
+          const created_product = res.data?.data || res.data;
+          product = {
+            id: created_product.id,
+            name: created_product.name,
+            sku: created_product.sku,
+            purchase_rate: buyPrice,
+            sales_rate_inc_dis_and_tax: sellPrice,
+          };
+          productsCopy = [...productsCopy, product];
+          setProducts(productsCopy);
+          created++;
+        } catch {
+          // product creation failed (e.g. duplicate name) — try lookup again
+          try {
+            const lookupRes = await apiClient.get("/products", { params: { search: nameCol || sku, fetch_all: true } });
+            const found = (lookupRes.data?.data || []).find(
+              (p: any) => p.sku === sku || p.name === nameCol
+            );
+            if (found) {
+              product = found;
+              productsCopy = [...productsCopy, found];
+              setProducts(productsCopy);
+            }
+          } catch { /* skip row */ }
+        }
+      }
+
+      if (product && qty > 0) {
+        const cost = buyPrice || parseFloat(row.cost_price || product.purchase_rate) || 0;
+        const sell = sellPrice || parseFloat(row.sale_price || product.sales_rate_inc_dis_and_tax) || 0;
         newItems.push({
           id: Math.random().toString(36).substr(2, 9),
           productId: product.id,
@@ -270,19 +384,31 @@ export function Purchases() {
           sku: product.sku,
           quantity: qty,
           costPrice: cost,
-          salePrice: parseFloat((row as any).sale_price || product.sales_rate_inc_dis_and_tax),
-          batchNo: (row as any).batch_no || "",
-          expiryDate: (row as any).expiry_date || "",
+          salePrice: sell,
+          batchNo: row.batch_no || "",
+          expiryDate: row.expiry_date || "",
           total: qty * cost,
+          ctns,
+          piecePerCtn,
+          cbmPerCtn,
+          tCbm,
+          gwPerCtn,
+          tGw,
         });
       }
     }
 
+    setImporting(false);
+    setImportProgress({ current: 0, total: 0, label: "" });
+
     if (newItems.length > 0) {
-      setStagedItems([...stagedItems, ...newItems]);
-      toast({ title: "Import Successful", description: `${newItems.length} items added to staging.` });
+      setStagedItems((prev) => [...prev, ...newItems]);
+      toast({
+        title: "Import Successful",
+        description: `${newItems.length} items staged.${created > 0 ? ` ${created} new products auto-created.` : ""}`,
+      });
     } else {
-      toast({ title: "Import Failed", description: "No matching products found by SKU/Name", variant: "destructive" });
+      toast({ title: "Import Failed", description: "No valid rows found. Make sure T Pieces > 0.", variant: "destructive" });
     }
   };
 
@@ -416,21 +542,50 @@ export function Purchases() {
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1 overflow-hidden">
             {/* Main Entry Panel */}
             <div className="lg:col-span-8 flex flex-col min-h-0 space-y-4">
-              <Card className="rounded-xl border border-slate-200 shadow-sm bg-white overflow-hidden flex flex-col min-h-0">
+              <Card className="rounded-xl border border-slate-200 shadow-sm bg-white overflow-hidden flex flex-col min-h-0 relative">
+                 {/* Import progress overlay */}
+                 {importing && (
+                   <div className="absolute inset-0 z-20 bg-slate-900/95 flex flex-col items-center justify-center rounded-xl gap-5">
+                     <Loader2 className="h-10 w-10 text-white animate-spin" />
+                     <div className="w-80 space-y-3 text-center">
+                       <p className="text-[9px] font-black uppercase tracking-widest text-white/50">
+                         Processing Packing List
+                       </p>
+                       <p className="text-sm font-black text-white truncate px-4">
+                         {importProgress.label}
+                       </p>
+                       {/* Progress bar */}
+                       <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden">
+                         <div
+                           className="h-2 bg-emerald-400 rounded-full transition-all duration-300"
+                           style={{ width: importProgress.total > 0 ? `${(importProgress.current / importProgress.total) * 100}%` : "0%" }}
+                         />
+                       </div>
+                       <p className="text-[10px] font-black text-white/60 tabular-nums">
+                         {importProgress.current} / {importProgress.total} ROWS
+                       </p>
+                     </div>
+                   </div>
+                 )}
+
                  <div className="p-4 border-b border-slate-100 bg-slate-900 flex items-center justify-between text-white">
                     <div>
                        <h3 className="text-xs font-black uppercase tracking-widest">Entry Manifest</h3>
                        <p className="text-[9px] font-bold text-white/50 uppercase">Current Inventory In-flow</p>
                     </div>
                     <div className="flex gap-2">
-                       <input type="file" id="bulk-import" className="hidden" accept=".xlsx,.csv" onChange={handleBulkImport} />
-                       <Button 
-                          variant="secondary" 
-                          className="bg-white text-slate-900 hover:bg-slate-100 font-black rounded-lg h-8 text-[10px] uppercase border-none" 
-                          onClick={() => document.getElementById('bulk-import')?.click()}
+                       <input type="file" id="bulk-import" className="hidden" accept=".xlsx,.xls,.csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={handleBulkImport} />
+                       <Button
+                          variant="secondary"
+                          disabled={importing}
+                          className="bg-white text-slate-900 hover:bg-slate-100 font-black rounded-lg h-8 text-[10px] uppercase border-none disabled:opacity-50"
+                          onClick={() => !importing && document.getElementById('bulk-import')?.click()}
                        >
-                          <FileSpreadsheet className="h-3.5 w-3.5 mr-2 text-slate-900" /> 
-                          Bulk Load
+                         {importing ? (
+                           <><Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" /> Importing…</>
+                         ) : (
+                           <><FileSpreadsheet className="h-3.5 w-3.5 mr-2" /> Bulk Load</>
+                         )}
                        </Button>
                     </div>
                  </div>

@@ -15,6 +15,12 @@ export const createPurchaseSchema = z.object({
       salePrice: z.number().min(0, 'Sale price must be >= 0'),
       batchNo: z.string().optional(),
       expiryDate: z.string().optional(),
+      ctns: z.number().optional(),
+      piecePerCtn: z.number().optional(),
+      cbmPerCtn: z.number().optional(),
+      tCbm: z.number().optional(),
+      gwPerCtn: z.number().optional(),
+      tGw: z.number().optional(),
     })).min(1, 'At least one item is required'),
   }),
 });

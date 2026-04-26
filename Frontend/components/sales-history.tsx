@@ -418,7 +418,7 @@ export function SalesHistory() {
     });
 
     return {
-      storeName: sale.branch?.name || "SARWAT TRADERS",
+      storeName: sale.branch?.name || "SARWAT TRADER",
       storeAddress: sale.branch?.address || "Karachi, Pakistan",
       storePhone: "021 34892110",
       customerName: sale.customer?.name || "Walk-in Customer",
@@ -509,7 +509,7 @@ export function SalesHistory() {
               <div class="header">
                 <div class="header-left">
                   <img src="/logo.png" style="height: 50px; margin-bottom: 12px; display: block;" />
-                  <h1>SARWAT TRADERS</h1>
+                  <h1>SARWAT TRADER</h1>
                 </div>
                 <div class="header-right">
                   <h2>INVOICE</h2>
@@ -520,7 +520,7 @@ export function SalesHistory() {
               <div class="section info-grid">
                 <div>
                   <div class="label-tiny">From:</div>
-                  <div class="text-bold">SARWAT TRADERS</div>
+                  <div class="text-bold">SARWAT TRADER</div>
                   <div class="text-muted">${data.storeAddress}</div>
                   <div class="text-bold" style="margin-top: 4px; font-size: 11px;">Contact: ${data.storePhone}</div>
                 </div>
@@ -1140,7 +1140,7 @@ export function SalesHistory() {
                         <TableCell>
                           {format(parseISO(s.sale_date), "MM/dd/yyyy")}
                         </TableCell>
-                        <TableCell>{s.customer?.email || "—"}</TableCell>
+                        <TableCell>{s.customer?.name || "—"}</TableCell>
                         <TableCell>{s.payment_method}</TableCell>
                         <TableCell
                           className={

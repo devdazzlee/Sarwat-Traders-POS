@@ -485,7 +485,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
 
         {/* Print footer */}
         <div className="hidden print:block text-center pt-8 border-t border-slate-200 text-xs text-slate-400">
-          System-generated statement — Sarwat Traders ERP
+          System-generated statement — Sarwat Trader ERP
         </div>
       </div>
 

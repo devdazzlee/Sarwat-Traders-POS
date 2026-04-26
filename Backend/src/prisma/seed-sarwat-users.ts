@@ -4,11 +4,11 @@ import bcrypt from 'bcryptjs';
 const prisma = new PrismaClient();
 
 async function main() {
-  console.log('Seeding Sarwat Traders admin user...');
+  console.log('Seeding Sarwat Trader admin user...');
 
   await prisma.user.deleteMany({
     where: {
-      email: 'admin@sarwattraders.com',
+      email: 'admin@sarwattrader.com',
     },
   });
 
@@ -16,13 +16,13 @@ async function main() {
 
   await prisma.user.create({
     data: {
-      email: 'admin@sarwattraders.com',
+      email: 'admin@sarwattrader.com',
       password: password,
       role: Role.ADMIN,
     },
   });
 
-  console.log('Admin user created: admin@sarwattraders.com');
+  console.log('Admin user created: admin@sarwattrader.com');
 }
 
 main()

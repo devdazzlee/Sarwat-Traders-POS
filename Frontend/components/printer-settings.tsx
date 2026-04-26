@@ -86,7 +86,7 @@ export function PrinterSettings() {
           columns: printerObj.receiptProfile?.columns || { fontA: 48, fontB: 64 },
         },
         {
-          storeName: "Sarwat Traders POS",
+          storeName: "Sarwat Trader POS",
           tagline: "Test Receipt",
           transactionId: `TEST-${Date.now()}`,
           timestamp: new Date().toISOString(),

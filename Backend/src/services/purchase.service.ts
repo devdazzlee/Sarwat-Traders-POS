@@ -18,6 +18,12 @@ export class PurchaseService {
       salePrice: number;
       batchNo?: string;
       expiryDate?: string;
+      ctns?: number;
+      piecePerCtn?: number;
+      cbmPerCtn?: number;
+      tCbm?: number;
+      gwPerCtn?: number;
+      tGw?: number;
     }>;
     createdBy: string;
   }) {
@@ -32,7 +38,7 @@ export class PurchaseService {
     return prisma.$transaction(async (tx) => {
       const results = [];
       for (const item of data.items) {
-        const purchase = await tx.purchase.create({
+        const purchase = await (tx.purchase.create as any)({
           data: {
             product_id: item.productId,
             supplier_id: data.supplierId,
@@ -46,6 +52,12 @@ export class PurchaseService {
             expiry_date: item.expiryDate ? new Date(item.expiryDate) : null,
             notes: data.notes,
             delivery_status: data.deliveryStatus,
+            ctns: item.ctns ?? null,
+            pieces_per_ctn: item.piecePerCtn ?? null,
+            cbm_per_ctn: item.cbmPerCtn ?? null,
+            t_cbm: item.tCbm ?? null,
+            gw_per_ctn: item.gwPerCtn ?? null,
+            t_gw: item.tGw ?? null,
             created_by: data.createdBy,
           },
         });

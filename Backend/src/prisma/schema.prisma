@@ -394,6 +394,12 @@ model Purchase {
   expiry_date        DateTime?
   notes              String?
   delivery_status    PurchaseDeliveryStatus  @default(COMPLETE)
+  ctns               Decimal?
+  pieces_per_ctn     Decimal?
+  cbm_per_ctn        Decimal?
+  t_cbm              Decimal?
+  gw_per_ctn         Decimal?
+  t_gw               Decimal?
   created_by         String
   user               User                   @relation(fields: [created_by], references: [id])
   created_at         DateTime               @default(now())
