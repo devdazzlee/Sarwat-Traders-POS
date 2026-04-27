@@ -5,7 +5,7 @@ import { Prisma } from '@prisma/client';
 
 export class PurchaseService {
   async createBulkPurchase(data: {
-    supplierId: string;
+    supplierId?: string;
     warehouseBranchId?: string;
     purchaseDate: Date;
     invoiceRef?: string;
@@ -41,7 +41,7 @@ export class PurchaseService {
         const purchase = await (tx.purchase.create as any)({
           data: {
             product_id: item.productId,
-            supplier_id: data.supplierId,
+            supplier_id: data.supplierId || null,
             warehouse_branch_id: finalBranchId,
             quantity: item.quantity,
             cost_price: item.costPrice,

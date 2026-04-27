@@ -3,7 +3,9 @@
     "allow": [
       "Bash(node -e ' *)",
       "Bash(npx prisma *)",
-      "Bash(xargs sed *)"
+      "Bash(xargs sed *)",
+      "Bash(npx tsc *)",
+      "Bash(npx ts-node -e ' *)"
     ]
   }
 }

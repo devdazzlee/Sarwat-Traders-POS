@@ -6,6 +6,8 @@ import { parse as csvParse } from 'csv-parse/sync';
 import XLSX from 'xlsx';
 import fs from 'fs';
 import path from 'path';
+import { prisma } from '../prisma/client';
+import { asNumber } from '../utils/helpers';
 
 const productService = new ProductService();
 
@@ -346,21 +348,21 @@ export const bulkUploadProducts = asyncHandler(async (req: Request, res: Respons
         }
     }
 
-    // Validate and create/update products
+    // Resolve the active branch once — used for stock records
+    const activeBranch = await prisma.branch.findFirst({ where: { is_active: true } });
+    const branchId = activeBranch?.id ?? null;
+    const createdBy = (req as any).user?.id ?? 'system';
+
     const results = [];
     for (const prod of products) {
         try {
-            // Map XLSX column names to our data structure
-            // Handle both standard format and XLSX format (e.g., "Purchase Rate", "Selling Price")
-            const purchaseRate = prod.purchase_rate || prod['Purchase Rate'] || prod['Purchase Rate'] || 0;
-            const sellingPrice = prod.sales_rate_exc_dis_and_tax || prod.sales_rate_inc_dis_and_tax || 
-                                prod['Selling Price'] || prod['selling_price'] || 0;
-            
-            // Enhanced product data that can include relation names
+            const purchaseRate = prod.purchase_rate || prod['Purchase Rate'] || 0;
+            const sellingPrice = prod.sales_rate_exc_dis_and_tax || prod.sales_rate_inc_dis_and_tax ||
+                                 prod['Selling Price'] || prod['selling_price'] || 0;
+
             const enhancedProd = {
                 name: prod.name || prod.Name,
                 purchase_rate: Number(purchaseRate) || 0,
-                // Set both sales rates to the same value if only one is provided
                 sales_rate_exc_dis_and_tax: Number(prod.sales_rate_exc_dis_and_tax || sellingPrice) || 0,
                 sales_rate_inc_dis_and_tax: Number(prod.sales_rate_inc_dis_and_tax || sellingPrice) || 0,
                 min_qty: Number(prod.min_qty) || 10,
@@ -376,8 +378,6 @@ export const bulkUploadProducts = asyncHandler(async (req: Request, res: Respons
                 pct_or_hs_code: prod.pct_or_hs_code,
                 sku: prod.sku || prod.SKU,
                 discount_amount: prod.discount_amount ? Number(prod.discount_amount) : 0,
-                // Relation names from sheet (will be converted to IDs)
-                // Handle both standard format and XLSX format
                 unit_name: prod.unit_name || prod.unit || prod.Unit,
                 category_name: prod.category_name || prod.category || prod.Category,
                 subcategory_name: prod.subcategory_name || prod.subcategory || prod.Subcategory,
@@ -388,31 +388,60 @@ export const bulkUploadProducts = asyncHandler(async (req: Request, res: Respons
                 size_name: prod.size_name || prod.size || prod.Size,
             };
 
-            // Validate required fields (name and at least one price)
-            if (!enhancedProd.name) {
-                throw new Error('Missing required field: name');
-            }
-            
-            // For updates, we can allow missing prices (they'll just not be updated)
-            // For new products, we need at least selling price
+            if (!enhancedProd.name) throw new Error('Missing required field: name');
             if (!enhancedProd.sales_rate_exc_dis_and_tax && !enhancedProd.sales_rate_inc_dis_and_tax) {
                 throw new Error('Missing required field: selling price');
             }
 
+            // Step 1 — create / update product
             const created = await productService.createProductFromBulkUpload(enhancedProd);
-            results.push({ 
-                success: true, 
-                id: created.id, 
+
+            // Step 2 — set stock immediately after product is resolved, same loop iteration
+            const stockQty = Number(
+                prod.stock_qty ?? prod.initial_stock_qty ?? prod['Initial Stock Qty'] ??
+                prod['Initial Stock'] ?? prod.quantity ?? prod.qty ?? prod.stock ?? 0
+            );
+
+            if (stockQty > 0 && branchId) {
+                const existing = await prisma.stock.findUnique({
+                    where: { product_id_branch_id: { product_id: created.id, branch_id: branchId } },
+                });
+                const previousQty = existing ? asNumber(existing.current_quantity) : 0;
+                const newQty = previousQty + stockQty;
+
+                await prisma.stock.upsert({
+                    where: { product_id_branch_id: { product_id: created.id, branch_id: branchId } },
+                    create: { product_id: created.id, branch_id: branchId, current_quantity: stockQty },
+                    update: { current_quantity: newQty },
+                });
+
+                await prisma.stockMovement.create({
+                    data: {
+                        product_id: created.id,
+                        branch_id: branchId,
+                        movement_type: 'PURCHASE',
+                        quantity_change: stockQty,
+                        previous_qty: previousQty,
+                        new_qty: newQty,
+                        unit_cost: enhancedProd.purchase_rate,
+                        notes: 'Bulk sheet import',
+                        created_by: createdBy,
+                        reference_type: 'bulk_import',
+                    },
+                });
+            }
+
+            results.push({
+                success: true,
+                id: created.id,
                 name: created.name,
+                sku: created.sku,
                 unit: created.unit?.name || 'Unknown',
-                category: created.category?.name || 'Unknown'
+                category: created.category?.name || 'Unknown',
+                stock_set: stockQty,
             });
         } catch (err) {
-            results.push({ 
-                success: false, 
-                error: (err as Error).message, 
-                data: prod 
-            });
+            results.push({ success: false, error: (err as Error).message, data: prod });
         }
     }
 

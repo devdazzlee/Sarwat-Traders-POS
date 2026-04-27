@@ -40,6 +40,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { cn } from "@/lib/utils";
 import { PageLoader } from "@/components/ui/page-loader";
 import * as XLSX from "xlsx";
+import { useStore } from "@/lib/store";
 
 interface Product {
   id: string;
@@ -95,6 +96,7 @@ interface PurchaseResponse {
 
 export function Purchases() {
   const { toast } = useToast();
+  const { fetchProducts: refreshGlobalProducts } = useStore();
   const [activeView, setActiveView] = useState<"HISTORY" | "CREATE">("HISTORY");
   
   // Master Data
@@ -251,6 +253,8 @@ export function Purchases() {
         invoiceRef: "",
         notes: "",
       });
+      // Force-refresh global product store so Products tab shows updated stock immediately
+      refreshGlobalProducts({ force: true }).catch(() => {});
       setActiveView("HISTORY");
     } catch (e: any) {
       toast({ title: "Submission Failed", description: e?.response?.data?.message || "Check your network connection", variant: "destructive" });
@@ -269,11 +273,10 @@ export function Purchases() {
     setOpenProductCombo(false);
   };
 
-  // Bulk Import Handlers
+  // Bulk Import — parses sheet, creates missing products, then directly submits stock-in
   const handleBulkImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    // Reset input so same file can be re-selected
     e.target.value = "";
 
     const data = await file.arrayBuffer();
@@ -286,129 +289,111 @@ export function Purchases() {
       return;
     }
 
-    // Filter out truly blank rows upfront
-    // Skip instruction/example rows: row 2 starts with "---" or "REQUIRED"
+    // Fuzzy column helpers — case/space/punctuation insensitive
+    const norm = (s: string) => s.toLowerCase().replace(/[\s_\-().\/]+/g, "");
+    const col = (row: any, ...candidates: string[]): string => {
+      const rowKeys = Object.keys(row);
+      for (const candidate of candidates) {
+        const nc = norm(candidate);
+        const match = rowKeys.find((k) => norm(k) === nc);
+        if (match !== undefined && row[match] !== undefined && row[match] !== null && String(row[match]).trim() !== "") {
+          return String(row[match]).trim();
+        }
+      }
+      return "";
+    };
+    const colNum = (row: any, ...candidates: string[]): number =>
+      parseFloat(col(row, ...candidates)) || 0;
+
+    // Filter blank / instruction rows
     const validRows = json.filter((row: any) => {
-      const sku = String(row["Item no"] || row["Item No (SKU)"] || row.sku || row.SKU || "").trim();
-      const name = String(row.Name || row["Product Name"] || row.name || row.product_name || "").trim();
+      const sku  = col(row, "Item No (SKU)", "Item no", "SKU", "sku", "Item No");
+      const name = col(row, "Product Name", "Name", "name", "product_name");
       if (!sku && !name) return false;
       if (sku === "---" || name.startsWith("REQUIRED") || sku.startsWith("REQUIRED")) return false;
       return true;
     });
 
-    setImporting(true);
-    setImportProgress({ current: 0, total: validRows.length, label: "Reading file…" });
-
-    // Keep a fresh copy of products so newly created ones are findable
-    let productsCopy = [...products];
-    const newItems: PurchaseItem[] = [];
-    let created = 0;
-
-    for (let i = 0; i < validRows.length; i++) {
-      const row = validRows[i] as any;
-      // Supports both packing list schema and the client template schema
-      const sku     = String(row["Item No (SKU)"] || row["Item no"] || row.sku || row.SKU || "").trim();
-      const nameCol = String(row["Product Name"] || row.Name || row.name || row.product_name || "").trim();
-      // "Initial Stock Qty" takes priority over T Pieces for qty; T Pieces used as packing info
-      const initialStockQty = parseFloat(row["Initial Stock Qty"] ?? 0) || 0;
-      const tPieces = parseFloat(row["T Pieces"] ?? row.quantity ?? 0) || 0;
-      const qty     = initialStockQty || tPieces;
-      const minStock  = parseFloat(row["Min Stock (Reorder)"] ?? row.min_qty ?? 0) || 0;
-      const buyPrice  = parseFloat(row["Buy Price (Rs)"] || row.cost_price || row.purchase_rate || 0) || 0;
-      const sellPrice = parseFloat(row["Sell Price (Rs)"] || row.sale_price || row.sales_rate_inc_dis_and_tax || 0) || 0;
-      const ctns        = parseFloat(row.Ctns ?? 0) || undefined;
-      const piecePerCtn = parseFloat(row["Pieces Per Ctn"] ?? row.Pieces ?? 0) || undefined;
-      const cbmPerCtn   = parseFloat(row["Cbm Per Ctn"] ?? row.Cbm ?? 0) || undefined;
-      const tCbm        = parseFloat(row["T Cbm"] ?? row["T cbm"] ?? 0) || undefined;
-      const gwPerCtn    = parseFloat(row["GW Per Ctn"] ?? row.GW ?? 0) || undefined;
-      const tGw         = parseFloat(row["T GW"] ?? 0) || undefined;
-      const categoryName = String(row.Category || row.category_name || row.category || "").trim() || undefined;
-      const unitName     = String(row.Unit || row.unit_name || row.unit || "").trim() || undefined;
-
-      const displayName = nameCol || sku;
-      setImportProgress({ current: i + 1, total: validRows.length, label: displayName });
-
-      // 1. Try to find existing product
-      let product = productsCopy.find(
-        (p) => (sku && p.sku === sku) || (nameCol && p.name === nameCol)
-      );
-
-      // 2. If not found, auto-create it
-      if (!product && (sku || nameCol)) {
-        try {
-          const res = await apiClient.post("/products", {
-            name: nameCol || sku,
-            sku: sku || undefined,
-            purchase_rate: buyPrice,
-            sales_rate_exc_dis_and_tax: sellPrice,
-            sales_rate_inc_dis_and_tax: sellPrice,
-            min_qty: minStock || 10,
-            max_qty: minStock ? minStock * 3 : 10,
-            category_name: categoryName,
-            unit_name: unitName,
-          });
-          const created_product = res.data?.data || res.data;
-          product = {
-            id: created_product.id,
-            name: created_product.name,
-            sku: created_product.sku,
-            purchase_rate: buyPrice,
-            sales_rate_inc_dis_and_tax: sellPrice,
-          };
-          productsCopy = [...productsCopy, product];
-          setProducts(productsCopy);
-          created++;
-        } catch {
-          // product creation failed (e.g. duplicate name) — try lookup again
-          try {
-            const lookupRes = await apiClient.get("/products", { params: { search: nameCol || sku, fetch_all: true } });
-            const found = (lookupRes.data?.data || []).find(
-              (p: any) => p.sku === sku || p.name === nameCol
-            );
-            if (found) {
-              product = found;
-              productsCopy = [...productsCopy, found];
-              setProducts(productsCopy);
-            }
-          } catch { /* skip row */ }
-        }
-      }
-
-      if (product && qty > 0) {
-        const cost = buyPrice || parseFloat(row.cost_price || product.purchase_rate) || 0;
-        const sell = sellPrice || parseFloat(row.sale_price || product.sales_rate_inc_dis_and_tax) || 0;
-        newItems.push({
-          id: Math.random().toString(36).substr(2, 9),
-          productId: product.id,
-          productName: product.name,
-          sku: product.sku,
-          quantity: qty,
-          costPrice: cost,
-          salePrice: sell,
-          batchNo: row.batch_no || "",
-          expiryDate: row.expiry_date || "",
-          total: qty * cost,
-          ctns,
-          piecePerCtn,
-          cbmPerCtn,
-          tCbm,
-          gwPerCtn,
-          tGw,
-        });
-      }
+    if (validRows.length === 0) {
+      toast({ title: "Empty File", description: "No valid data rows found.", variant: "destructive" });
+      return;
     }
 
-    setImporting(false);
-    setImportProgress({ current: 0, total: 0, label: "" });
+    console.log("📋 Sheet columns:", Object.keys(validRows[0]));
+    console.log("📋 First row:", validRows[0]);
 
-    if (newItems.length > 0) {
-      setStagedItems((prev) => [...prev, ...newItems]);
-      toast({
-        title: "Import Successful",
-        description: `${newItems.length} items staged.${created > 0 ? ` ${created} new products auto-created.` : ""}`,
+    // Phase 1 — build payload in a for-loop so progress bar animates while parsing rows
+    setImporting(true);
+    setImportProgress({ current: 0, total: validRows.length, label: "Reading rows…" });
+
+    const payload: any[] = [];
+    for (let i = 0; i < validRows.length; i++) {
+      const row = validRows[i] as any;
+      const name = col(row, "Product Name", "Name", "name", "product_name", "ProductName");
+      const sku  = col(row, "Item No (SKU)", "Item no", "SKU", "sku", "Item No", "Sku");
+
+      payload.push({
+        sku,
+        name,
+        stock_qty:                  colNum(row, "Initial Stock Qty", "Initial Stock", "InitialStockQty",
+                                      "Opening Stock", "Opening Qty", "Stock Qty", "T Pieces", "Quantity", "Qty", "Stock"),
+        purchase_rate:              colNum(row, "Buy Price (Rs)", "Buy Price", "BuyPrice", "Purchase Rate", "purchase_rate"),
+        sales_rate_inc_dis_and_tax: colNum(row, "Sell Price (Rs)", "Sell Price", "SellPrice", "Selling Price", "sale_price"),
+        sales_rate_exc_dis_and_tax: colNum(row, "Sell Price (Rs)", "Sell Price", "SellPrice", "Selling Price", "sale_price"),
+        min_qty:       colNum(row, "Min Stock (Reorder)", "Low Stock Alert", "Min Stock", "MinStock") || 10,
+        category_name: col(row, "Category", "category_name", "category", "Cat") || undefined,
+        unit_name:     col(row, "Unit", "unit_name", "unit", "UOM") || undefined,
+        supplier_name: col(row, "Supplier", "supplier_name", "supplier") || undefined,
+        brand_name:    col(row, "Brand", "brand_name", "brand") || undefined,
+        description:   col(row, "Description", "description", "Notes", "notes") || undefined,
       });
-    } else {
-      toast({ title: "Import Failed", description: "No valid rows found. Make sure T Pieces > 0.", variant: "destructive" });
+
+      // Update progress label per row
+      setImportProgress({ current: i + 1, total: validRows.length, label: name || sku });
+
+      // Yield to React every 5 rows so the progress bar actually re-renders
+      if (i % 5 === 4) await new Promise(r => setTimeout(r, 0));
+    }
+
+    const validPayload = payload.filter(p => p.name || p.sku);
+    if (validPayload.length === 0) {
+      setImporting(false);
+      setImportProgress({ current: 0, total: 0, label: "" });
+      toast({ title: "Import Failed", description: "No valid rows found in sheet.", variant: "destructive" });
+      return;
+    }
+
+    // Phase 2 — single request to server (creates product + sets stock per row on backend)
+    setImportProgress({ current: validPayload.length, total: validPayload.length, label: "Uploading to server…" });
+
+    try {
+      const res = await apiClient.post("/products/bulk-upload", { products: validPayload });
+      const results: any[] = res.data?.data || [];
+
+      const succeeded = results.filter(r => r.success);
+      const failed    = results.filter(r => !r.success);
+      const stocked   = succeeded.filter(r => (r.stock_set ?? 0) > 0).length;
+
+      setImporting(false);
+      setImportProgress({ current: 0, total: 0, label: "" });
+
+      refreshGlobalProducts({ force: true }).catch(() => {});
+      fetchHistory();
+
+      toast({
+        title: "✅ Import Complete",
+        description: `${succeeded.length} products imported, ${stocked} stocked.${failed.length > 0 ? ` ${failed.length} rows failed.` : ""}`,
+      });
+
+      if (failed.length > 0) console.warn("Import failures:", failed);
+    } catch (err: any) {
+      setImporting(false);
+      setImportProgress({ current: 0, total: 0, label: "" });
+      toast({
+        title: "Import Failed",
+        description: err?.response?.data?.message || "Server error during import.",
+        variant: "destructive",
+      });
     }
   };
 
@@ -417,11 +402,11 @@ export function Purchases() {
   }
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden bg-white">
+    <div className="flex flex-col min-h-screen bg-white">
       {/* Background Logo */}
       <img src="https://i.ibb.co/hL77L3H/Sarwat-POS-Logo.png" alt="Logo" className="opacity-5 absolute pointer-events-none" style={{ top: '20px', left: '20px', width: '100px' }} />
 
-      <div className="relative z-10 h-full flex flex-col p-6 animate-in fade-in duration-500">
+      <div className="relative z-10 flex flex-col flex-1 p-6 animate-in fade-in duration-500">
         <div className="flex items-center justify-between mb-8">
           <div className="flex items-center gap-4">
             <div className="bg-slate-900 p-3 rounded-2xl shadow-xl shadow-slate-200">
@@ -539,17 +524,17 @@ export function Purchases() {
             </div>
           </div>
         ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1 overflow-hidden">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1 overflow-y-auto pb-6">
             {/* Main Entry Panel */}
-            <div className="lg:col-span-8 flex flex-col min-h-0 space-y-4">
-              <Card className="rounded-xl border border-slate-200 shadow-sm bg-white overflow-hidden flex flex-col min-h-0 relative">
+            <div className="lg:col-span-8 space-y-4">
+              <Card className="rounded-xl border border-slate-200 shadow-sm bg-white relative">
                  {/* Import progress overlay */}
                  {importing && (
                    <div className="absolute inset-0 z-20 bg-slate-900/95 flex flex-col items-center justify-center rounded-xl gap-5">
                      <Loader2 className="h-10 w-10 text-white animate-spin" />
                      <div className="w-80 space-y-3 text-center">
                        <p className="text-[9px] font-black uppercase tracking-widest text-white/50">
-                         Processing Packing List
+                         Importing & Adding Stock
                        </p>
                        <p className="text-sm font-black text-white truncate px-4">
                          {importProgress.label}
@@ -590,7 +575,7 @@ export function Purchases() {
                     </div>
                  </div>
 
-                 <CardContent className="p-6 flex-1 flex flex-col min-h-0 space-y-8">
+                 <CardContent className="p-6 space-y-8">
                     {/* Header Form */}
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                        <div className="space-y-2 text-left">
@@ -677,10 +662,10 @@ export function Purchases() {
                     </div>
 
                     {/* Staged Items List */}
-                    <div className="flex-1 flex flex-col min-h-0 space-y-3">
-                       <h4 className="text-[10px] font-black uppercase text-slate-900 tracking-[0.2em] px-1">STaging grid</h4>
-                       <div className="flex-1 border border-slate-200 rounded-2xl overflow-hidden bg-white shadow-sm">
-                          <ScrollArea className="h-full max-h-[350px]">
+                    <div className="space-y-3">
+                       <h4 className="text-[10px] font-black uppercase text-slate-900 tracking-[0.2em] px-1">Staging Grid</h4>
+                       <div className="border border-slate-200 rounded-2xl overflow-hidden bg-white shadow-sm">
+                          <ScrollArea className="max-h-[400px]">
                           <Table>
                              <TableHeader className="bg-slate-50 border-b border-slate-100">
                                 <TableRow className="hover:bg-transparent h-10">

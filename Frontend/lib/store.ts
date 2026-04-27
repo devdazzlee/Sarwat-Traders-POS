@@ -152,7 +152,7 @@ export const useStore = create<StoreState>()(
           }
         }
 
-        set({ productsLoading: true })
+        set({ productsLoading: true, ...(force ? { lastProductsFetch: null } : {}) })
 
         const mapProduct = (item: any): Product => ({
           id: item.id,
@@ -259,14 +259,14 @@ export const useStore = create<StoreState>()(
             params.category_id = categoryId
           }
 
-          const res = await apiClient.get("/products", { params })
+          const res = await apiClient.get("/products", {
+            params: force ? { ...params, _t: Date.now() } : params,
+          })
           const rawProducts = Array.isArray(res.data?.data) ? res.data.data : []
           const apiProducts = rawProducts.map(mapProduct)
 
-          // Save products to IndexedDB for offline use
-          if (apiProducts.length > 0) {
-            await offlineDB.saveProducts(rawProducts)
-          }
+          // Always sync IndexedDB with latest API result (including empty — clears stale data)
+          await offlineDB.saveProducts(rawProducts)
 
           set({
             products: apiProducts,
@@ -455,19 +455,12 @@ export const useStore = create<StoreState>()(
       },
     }),
     {
-      name: 'pos-store', // localStorage key
-      partialize: (state) => ({
-        products: state.products,
-        categories: state.categories,
-        customers: state.customers,
-        branches: state.branches,
-        suppliers: state.suppliers,
-        lastProductsFetch: state.lastProductsFetch,
-        lastCategoriesFetch: state.lastCategoriesFetch,
-        lastCustomersFetch: state.lastCustomersFetch,
-        lastBranchesFetch: state.lastBranchesFetch,
-        lastSuppliersFetch: state.lastSuppliersFetch,
-      }),
+      name: 'pos-store',
+      // Only persist UI preferences — never server data.
+      // Products/categories/customers are always fetched fresh on page load.
+      // The 5-min TTL still works within a session (in-memory), but a hard
+      // refresh always gets live data from the API.
+      partialize: () => ({}),
     }
   )
 )

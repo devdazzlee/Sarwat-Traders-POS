@@ -895,6 +895,11 @@ export default function Inventory() {
         created_at: product.created_at || new Date().toISOString(),
         updated_at: product.updated_at || new Date().toISOString(),
         images: product.images || [],
+        available_stock: product.available_stock ?? product.current_stock ?? product.stock ?? 0,
+        current_stock: product.current_stock ?? product.stock ?? 0,
+        reserved_stock: product.reserved_stock ?? 0,
+        minimum_stock: product.minimum_stock ?? 0,
+        maximum_stock: product.maximum_stock ?? 0,
       }))
 
       setProducts(productsData)
@@ -1297,7 +1302,7 @@ export default function Inventory() {
                             <div className="font-medium">
                               {product.available_stock ?? product.current_stock ?? 0}
                             </div>
-                            {product.reserved_stock && product.reserved_stock > 0 && (
+                            {(product.reserved_stock ?? 0) > 0 && (
                               <div className="text-xs text-gray-500">
                                 Reserved: {product.reserved_stock}
                               </div>

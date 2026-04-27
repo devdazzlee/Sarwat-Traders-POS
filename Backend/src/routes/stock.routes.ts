@@ -9,6 +9,7 @@ import {
     getStocksController,
     getStockMovementsController,
     getTodayStockMovementsController,
+    bulkSetStockController,
 } from "../controllers/stock.controller";
 import { createStockSchema, adjustStockSchema, transferStockSchema, removeStockSchema } from "../validations/stock.validation";
 
@@ -26,5 +27,6 @@ router.delete("/remove", validate(removeStockSchema), removeStockController);
 router.get("/", getStocksController);
 router.get("/history", getStockMovementsController);
 router.get("/today", getTodayStockMovementsController);
+router.post("/bulk-set", bulkSetStockController);
 
 export default router;

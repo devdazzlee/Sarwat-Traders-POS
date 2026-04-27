@@ -16,17 +16,21 @@ export function DataProvider({ children }: DataProviderProps) {
   useEffect(() => {
     const token = localStorage.getItem('token')
     if (!token) return
-    
+
+    // Evict any stale server data that was previously persisted to localStorage.
+    // Products/categories/customers are now session-only (never written to localStorage).
+    localStorage.removeItem('pos-store')
+
     const initializeData = async () => {
       try {
         // Initialize offline mode first
         await initializeOfflineMode()
-        
-        // Initialize all data in parallel
+
+        // Always fetch fresh on page load — force:true bypasses in-memory TTL
         await Promise.all([
-          fetchProducts(),
-          fetchCategories(),
-          fetchCustomers()
+          fetchProducts({ force: true }),
+          fetchCategories(true),
+          fetchCustomers(true),
         ])
         console.log('✅ All data initialized successfully')
       } catch (error) {
