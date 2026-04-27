@@ -33,14 +33,25 @@ model User {
 }
 
 model Session {
-  id         String   @id @default(uuid())
+  id         String    @id @default(uuid())
   user_id    String
-  user       User     @relation(fields: [user_id], references: [id])
-  token      String   @unique
-  expires_at DateTime
-  created_at DateTime @default(now())
+  user       User      @relation(fields: [user_id], references: [id])
+  token      String    @unique
+  expires_at DateTime? // null = persistent session, never expires
+  created_at DateTime  @default(now())
 
   @@index([user_id])
+  @@index([token])
+}
+
+model CustomerSession {
+  id          String   @id @default(uuid())
+  customer_id String
+  customer    Customer @relation(fields: [customer_id], references: [id])
+  token       String   @unique
+  created_at  DateTime @default(now())
+
+  @@index([customer_id])
   @@index([token])
 }
 
@@ -621,7 +632,7 @@ model Customer {
   ntn                String?
   mobile_number      String?
   strn               String?
-  email              String
+  email              String?
   password           String?
   dob                DateTime?
   customer_cat       String[]
@@ -641,6 +652,7 @@ model Customer {
   hold_sales         HoldSale[]
   device             DeviceIdentity?
   ledger_entries     CustomerLedger[]
+  sessions           CustomerSession[]
   created_at         DateTime        @default(now())
   updated_at         DateTime        @default(now()) @updatedAt
 

@@ -127,6 +127,7 @@ export function Purchases() {
 
   // Bulk import progress
   const [importing, setImporting] = useState(false);
+  const [serverUploading, setServerUploading] = useState(false);
   const [importProgress, setImportProgress] = useState({ current: 0, total: 0, label: "" });
 
   // Selector States
@@ -348,11 +349,9 @@ export function Purchases() {
         description:   col(row, "Description", "description", "Notes", "notes") || undefined,
       });
 
-      // Update progress label per row
+      // Update progress and yield to React every row so the bar actually animates
       setImportProgress({ current: i + 1, total: validRows.length, label: name || sku });
-
-      // Yield to React every 5 rows so the progress bar actually re-renders
-      if (i % 5 === 4) await new Promise(r => setTimeout(r, 0));
+      await new Promise(r => setTimeout(r, 40));
     }
 
     const validPayload = payload.filter(p => p.name || p.sku);
@@ -364,7 +363,8 @@ export function Purchases() {
     }
 
     // Phase 2 — single request to server (creates product + sets stock per row on backend)
-    setImportProgress({ current: validPayload.length, total: validPayload.length, label: "Uploading to server…" });
+    setServerUploading(true);
+    setImportProgress({ current: validPayload.length, total: validPayload.length, label: `Sending ${validPayload.length} products to server…` });
 
     try {
       const res = await apiClient.post("/products/bulk-upload", { products: validPayload });
@@ -375,19 +375,33 @@ export function Purchases() {
       const stocked   = succeeded.filter(r => (r.stock_set ?? 0) > 0).length;
 
       setImporting(false);
+      setServerUploading(false);
       setImportProgress({ current: 0, total: 0, label: "" });
+
+      if (failed.length > 0) console.warn("Import failures:", failed);
+
+      if (succeeded.length === 0) {
+        // All rows failed — surface the first error so the user knows why
+        const firstError = failed[0]?.error || "Unknown error";
+        toast({
+          title: "Import Failed",
+          description: `All ${failed.length} rows failed. Reason: ${firstError}`,
+          variant: "destructive",
+        });
+        return;
+      }
 
       refreshGlobalProducts({ force: true }).catch(() => {});
       fetchHistory();
 
+      const partialWarn = failed.length > 0 ? ` (${failed.length} rows skipped: ${failed[0]?.error || "unknown error"})` : "";
       toast({
-        title: "✅ Import Complete",
-        description: `${succeeded.length} products imported, ${stocked} stocked.${failed.length > 0 ? ` ${failed.length} rows failed.` : ""}`,
+        title: succeeded.length === results.length ? "Import Complete" : "Import Partially Complete",
+        description: `${succeeded.length} of ${results.length} products saved, ${stocked} with stock.${partialWarn}`,
       });
-
-      if (failed.length > 0) console.warn("Import failures:", failed);
     } catch (err: any) {
       setImporting(false);
+      setServerUploading(false);
       setImportProgress({ current: 0, total: 0, label: "" });
       toast({
         title: "Import Failed",
@@ -534,28 +548,39 @@ export function Purchases() {
                      <Loader2 className="h-10 w-10 text-white animate-spin" />
                      <div className="w-80 space-y-3 text-center">
                        <p className="text-[9px] font-black uppercase tracking-widest text-white/50">
-                         Importing & Adding Stock
+                         {serverUploading ? "Uploading to Server" : "Reading Sheet"}
                        </p>
                        <p className="text-sm font-black text-white truncate px-4">
                          {importProgress.label}
                        </p>
                        {/* Progress bar */}
                        <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden">
-                         <div
-                           className="h-2 bg-emerald-400 rounded-full transition-all duration-300"
-                           style={{ width: importProgress.total > 0 ? `${(importProgress.current / importProgress.total) * 100}%` : "0%" }}
-                         />
+                         {serverUploading ? (
+                           /* Indeterminate pulsing bar during server upload */
+                           <div className="h-2 bg-emerald-400 rounded-full animate-pulse w-full" />
+                         ) : (
+                           <div
+                             className="h-2 bg-emerald-400 rounded-full transition-all duration-300"
+                             style={{ width: importProgress.total > 0 ? `${(importProgress.current / importProgress.total) * 100}%` : "0%" }}
+                           />
+                         )}
                        </div>
-                       <p className="text-[10px] font-black text-white/60 tabular-nums">
-                         {importProgress.current} / {importProgress.total} ROWS
-                       </p>
+                       {serverUploading ? (
+                         <p className="text-[10px] font-black text-emerald-400/80 tabular-nums">
+                           {importProgress.current} PRODUCTS — WAITING FOR SERVER…
+                         </p>
+                       ) : (
+                         <p className="text-[10px] font-black text-white/60 tabular-nums">
+                           {importProgress.current} / {importProgress.total} ROWS
+                         </p>
+                       )}
                      </div>
                    </div>
                  )}
 
                  <div className="p-4 border-b border-slate-100 bg-slate-900 flex items-center justify-between text-white">
                     <div>
-                       <h3 className="text-xs font-black uppercase tracking-widest">Entry Manifest</h3>
+                       <h3 className="text-xs !font-white !text-white uppercase tracking-widest">Entry Manifest</h3>
                        <p className="text-[9px] font-bold text-white/50 uppercase">Current Inventory In-flow</p>
                     </div>
                     <div className="flex gap-2">

@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import asyncHandler from "../middleware/asyncHandler";
 import { SaleService } from "../services/sales.service";
 import { ApiResponse } from "../utils/apiResponse";
+import { prisma } from "../prisma/client";
 
 const saleService = new SaleService();
 
@@ -95,10 +96,11 @@ const getSalesController = asyncHandler(async (req: Request, res: Response) => {
 
 const getSalesForReturnsController = asyncHandler(async (req: Request, res: Response) => {
     const search = (req.query.search as string | undefined)?.replace(/\s+/g, ' ').trim();
-    const sales = await saleService.getSalesForReturns({ 
-        branchId: req.user?.branch_id as string,
-        search
-    });
+    const isAdmin = req.user?.role === 'SUPER_ADMIN' || req.user?.role === 'ADMIN';
+    const jwtBranchId = req.user?.branch_id as string | undefined;
+    // Admins have no branch_id → pass undefined so all branches are searched
+    const branchId = isAdmin ? undefined : (jwtBranchId || undefined);
+    const sales = await saleService.getSalesForReturns({ branchId, search });
     new ApiResponse(sales, "Sales eligible for returns fetched successfully").send(res);
 });
 
@@ -122,7 +124,14 @@ const refundSaleController = asyncHandler(async (req: Request, res: Response) =>
     const { customerId, returnedItems = [], exchangedItems = [], notes } = req.body;
     const originalSaleId = req.params.saleId;
     const createdBy = req.user!.id;
-    const branchId = req.user?.branch_id as string;
+
+    // Admins have no branch_id in JWT — fall back to the first active branch
+    let branchId = req.user?.branch_id as string | null;
+    if (!branchId) {
+        const activeBranch = await prisma.branch.findFirst({ where: { is_active: true } });
+        if (!activeBranch) throw new Error('No active branch found');
+        branchId = activeBranch.id;
+    }
 
     const sale = await saleService.createExchangeOrReturnSale({
         originalSaleId,

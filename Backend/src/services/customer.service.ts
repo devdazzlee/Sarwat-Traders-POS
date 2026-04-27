@@ -3,31 +3,21 @@ import { prisma } from '../prisma/client';
 import { AppError } from '../utils/apiError';
 import jwt from 'jsonwebtoken';
 import { config } from '../config/app';
-import { safeRedisOperation } from '../config/redis';
 import bcrypt from 'bcryptjs';
 
 class CustomerService {
     private generateToken(cusId: Customer['id'], email: Customer['email']): string {
-        const token = jwt.sign(
-            {
-                email: email,
-                id: cusId
-            },
+        return jwt.sign(
+            { email, id: cusId },
             config.jwtSecret,
-            // No expiration - token remains valid until user logs out
+            // No expiresIn — token valid until explicit logout
         );
-
-        return token;
     }
 
     private async verifyCustomerExistance(email: Customer['email']): Promise<boolean> {
-        const customer = await prisma.customer.findFirst({
-            where: {
-                email: email,
-            },
-        });
-        if (customer) return true;
-        return false;
+        if (!email) return false;
+        const customer = await prisma.customer.findFirst({ where: { email } });
+        return !!customer;
     }
 
     public async createCustomer(data: Customer) {
@@ -36,28 +26,18 @@ class CustomerService {
             throw new AppError(400, 'Customer already exists');
         }
 
-        // Ensure password is hashed before storing
         const hashedPassword = await bcrypt.hash(data.password!, 10);
-
         const customer = await prisma.customer.create({
-            data: {
-                ...data,
-                password: hashedPassword,
-            },
+            data: { ...data, password: hashedPassword },
         });
 
         const token = this.generateToken(customer.id, customer.email!);
 
-        // Store session in Redis without expiration (token valid until logout)
-        await safeRedisOperation(
-          async (redis) => redis.set(`session:customer:${customer.id}`, token),
-          null
-        );
+        // Persist session in DB — one active session per customer
+        await prisma.customerSession.deleteMany({ where: { customer_id: customer.id } });
+        await prisma.customerSession.create({ data: { customer_id: customer.id, token } });
 
-        return {
-            email: customer.email,
-            token,
-        };
+        return { email: customer.email, token };
     }
 
     public async createShopCustomer(data: Customer) {
@@ -66,19 +46,13 @@ class CustomerService {
             throw new AppError(400, 'Customer already exists');
         }
 
-        const customer = await prisma.customer.create({
-            data: data
-        });
-
-        return {
-            customer
-        };
+        const customer = await prisma.customer.create({ data });
+        return { customer };
     }
 
     public async loginCustomer(email: Customer['email'], password: Customer['password']) {
-        const customer = await prisma.customer.findFirst({
-            where: { email },
-        });
+        if (!email) throw new AppError(400, 'Email is required for login');
+        const customer = await prisma.customer.findFirst({ where: { email } });
 
         if (!customer || !customer.password) {
             throw new AppError(401, 'Invalid credentials');
@@ -91,27 +65,16 @@ class CustomerService {
 
         const token = this.generateToken(customer.id, customer.email!);
 
-        // Save session to Redis without expiration (token valid until logout)
-        await safeRedisOperation(
-          async (redis) => redis.set(`session:customer:${customer.id}`, token),
-          null
-        );
+        // Persist session in DB — replace any existing session
+        await prisma.customerSession.deleteMany({ where: { customer_id: customer.id } });
+        await prisma.customerSession.create({ data: { customer_id: customer.id, token } });
 
-        return {
-            email: customer.email,
-            token,
-        };
+        return { email: customer.email, token };
     }
 
     public async getCustomerById(customerId: Customer['id']) {
-        const customer = await prisma.customer.findUnique({
-            where: { id: customerId },
-        });
-
-        if (!customer) {
-            throw new AppError(404, 'Customer not found');
-        }
-
+        const customer = await prisma.customer.findUnique({ where: { id: customerId } });
+        if (!customer) throw new AppError(404, 'Customer not found');
         return customer;
     }
 
@@ -130,58 +93,30 @@ class CustomerService {
         });
     }
 
-    public async updateCustomer(
-        customerId: Customer['id'],
-        updateData: Partial<Customer>
-    ) {
-        const existingCustomer = await prisma.customer.findUnique({
-            where: { id: customerId },
-        });
+    public async updateCustomer(customerId: Customer['id'], updateData: Partial<Customer>) {
+        const existingCustomer = await prisma.customer.findUnique({ where: { id: customerId } });
+        if (!existingCustomer) throw new AppError(404, 'Customer not found');
 
-        if (!existingCustomer) {
-            throw new AppError(404, 'Customer not found');
-        }
-
-        // If password is being updated, hash it
         if (updateData.password) {
             updateData.password = await bcrypt.hash(updateData.password, 10);
         }
 
-        const updatedCustomer = await prisma.customer.update({
-            where: { id: customerId },
-            data: updateData,
-        });
-
-        return updatedCustomer;
+        return prisma.customer.update({ where: { id: customerId }, data: updateData });
     }
 
     public async deleteCustomer(customerId: Customer['id']) {
-        const existingCustomer = await prisma.customer.findUnique({
-            where: { id: customerId },
-        });
+        const existingCustomer = await prisma.customer.findUnique({ where: { id: customerId } });
+        if (!existingCustomer) throw new AppError(404, 'Customer not found');
 
-        if (!existingCustomer) {
-            throw new AppError(404, 'Customer not found');
-        }
-
-        await prisma.customer.delete({
-            where: { id: customerId },
-        });
-
-        // Remove session from Redis if exists
-        await safeRedisOperation(
-          async (redis) => redis.del(`session:customer:${customerId}`),
-          0
-        );
+        // Remove session before deleting customer (FK constraint)
+        await prisma.customerSession.deleteMany({ where: { customer_id: customerId } });
+        await prisma.customer.delete({ where: { id: customerId } });
 
         return { message: 'Customer deleted successfully' };
     }
 
     public async logoutCustomer(customerId: Customer['id']) {
-        await safeRedisOperation(
-          async (redis) => redis.del(`session:customer:${customerId}`),
-          0
-        );
+        await prisma.customerSession.deleteMany({ where: { customer_id: customerId } });
         return { message: 'Logged out successfully' };
     }
 }

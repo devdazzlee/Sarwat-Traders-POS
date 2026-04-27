@@ -2,7 +2,7 @@ import { z } from "zod";
 
 const cusRegisterationSchema = z.object({
     body: z.object({
-        email: z.string().email('Invalid email address'),
+        email: z.string().email('Invalid email address').optional(),
     }),
 });
 

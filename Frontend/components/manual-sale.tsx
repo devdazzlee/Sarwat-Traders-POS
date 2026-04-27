@@ -766,7 +766,7 @@ export function ManualSale() {
          
           console.log("fullAddress", fullAddress);
           const receiptDataForServer: ReceiptData = {
-            storeName: storedBranchName || branchInfo.name || "SARWAT TRADERS",
+            storeName: storedBranchName || branchInfo.name || "SARWAT TRADER",
             tagline: "Quality • Service • Value",
             address: fullAddress,
             transactionId: transactionId,

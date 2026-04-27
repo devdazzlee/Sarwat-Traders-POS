@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { isRedisAvailable, safeRedisOperation } from '../config/redis';
 import { config } from '../config/app';
+import { prisma } from '../prisma/client';
 import { AppError } from '../utils/apiError';
 
 declare global {
@@ -24,28 +24,25 @@ const authenticate = async (req: Request, res: Response, next: NextFunction) => 
       throw new AppError(401, 'Authentication required');
     }
 
-    const decoded = jwt.verify(token, config.jwtSecret) as { id: string; role: string };
+    // Verify JWT signature (no expiry since we sign without expiresIn)
+    const decoded = jwt.verify(token, config.jwtSecret) as {
+      id: string;
+      role: string;
+      branch_id?: string;
+    };
 
-    // Verify token against Redis if available, otherwise just verify JWT
-    if (isRedisAvailable) {
-      const storedToken = await safeRedisOperation(
-        async (redis) => redis.get(`session:${decoded.id}`),
-        null
-      );
-      
-      if (storedToken && storedToken !== token) {
-        throw new AppError(401, 'Invalid or expired session');
-      }
-      // If storedToken is null and Redis is available, session might have expired
-      // But if Redis is unavailable, we allow JWT verification to pass
+    // Confirm an active DB session exists for this token
+    const session = await prisma.session.findUnique({ where: { token } });
+    if (!session) {
+      throw new AppError(401, 'Session not found. Please log in again.');
     }
 
     req.user = decoded;
     next();
   } catch (error) {
-    // If it's a JWT error, pass it through
+    if (error instanceof AppError) return next(error);
     if (error instanceof jwt.JsonWebTokenError || error instanceof jwt.TokenExpiredError) {
-      throw new AppError(401, 'Invalid or expired token');
+      return next(new AppError(401, 'Invalid or expired token'));
     }
     next(error);
   }

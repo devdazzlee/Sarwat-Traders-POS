@@ -1,10 +1,9 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../prisma/client';
-import { safeRedisOperation } from '../config/redis';
 import { config } from '../config/app';
 import { AppError } from '../utils/apiError';
-import { Role, Branch } from '@prisma/client'; 
+import { Role, Branch } from '@prisma/client';
 
 class AuthService {
   async register(data: { email: string; password: string; role?: Role }) {
@@ -21,7 +20,7 @@ class AuthService {
       data: {
         email: data.email,
         password: hashedPassword,
-        role: data.role || Role.ADMIN, // Use Role.USER instead of string
+        role: data.role || Role.ADMIN,
       },
       select: {
         id: true,
@@ -34,7 +33,7 @@ class AuthService {
     return user;
   }
 
-  async registerAdmin(data: { email: string; password: string; branch_id: Branch['id'], role: Role }) {
+  async registerAdmin(data: { email: string; password: string; branch_id: Branch['id']; role: Role }) {
     if (data.role === Role.SUPER_ADMIN) {
       throw new AppError(400, 'Cannot assign SUPER_ADMIN role');
     }
@@ -84,36 +83,24 @@ class AuthService {
     }
 
     const token = jwt.sign(
-      {
-        id: user.id,
-        role: user.role,
-        branch_id: user.branch_id,
-      },
+      { id: user.id, role: user.role, branch_id: user.branch_id },
       config.jwtSecret,
-      // No expiration - token remains valid until user logs out
+      // No expiresIn — token is valid until the user explicitly logs out
     );
 
-    // Store session in Redis without expiration (token valid until logout)
-    await safeRedisOperation(
-      async (redis) => redis.set(`session:${user.id}`, token),
-      null
-    );
+    // One active session per user — replace any existing session
+    await prisma.session.deleteMany({ where: { user_id: user.id } });
+    await prisma.session.create({
+      data: { user_id: user.id, token },
+      // expires_at is omitted → null → persistent session
+    });
 
-    // Omit password from returned user object
-    const { id, password: _, ...userWithoutPassword } = user;
-
-    return {
-      user: userWithoutPassword,
-      token,
-    };
+    const { password: _, ...userWithoutPassword } = user;
+    return { user: userWithoutPassword, token };
   }
 
   async logout(userId: string) {
-    // Delete session from Redis to invalidate token
-    await safeRedisOperation(
-      async (redis) => redis.del(`session:${userId}`),
-      0
-    );
+    await prisma.session.deleteMany({ where: { user_id: userId } });
   }
 }
 

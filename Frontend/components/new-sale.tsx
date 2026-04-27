@@ -43,8 +43,9 @@ import {
   Share2,
   CheckCircle2,
   Users,
+  Printer,
 } from "lucide-react";
-import { downloadA4Invoice, shareOnWhatsApp, type InvoiceData } from "@/lib/pdf-generator";
+import { downloadA4Invoice, shareOnWhatsApp, printA4Invoice, type InvoiceData } from "@/lib/pdf-generator";
 import apiClient from "@/lib/apiClient";
 import { offlineAPIClient } from "@/lib/offline-api-client";
 import { offlineDB } from "@/lib/offline-db";
@@ -1150,7 +1151,7 @@ export function NewSale() {
         const selectedCustomerObj = customers.find((c) => c.id === selectedCustomer);
 
         return {
-          storeName: receiptDataForServer?.storeName || "SARWAT TRADERS",
+          storeName: receiptDataForServer?.storeName || "SARWAT TRADER",
           storeAddress: receiptDataForServer?.address || "",
           storePhone: "0300 0000000",
           customerName: selectedCustomerObj?.name || "Walk-in Customer",
@@ -2707,7 +2708,19 @@ export function NewSale() {
                 />
               </div>
               <div className="space-y-2">
-                <label className="text-sm font-medium text-gray-700">Email *</label>
+                <label className="text-sm font-medium text-gray-700">Contact Number *</label>
+                <Input
+                  placeholder="0300 0000000"
+                  value={newCustomerData.phone_number}
+                  onChange={(e) =>
+                    setNewCustomerData({ ...newCustomerData, phone_number: e.target.value })
+                  }
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-700">Email <span className="text-gray-400 font-normal">(optional)</span></label>
                 <Input
                   type="email"
                   placeholder="customer@example.com"
@@ -2717,20 +2730,8 @@ export function NewSale() {
                   }
                 />
               </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <label className="text-sm font-medium text-gray-700">Phone</label>
-                <Input
-                  placeholder="0300 0000000"
-                  value={newCustomerData.phone_number}
-                  onChange={(e) =>
-                    setNewCustomerData({ ...newCustomerData, phone_number: e.target.value })
-                  }
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-gray-700">WhatsApp</label>
+                <label className="text-sm font-medium text-gray-700">WhatsApp <span className="text-gray-400 font-normal">(optional)</span></label>
                 <Input
                   placeholder="Wa.me number"
                   value={newCustomerData.whatsapp_number}
@@ -2741,10 +2742,10 @@ export function NewSale() {
               </div>
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium text-gray-700">Credit Limit (Rs)</label>
+              <label className="text-sm font-medium text-gray-700">Credit Limit (Rs) <span className="text-gray-400 font-normal">(leave empty for unlimited)</span></label>
               <Input
                 type="number"
-                placeholder="0 for unlimited"
+                placeholder="Leave empty for unlimited"
                 value={newCustomerData.credit_limit}
                 onChange={(e) =>
                   setNewCustomerData({ ...newCustomerData, credit_limit: e.target.value })
@@ -2757,15 +2758,16 @@ export function NewSale() {
               Cancel
             </Button>
             <Button
-              disabled={!newCustomerData.name || !newCustomerData.email || isAddingCustomer}
+              disabled={!newCustomerData.name || !newCustomerData.phone_number || isAddingCustomer}
               onClick={async () => {
                 try {
                   setIsAddingCustomer(true);
                   const res = await apiClient.post("/customer", {
                     name: newCustomerData.name,
-                    email: newCustomerData.email.trim().toLowerCase(),
+                    ...(newCustomerData.email.trim() && { email: newCustomerData.email.trim().toLowerCase() }),
                     phone_number: newCustomerData.phone_number,
                     whatsapp_number: newCustomerData.whatsapp_number,
+                    // 0 = unlimited; empty input also means unlimited
                     credit_limit: newCustomerData.credit_limit ? Number(newCustomerData.credit_limit) : 0,
                     outstanding_balance: 0,
                   });
@@ -2893,14 +2895,22 @@ export function NewSale() {
                     </div>
                   </div>
                 ) : (
-                  <div className="grid grid-cols-2 gap-3">
-                    <Button 
-                      variant="outline" 
+                  <div className="grid grid-cols-3 gap-3">
+                    <Button
+                      variant="outline"
                       className="w-full flex items-center justify-center gap-2 h-12 border-blue-200 text-blue-700 hover:bg-blue-50"
                       onClick={() => downloadA4Invoice(checkoutSuccessData)}
                     >
                       <FileText className="h-5 w-5" />
-                      PDF Invoice
+                      PDF
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="w-full flex items-center justify-center gap-2 h-12 border-gray-200 text-gray-700 hover:bg-gray-50"
+                      onClick={() => printA4Invoice(checkoutSuccessData)}
+                    >
+                      <Printer className="h-5 w-5" />
+                      Print
                     </Button>
                     <Button
                       className="w-full flex items-center justify-center gap-2 h-12 bg-[#25D366] hover:bg-[#128C7E] text-white"

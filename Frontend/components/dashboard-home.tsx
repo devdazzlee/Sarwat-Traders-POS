@@ -154,7 +154,7 @@ export function DashboardHome({ onNavigate }: DashboardHomeProps) {
 
     doc.setFont("helvetica", "bold")
     doc.setFontSize(18)
-    doc.text("SARWAT TRADERS POS SYSTEM", 14, y)
+    doc.text("SARWAT TRADER POS SYSTEM", 14, y)
     y += 8
     doc.setFontSize(14)
     doc.text("Daily Sales Report", 14, y)

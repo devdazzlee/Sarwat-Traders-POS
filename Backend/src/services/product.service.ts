@@ -1314,81 +1314,73 @@ export class ProductService {
             productCode = lastProduct ? (parseInt(lastProduct.code) + 1).toString() : '1000';
         }
 
-        // Start transaction for atomic operations
-        return await prisma.$transaction(async (tx) => {
-            console.log(existingProduct ? '🔄 Starting transaction for bulk product update...' : '🚀 Starting transaction for bulk product creation...');
-            
-            // Build product data
-            const productData = existingProduct 
-                ? this.buildUpdateProductData(data)
-                : this.buildProductData(data, productCode);
+        // No $transaction here — bulk upload runs 8+ relation lookups per product.
+        // Wrapping in a transaction adds a timeout that Neon cold-start latency blows past.
+        // Each product is already isolated in a try/catch in the controller, so no rollback is needed.
+        console.log(existingProduct ? '🔄 Updating product...' : '🚀 Creating product...');
 
-            // Build relations using names from the sheet
-            const relations = await this.buildRelationsFromNames(data, tx);
-            console.log('📦 Relations built from names:', JSON.stringify(relations, null, 2));
+        // Build product data
+        const productData = existingProduct
+            ? this.buildUpdateProductData(data)
+            : this.buildProductData(data, productCode);
 
-            // Combine all data
-            // For updates, don't include SKU if it's empty or not provided
-            // For creates, always include SKU and code
-            const finalData: any = {
-                ...productData,
-                ...(existingProduct ? {} : { sku, code: productCode }),
-                ...relations
+        // Build relations using names from the sheet
+        const relations = await this.buildRelationsFromNames(data, prisma);
+        console.log('📦 Relations built from names:', JSON.stringify(relations, null, 2));
+
+        // Combine all data
+        const finalData: any = {
+            ...productData,
+            ...(existingProduct ? {} : { sku, code: productCode }),
+            ...relations
+        };
+
+        // Remove empty SKU from update data to avoid conflicts
+        if (existingProduct && (!data.sku || data.sku === '')) {
+            delete finalData.sku;
+        }
+
+        // Update or create the product
+        const product = existingProduct
+            ? await prisma.product.update({
+                where: { id: existingProduct.id },
+                data: finalData,
+                include: {
+                    unit: true,
+                    category: true,
+                    subcategory: true,
+                    tax: true,
+                    supplier: true,
+                    brand: true,
+                    color: true,
+                    size: true,
+                }
+            })
+            : await prisma.product.create({
+                data: finalData,
+                include: {
+                    unit: true,
+                    category: true,
+                    subcategory: true,
+                    tax: true,
+                    supplier: true,
+                    brand: true,
+                    color: true,
+                    size: true,
+                }
+            }) as Product & {
+                unit: any;
+                category: any;
+                subcategory: any;
+                tax: any;
+                supplier: any;
+                brand: any;
+                color: any;
+                size: any;
             };
-            
-            // Remove empty SKU from update data to avoid conflicts
-            if (existingProduct && (!data.sku || data.sku === '')) {
-                delete finalData.sku;
-            }
 
-            console.log('📤 Final data being sent to Prisma:');
-            console.log(JSON.stringify(finalData, null, 2));
-
-            // Update or create the product
-            const product = existingProduct
-                ? await tx.product.update({
-                    where: { id: existingProduct.id },
-                    data: finalData,
-                    include: {
-                        unit: true,
-                        category: true,
-                        subcategory: true,
-                        tax: true,
-                        supplier: true,
-                        brand: true,
-                        color: true,
-                        size: true,
-                    }
-                })
-                : await tx.product.create({
-                    data: finalData,
-                    include: {
-                        unit: true,
-                        category: true,
-                        subcategory: true,
-                        tax: true,
-                        supplier: true,
-                        brand: true,
-                        color: true,
-                        size: true,
-                    }
-                }) as Product & {
-                    unit: any;
-                    category: any;
-                    subcategory: any;
-                    tax: any;
-                    supplier: any;
-                    brand: any;
-                    color: any;
-                    size: any;
-                };
-
-            console.log(existingProduct ? `✅ Product updated successfully with ID: ${product.id}` : `✅ Product created successfully with ID: ${product.id}`);
-            return product;
-        }, {
-            maxWait: 20000, // 20 seconds
-            timeout: 15000  // 15 seconds,
-        });
+        console.log(existingProduct ? `✅ Product updated: ${product.id}` : `✅ Product created: ${product.id}`);
+        return product;
     }
 
     private async buildRelationsFromNames(data: any, tx: any) {

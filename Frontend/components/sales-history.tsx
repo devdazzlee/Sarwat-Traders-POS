@@ -128,7 +128,7 @@ const buildReceiptBranchLine = (
 ): string => {
   const name = typeof storeName === "string" ? storeName.trim() : "";
   
-  if (!name || ["ADMIN", "SARWAT TRADERS"].includes(name.toUpperCase())) {
+  if (!name || ["ADMIN", "SARWAT TRADER"].includes(name.toUpperCase())) {
     return "Karachi, Pakistan";
   }
 
@@ -144,7 +144,7 @@ export function SalesHistory() {
   const [editSale, setEditSale] = useState<Sale | null>(null);
   const [viewLoading, setViewLoading] = useState(false);
   const [branchInfo, setBranchInfo] = useState<BranchInfo>({
-    name: "SARWAT TRADERS",
+    name: "SARWAT TRADER",
     address: "Karachi",
   });
   const [receiptHtml, setReceiptHtml] = useState<string>("");

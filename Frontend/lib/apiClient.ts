@@ -27,26 +27,11 @@ apiClient.interceptors.request.use(
   }
 );
 
-// Response interceptor to handle auth errors
+// Response interceptor — no automatic logout on 401.
+// Sessions are persistent and only end via explicit logout action.
 apiClient.interceptors.response.use(
-  (response: AxiosResponse) => {
-    return response;
-  },
-  (error) => {
-    if (error.response?.status === 401) {
-      const token = localStorage.getItem("token");
-      if (token) {
-        localStorage.removeItem("token");
-        localStorage.removeItem("role");
-        localStorage.removeItem("branch");
-        localStorage.removeItem("branchName");
-        localStorage.removeItem("branchAddress");
-        window.location.reload();
-      }
-    }
-
-    return Promise.reject(error);
-  }
+  (response: AxiosResponse) => response,
+  (error) => Promise.reject(error)
 );
 
 export default apiClient;

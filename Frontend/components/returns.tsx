@@ -19,13 +19,14 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Plus, Search, Eye, RotateCcw, CreditCard, DollarSign, CheckCircle, XCircle, Loader2, Minus, X, ChevronLeft, ChevronRight } from "lucide-react"
+import { Plus, Search, Eye, RotateCcw, CreditCard, DollarSign, CheckCircle, XCircle, Loader2, Minus, X, ChevronLeft, ChevronRight, FileText, Printer } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { PageLoader } from "@/components/ui/page-loader"
 import { StatCardSkeleton } from "@/components/ui/stat-card-skeleton"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import apiClient from "@/lib/apiClient"
+import { downloadReturnNote, printReturnNote, type ReturnNoteData } from "@/lib/pdf-generator"
 
 interface Sale {
   id: string
@@ -228,6 +229,7 @@ export function Returns() {
   const exchangeProductSearchRef = useRef<HTMLInputElement | null>(null)
   const exchangeProductDropdownRef = useRef<HTMLDivElement | null>(null)
 
+  const [returnSuccessData, setReturnSuccessData] = useState<null | ReturnNoteData>(null)
   const [isProcessOpen, setIsProcessOpen] = useState(false)
   const [saleDropdownOpen, setSaleDropdownOpen] = useState(false)
   const [selectedReturn, setSelectedReturn] = useState<ReturnItem | null>(null)
@@ -488,7 +490,8 @@ export function Returns() {
     const eligibleSalesFromSearch = sales.map(normalizeSaleRecord)
     const dedupedSales = new Map<string, Sale>()
 
-    ;[...eligibleSalesFromSearch, ...eligibleSalesFromCache].forEach((sale) => {
+    // Cache (no items) goes first; search results (with sale_items) overwrite on conflict
+    ;[...eligibleSalesFromCache, ...eligibleSalesFromSearch].forEach((sale) => {
       if (!sale.id) return
       dedupedSales.set(sale.id, sale)
     })
@@ -746,16 +749,38 @@ export function Returns() {
       
       const response = await apiClient.patch(`/sale/${newReturn.saleId}/refund`, payload)
 
-      // Show success toast
-      toast({
-        title: "Return Processed",
-        description: "Return has been processed successfully.",
-        variant: "default",
+      // Build success data for the return note PDF — use correct field names from SelectedReturnItem
+      const retItems = selectedReturnItems
+        .filter(ri => Number(ri.returnQuantity) > 0)
+        .map(ri => ({
+          name: ri.productName || ri.productId,
+          qty: Number(ri.returnQuantity),
+          price: Number(ri.unitPrice) || 0,
+        }))
+      const exchItems = exchangeItems.map(ei => ({
+        name: ei.productName,
+        qty: Number(ei.quantity) || 0,
+        price: Number(ei.price) || 0,
+      }))
+      const refundTotal = retItems.reduce((s, i) => s + i.qty * i.price, 0)
+      const exchangeTotal = exchItems.reduce((s, i) => s + i.qty * i.price, 0)
+
+      setReturnSuccessData({
+        saleNumber: response.data?.data?.sale_number || `SALE-${Date.now()}`,
+        originalSaleNumber: selectedSale?.sale_number || newReturn.saleId,
+        customerName: selectedSale?.customer?.name,
+        customerPhone: selectedSale?.customer?.email,
+        date: new Date(),
+        returnedItems: retItems,
+        exchangedItems: exchItems,
+        refundTotal,
+        exchangeTotal,
+        netAmount: exchangeTotal - refundTotal,
       })
 
-      // Close modal immediately after success (before any other state changes)
+      // Close process modal
       setIsProcessOpen(false)
-      
+
       // Reset form after closing modal
       setNewReturn({
         saleId: "",
@@ -810,46 +835,65 @@ export function Returns() {
     }
   }
 
-  const handleSaleSelect = (saleId: string) => {
+  const handleSaleSelect = async (saleId: string) => {
     if (saleSearchDebounceRef.current) {
       clearTimeout(saleSearchDebounceRef.current)
       saleSearchDebounceRef.current = null
     }
 
     setSaleSearchPending(false)
-    const sale = searchableSales.find(s => s.id === saleId)
-    setSelectedSale(sale || null)
-    setNewReturn(prev => ({ ...prev, saleId }))
     setSaleDropdownOpen(false)
-    setSaleSearch(sale?.sale_number || "")
-    requestAnimationFrame(() => {
-      saleSearchInputRef.current?.blur()
-    })
-    
-    // Initialize selected return items
-    if (sale) {
-      const items: SelectedReturnItem[] = sale.sale_items.map(item => ({
+
+    // Use cached sale_number for immediate display, then fetch fresh data with items
+    const cached = searchableSales.find(s => s.id === saleId)
+    setSaleSearch(cached?.sale_number || "")
+    setNewReturn(prev => ({ ...prev, saleId }))
+
+    try {
+      // Always fetch by ID to guarantee sale_items are included
+      const response = await apiClient.get(`/sale/${saleId}`)
+      const fresh = normalizeSaleRecord(response.data?.data || response.data)
+      setSelectedSale(fresh)
+      setSaleSearch(fresh.sale_number)
+
+      const items: SelectedReturnItem[] = fresh.sale_items.map(item => ({
         productId: item.product.id,
         productName: item.product.name,
         sku: item.product.sku,
         originalQuantity: item.quantity,
-        returnQuantity: item.quantity, // Initialize with original quantity instead of 0
-        unitPrice: item.unit_price
+        returnQuantity: item.quantity,
+        unitPrice: item.unit_price,
       }))
       setSelectedReturnItems(items)
-      
-      // Update newReturn.returnedItems with initial quantities
-      const returnedItems = items.map(i => ({
-        productId: i.productId,
-        quantity: i.returnQuantity
-      }))
       setNewReturn(prev => ({
         ...prev,
-        returnedItems
+        returnedItems: items.map(i => ({ productId: i.productId, quantity: i.returnQuantity })),
       }))
-    } else {
-      setSelectedReturnItems([])
+    } catch {
+      // Fall back to cached version if fetch fails
+      setSelectedSale(cached || null)
+      if (cached) {
+        const items: SelectedReturnItem[] = cached.sale_items.map(item => ({
+          productId: item.product.id,
+          productName: item.product.name,
+          sku: item.product.sku,
+          originalQuantity: item.quantity,
+          returnQuantity: item.quantity,
+          unitPrice: item.unit_price,
+        }))
+        setSelectedReturnItems(items)
+        setNewReturn(prev => ({
+          ...prev,
+          returnedItems: items.map(i => ({ productId: i.productId, quantity: i.returnQuantity })),
+        }))
+      } else {
+        setSelectedReturnItems([])
+      }
     }
+
+    requestAnimationFrame(() => {
+      saleSearchInputRef.current?.blur()
+    })
   }
 
   const handleSaleSearchPaste = (event: React.ClipboardEvent<HTMLInputElement>) => {
@@ -1802,6 +1846,125 @@ export function Returns() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Return Invoice Success Dialog */}
+      <Dialog open={!!returnSuccessData} onOpenChange={(open) => { if (!open) setReturnSuccessData(null) }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <div className="flex items-center justify-center mb-2">
+              <div className="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center">
+                <CheckCircle className="h-6 w-6 text-green-600" />
+              </div>
+            </div>
+            <DialogTitle className="text-center text-xl">Return Processed</DialogTitle>
+            <DialogDescription className="text-center">
+              {returnSuccessData?.saleNumber} · Ref: {returnSuccessData?.originalSaleNumber}
+            </DialogDescription>
+          </DialogHeader>
+
+          {returnSuccessData && (
+            <div className="space-y-3 text-sm">
+              {returnSuccessData.returnedItems.length > 0 && (
+                <div className="rounded-lg border p-3 space-y-1">
+                  <p className="font-semibold text-red-600 text-xs uppercase tracking-wide">Returned</p>
+                  {returnSuccessData.returnedItems.map((it, i) => (
+                    <div key={i} className="flex justify-between">
+                      <span>{it.name} × {it.qty}</span>
+                      <span className="text-red-600">-Rs {(it.qty * it.price).toLocaleString()}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {returnSuccessData.exchangedItems.length > 0 && (
+                <div className="rounded-lg border p-3 space-y-1">
+                  <p className="font-semibold text-blue-600 text-xs uppercase tracking-wide">Exchanged</p>
+                  {returnSuccessData.exchangedItems.map((it, i) => (
+                    <div key={i} className="flex justify-between">
+                      <span>{it.name} × {it.qty}</span>
+                      <span>Rs {(it.qty * it.price).toLocaleString()}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="rounded-lg bg-gray-50 p-3 space-y-1">
+                {returnSuccessData.refundTotal > 0 && (
+                  <div className="flex justify-between text-red-600 font-medium">
+                    <span>Refund Amount</span>
+                    <span>Rs {returnSuccessData.refundTotal.toLocaleString()}</span>
+                  </div>
+                )}
+                {returnSuccessData.exchangeTotal > 0 && (
+                  <div className="flex justify-between font-medium">
+                    <span>Exchange Amount</span>
+                    <span>Rs {returnSuccessData.exchangeTotal.toLocaleString()}</span>
+                  </div>
+                )}
+                <div className="flex justify-between font-bold border-t pt-1 mt-1">
+                  <span>Net {returnSuccessData.netAmount >= 0 ? "Payable" : "Refund"}</span>
+                  <span className={returnSuccessData.netAmount < 0 ? "text-red-600" : ""}>
+                    Rs {Math.abs(returnSuccessData.netAmount).toLocaleString()}
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 pt-1">
+                <Button
+                  variant="outline"
+                  className="flex items-center gap-2 border-blue-200 text-blue-700 hover:bg-blue-50"
+                  onClick={() => downloadReturnNote(returnSuccessData!)}
+                >
+                  <FileText className="h-4 w-4" />
+                  Download
+                </Button>
+                <Button
+                  variant="outline"
+                  className="flex items-center gap-2 border-gray-200 text-gray-700 hover:bg-gray-50"
+                  onClick={() => printReturnNote(returnSuccessData!)}
+                >
+                  <Printer className="h-4 w-4" />
+                  Print
+                </Button>
+              </div>
+              <Button variant="ghost" className="w-full text-gray-500" onClick={() => setReturnSuccessData(null)}>
+                Close
+              </Button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
+}
+
+function buildReturnNoteHtml(d: {
+  saleNumber: string
+  originalSaleNumber: string
+  returnedItems: Array<{ name: string; qty: number; price: number }>
+  exchangedItems: Array<{ name: string; qty: number; price: number }>
+  refundTotal: number
+  exchangeTotal: number
+  netAmount: number
+  date: string
+}): string {
+  const rows = (items: typeof d.returnedItems, label: string, color: string) =>
+    items.map(it => `<tr><td>${label}</td><td>${it.name}</td><td>${it.qty}</td><td>Rs ${it.price.toLocaleString()}</td><td style="color:${color}">Rs ${(it.qty * it.price).toLocaleString()}</td></tr>`).join('')
+  return `<!DOCTYPE html><html><head><title>Return Note - ${d.saleNumber}</title>
+  <style>body{font-family:sans-serif;padding:30px;max-width:600px;margin:auto}h2{margin:0}table{width:100%;border-collapse:collapse;margin:16px 0}th,td{border:1px solid #e2e8f0;padding:8px 12px;text-align:left}th{background:#f8fafc;font-weight:600}.total{font-weight:700}.brand{color:#4f46e5;font-size:20px;font-weight:800}</style>
+  </head><body>
+  <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #e2e8f0;padding-bottom:12px;margin-bottom:16px">
+    <div><p class="brand">SARWAT TRADER</p><p style="margin:2px 0;color:#64748b;font-size:13px">Return / Exchange Note</p></div>
+    <div style="text-align:right;font-size:13px;color:#64748b"><p>${d.saleNumber}</p><p>Ref: ${d.originalSaleNumber}</p><p>${d.date}</p></div>
+  </div>
+  <table><thead><tr><th>Type</th><th>Product</th><th>Qty</th><th>Unit Price</th><th>Amount</th></tr></thead><tbody>
+    ${rows(d.returnedItems, 'Return', '#dc2626')}
+    ${rows(d.exchangedItems, 'Exchange', '#2563eb')}
+  </tbody></table>
+  <div style="text-align:right;font-size:14px">
+    ${d.refundTotal > 0 ? `<p style="color:#dc2626">Refund: Rs ${d.refundTotal.toLocaleString()}</p>` : ''}
+    ${d.exchangeTotal > 0 ? `<p>Exchange: Rs ${d.exchangeTotal.toLocaleString()}</p>` : ''}
+    <p class="total" style="font-size:16px;border-top:2px solid #e2e8f0;padding-top:8px;margin-top:8px">
+      Net ${d.netAmount >= 0 ? 'Payable' : 'Refund'}: Rs ${Math.abs(d.netAmount).toLocaleString()}
+    </p>
+  </div>
+  </body></html>`
 }
