@@ -7,7 +7,9 @@ import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, Edit, Trash2, Plus } from "lucide-react";
+import { Loader2, Edit, Trash2, Plus, CalendarIcon } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
 import { format } from "date-fns";
@@ -200,9 +202,9 @@ export function Salaries() {
                         <DialogHeader>
                             <DialogTitle>Add Salary</DialogTitle>
                         </DialogHeader>
-                        <div className="space-y-4">
-                            <div>
-                                <label>Employee</label>
+                        <div className="space-y-4 pt-4">
+                            <div className="space-y-2">
+                                <Label>Employee</Label>
                                 <Select
                                     value={form.employee_id || ""}
                                     onValueChange={val => setForm(f => ({ ...f, employee_id: val }))}
@@ -217,8 +219,8 @@ export function Salaries() {
                                     </SelectContent>
                                 </Select>
                             </div>
-                            <div>
-                                <label>Month</label>
+                            <div className="space-y-2">
+                                <Label>Month</Label>
                                 <Select
                                     value={form.month ? String(form.month) : ""}
                                     onValueChange={val => setForm(f => ({ ...f, month: Number(val) }))}
@@ -233,8 +235,8 @@ export function Salaries() {
                                     </SelectContent>
                                 </Select>
                             </div>
-                            <div>
-                                <label>Year</label>
+                            <div className="space-y-2">
+                                <Label>Year</Label>
                                 <Select
                                     value={form.year ? String(form.year) : ""}
                                     onValueChange={val => setForm(f => ({ ...f, year: Number(val) }))}
@@ -249,8 +251,8 @@ export function Salaries() {
                                     </SelectContent>
                                 </Select>
                             </div>
-                            <div>
-                                <label>Amount</label>
+                            <div className="space-y-2">
+                                <Label>Amount</Label>
                                 <Input
                                     type="number"
                                     value={form.amount || ""}
@@ -258,22 +260,23 @@ export function Salaries() {
                                     placeholder="Amount"
                                 />
                             </div>
-                            <div>
-                                <label>Paid</label>
-                                <input
-                                    type="checkbox"
+                             <div className="flex items-center space-x-2 py-2">
+                                <Checkbox
+                                    id="is_paid"
                                     checked={!!form.is_paid}
-                                    onChange={e => setForm(f => ({ ...f, is_paid: e.target.checked }))}
+                                    onCheckedChange={checked => setForm(f => ({ ...f, is_paid: !!checked }))}
                                 />
+                                <Label htmlFor="is_paid" className="cursor-pointer font-medium">Mark as Paid</Label>
                             </div>
-                            <div>
-                                <label className="block mb-1 font-medium">Paid Date</label>
+                            <div className="space-y-2">
+                                <Label className="block font-medium">Paid Date</Label>
                                 <Popover>
                                     <PopoverTrigger asChild>
                                         <Button
                                             variant={form.paid_date ? "default" : "outline"}
                                             className="w-full justify-start text-left font-normal"
                                         >
+                                            <CalendarIcon className="mr-2 h-4 w-4" />
                                             {form.paid_date ? format(new Date(form.paid_date), "yyyy-MM-dd") : "Pick a date"}
                                         </Button>
                                     </PopoverTrigger>
@@ -287,8 +290,8 @@ export function Salaries() {
                                     </PopoverContent>
                                 </Popover>
                             </div>
-                            <div>
-                                <label>Notes</label>
+                            <div className="space-y-2">
+                                <Label>Notes</Label>
                                 <Input
                                     type="text"
                                     value={form.notes || ""}
@@ -432,9 +435,9 @@ export function Salaries() {
                     <DialogHeader>
                         <DialogTitle>Edit Salary</DialogTitle>
                     </DialogHeader>
-                    <div className="space-y-4">
-                        <div>
-                            <label>Employee</label>
+                    <div className="space-y-4 pt-4">
+                        <div className="space-y-2">
+                            <Label>Employee</Label>
                             <Select
                                 value={form.employee_id || ""}
                                 onValueChange={val => setForm(f => ({ ...f, employee_id: val }))}
@@ -449,8 +452,8 @@ export function Salaries() {
                                 </SelectContent>
                             </Select>
                         </div>
-                        <div>
-                            <label>Month</label>
+                        <div className="space-y-2">
+                            <Label>Month</Label>
                             <Select
                                 value={form.month ? String(form.month) : ""}
                                 onValueChange={val => setForm(f => ({ ...f, month: Number(val) }))}
@@ -465,8 +468,8 @@ export function Salaries() {
                                 </SelectContent>
                             </Select>
                         </div>
-                        <div>
-                            <label>Year</label>
+                        <div className="space-y-2">
+                            <Label>Year</Label>
                             <Select
                                 value={form.year ? String(form.year) : ""}
                                 onValueChange={val => setForm(f => ({ ...f, year: Number(val) }))}
@@ -481,8 +484,8 @@ export function Salaries() {
                                 </SelectContent>
                             </Select>
                         </div>
-                        <div>
-                            <label>Amount</label>
+                        <div className="space-y-2">
+                            <Label>Amount</Label>
                             <Input
                                 type="number"
                                 value={form.amount || ""}
@@ -490,22 +493,23 @@ export function Salaries() {
                                 placeholder="Amount"
                             />
                         </div>
-                        <div>
-                            <label>Paid</label>
-                            <input
-                                type="checkbox"
+                         <div className="flex items-center space-x-2 py-2">
+                            <Checkbox
+                                id="edit_is_paid"
                                 checked={!!form.is_paid}
-                                onChange={e => setForm(f => ({ ...f, is_paid: e.target.checked }))}
+                                onCheckedChange={checked => setForm(f => ({ ...f, is_paid: !!checked }))}
                             />
+                            <Label htmlFor="edit_is_paid" className="cursor-pointer font-medium">Mark as Paid</Label>
                         </div>
-                        <div>
-                            <label className="block mb-1 font-medium">Paid Date</label>
+                        <div className="space-y-2">
+                            <Label className="block font-medium">Paid Date</Label>
                             <Popover>
                                 <PopoverTrigger asChild>
                                     <Button
                                         variant={form.paid_date ? "default" : "outline"}
                                         className="w-full justify-start text-left font-normal"
                                     >
+                                        <CalendarIcon className="mr-2 h-4 w-4" />
                                         {form.paid_date ? format(new Date(form.paid_date), "yyyy-MM-dd") : "Pick a date"}
                                     </Button>
                                 </PopoverTrigger>
@@ -519,8 +523,8 @@ export function Salaries() {
                                 </PopoverContent>
                             </Popover>
                         </div>
-                        <div>
-                            <label>Notes</label>
+                        <div className="space-y-2">
+                            <Label>Notes</Label>
                             <Input
                                 type="text"
                                 value={form.notes || ""}

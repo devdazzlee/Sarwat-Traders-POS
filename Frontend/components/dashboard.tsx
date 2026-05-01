@@ -10,6 +10,7 @@ import { getDefaultDashboardTab } from "@/lib/role-utils";
 import { Customers } from "@/components/customers";
 import { Reports } from "@/components/reports";
 import { Settings } from "@/components/settings";
+import { Profile } from "@/components/profile";
 import { SalesHistory } from "@/components/sales-history";
 import { EmployeeManagement } from "@/components/employee-management";
 import { Categories } from "@/components/categories";
@@ -179,6 +180,8 @@ export function Dashboard({ onLogout }: DashboardProps) {
         return <Integrations />;
       case "backup":
         return <Backup />;
+      case "profile":
+        return <Profile />;
       case "settings":
         return <Settings />;
       case "printer-settings":

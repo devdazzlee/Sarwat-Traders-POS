@@ -62,6 +62,26 @@ export class SupplierService {
         });
     }
 
+    async deleteSupplier(id: string) {
+        const supplier = await prisma.supplier.findUnique({
+            where: { id },
+            include: {
+                _count: {
+                    select: { products: true }
+                }
+            }
+        });
+
+        if (!supplier) throw new AppError(404, 'Supplier not found');
+        if (supplier._count.products > 0) {
+            throw new AppError(400, 'Cannot delete supplier with associated products. Please reassign or delete the products first.');
+        }
+
+        return prisma.supplier.delete({
+            where: { id },
+        });
+    }
+
     async listSuppliers({
         page = 1,
         limit = 100,

@@ -1,10 +1,6 @@
-/**
- * Offline Sync Manager
- * Handles synchronization of offline data when connection is restored
- */
-
-import { offlineDB } from './offline-db';
+import { offlineDB, SyncQueueItem } from './offline-db';
 import apiClient from './apiClient';
+import { API_BASE } from '../config/constants';
 
 export interface SyncStatus {
   isOnline: boolean;
@@ -22,245 +18,165 @@ class OfflineSyncManager {
     isSyncing: false,
     lastSync: 0,
     pendingCount: 0,
-    failedCount: 0
+    failedCount: 0,
   };
 
   constructor() {
     if (typeof window !== 'undefined') {
-      // Listen for online/offline events
-      window.addEventListener('online', () => this.handleOnline());
-      window.addEventListener('offline', () => this.handleOffline());
-      
-      // Check online status periodically
-      this.startPeriodicCheck();
+      window.addEventListener('online', this.handleOnline);
+      window.addEventListener('offline', this.handleOffline);
+      this.startPeriodicSync();
+      offlineDB.resetStuckItems().catch(() => {});
+      this.updateCounts();
     }
   }
 
-  private handleOnline() {
-    console.log('🌐 Connection restored - starting sync...');
+  private handleOnline = () => {
     this.status.isOnline = true;
     this.notifyListeners();
     this.syncAll();
-  }
+  };
 
-  private handleOffline() {
-    console.log('📡 Connection lost - switching to offline mode');
+  private handleOffline = () => {
     this.status.isOnline = false;
     this.notifyListeners();
-  }
+  };
 
-  private startPeriodicCheck() {
-    // Check every 30 seconds
+  private startPeriodicSync() {
     this.syncInterval = setInterval(() => {
       if (this.status.isOnline && !this.status.isSyncing) {
         this.syncAll();
       }
-    }, 30000);
+    }, 30_000);
   }
 
-  // Sync all pending data
+  private async updateCounts() {
+    const [pending, failed] = await Promise.all([
+      offlineDB.getPendingCount(),
+      offlineDB.getFailedCount(),
+    ]);
+    this.status.pendingCount = pending;
+    this.status.failedCount = failed;
+    this.notifyListeners();
+  }
+
   async syncAll() {
     const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
-    if (this.status.isSyncing || !this.status.isOnline || !token) {
-      return;
-    }
+    if (this.status.isSyncing || !this.status.isOnline || !token) return;
 
     this.status.isSyncing = true;
     this.notifyListeners();
 
     try {
-      // 1. Sync pending requests
-      await this.syncPendingRequests();
-      
-      // 2. Sync unsynced sales
-      await this.syncSales();
-      
-      // 3. Pull fresh data from server
+      await this.processSyncQueue(token);
       await this.pullFreshData();
-      
       this.status.lastSync = Date.now();
-      this.status.pendingCount = 0;
-      this.status.failedCount = 0;
-      
-      console.log('✅ Sync completed successfully');
     } catch (error) {
-      console.error('❌ Sync failed:', error);
-      this.status.failedCount++;
+      console.error('Sync error:', error);
     } finally {
       this.status.isSyncing = false;
-      this.notifyListeners();
+      await this.updateCounts();
     }
   }
 
-  // Sync pending API requests
-  private async syncPendingRequests() {
-    const pending = await offlineDB.getPendingRequests();
-    console.log(`📤 Syncing ${pending.length} pending requests...`);
+  private async processSyncQueue(token: string) {
+    const items = await offlineDB.getPendingItems();
+    if (items.length === 0) return;
 
-    for (const request of pending) {
-      try {
-        // Skip if too many retries
-        if (request.retries > 5) {
-          console.warn(`⚠️ Skipping request after ${request.retries} retries:`, request.url);
-          await offlineDB.removePendingRequest(request.id);
-          continue;
-        }
-
-        const token = localStorage.getItem('token');
-        const authHeader = token ? { 'Authorization': `Bearer ${token}` } : {};
-
-        // Make the request
-        const response = await fetch(request.url, {
-          method: request.method,
-          headers: {
-            'Content-Type': 'application/json',
-            ...authHeader,
-            ...request.headers
-          },
-          body: request.body ? JSON.stringify(request.body) : undefined
-        });
-
-        if (response.ok) {
-          console.log('✅ Synced request:', request.url);
-          await offlineDB.removePendingRequest(request.id);
-        } else {
-          console.warn('⚠️ Request failed:', response.status, request.url);
-          await offlineDB.incrementRetries(request.id);
-        }
-      } catch (error) {
-        console.error('❌ Failed to sync request:', error);
-        await offlineDB.incrementRetries(request.id);
-      }
+    console.log(`Syncing ${items.length} queued items`);
+    for (const item of items) {
+      await this.processItem(item, token);
     }
   }
 
-  // Sync unsynced sales
-  private async syncSales() {
-    const unsyncedSales = await offlineDB.getUnsyncedSales();
-    console.log(`📤 Syncing ${unsyncedSales.length} unsynced sales...`);
+  private async processItem(item: SyncQueueItem, token: string) {
+    await offlineDB.markProcessing(item.id);
 
-    for (const sale of unsyncedSales) {
-      try {
-        // Prepare sale payload for API
-        const salePayload = {
-          items: sale.products.map((item: any) => ({
-            productId: item.productId || item.id,
-            quantity: item.quantity,
-            price: item.price
-          })),
-          paymentMethod: sale.payment?.method || 'CASH',
-          branchId: sale.branchId,
-          customerId: sale.customer?.id
-        };
-        
-        // Post sale to server
-        const response = await apiClient.post('/sale', salePayload);
-        
-        if (response?.data?.data) {
-          console.log('✅ Synced sale:', sale.id);
-          await offlineDB.markSaleSynced(sale.id);
-        }
-      } catch (error) {
-        console.error('❌ Failed to sync sale:', error);
-        // Don't mark as synced if it failed
-      }
-    }
-  }
-
-  // Pull fresh data from server
-  private async pullFreshData() {
-    console.log('📥 Pulling fresh data from server...');
+    const url = item.url.startsWith('http') ? item.url : `${API_BASE}${item.url}`;
 
     try {
-      // Fetch products
-      const products = await apiClient.get('/products');
-      let productsArray: any[] = [];
-      
-      // Handle different API response structures
-      if (products?.data) {
-        if (Array.isArray(products.data)) {
-          productsArray = products.data;
-        } else if (Array.isArray(products.data.data)) {
-          productsArray = products.data.data;
-        } else if (products.data.data && Array.isArray(products.data.data)) {
-          productsArray = products.data.data;
-        }
-      }
-      
-      if (productsArray.length > 0) {
-        await offlineDB.saveProducts(productsArray);
-        console.log(`✅ Updated ${productsArray.length} products`);
-      } else {
-        console.warn('No products array found in response:', products);
-      }
+      const response = await fetch(url, {
+        method: item.method,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          'X-Operation-Id': item.operationId,
+          ...item.headers,
+        },
+        body: item.payload ? JSON.stringify(item.payload) : undefined,
+      });
 
-      // Fetch customers (use /customer endpoint, not /customers)
-      const customers = await apiClient.get('/customer');
-      const customersArray = Array.isArray(customers?.data?.data) 
-        ? customers.data.data 
-        : Array.isArray(customers?.data) 
-        ? customers.data 
-        : [];
-      if (customersArray.length > 0) {
-        await offlineDB.saveCustomers(customersArray);
-        console.log(`✅ Updated ${customersArray.length} customers`);
+      if (response.ok) {
+        await offlineDB.markSynced(item.id);
+        console.log(`Synced: ${item.method} ${item.url}`);
       } else {
-        console.warn('No customers array found in response:', customers);
+        await offlineDB.markFailed(item.id, `HTTP ${response.status}`);
       }
-
-      // Clear expired cache
-      await offlineDB.clearExpiredCache();
-    } catch (error) {
-      console.error('❌ Failed to pull fresh data:', error);
+    } catch (error: any) {
+      await offlineDB.markFailed(item.id, error?.message || 'Network error');
     }
   }
 
-  // Status management
+  private async pullFreshData() {
+    const [productsResult, customersResult] = await Promise.allSettled([
+      apiClient.get('/products', { params: { fetch_all: true } }),
+      apiClient.get('/customer'),
+    ]);
+
+    if (productsResult.status === 'fulfilled') {
+      const raw = productsResult.value?.data?.data;
+      if (Array.isArray(raw) && raw.length > 0) {
+        await offlineDB.saveProducts(raw);
+      }
+    }
+
+    if (customersResult.status === 'fulfilled') {
+      const raw = customersResult.value?.data?.data;
+      if (Array.isArray(raw) && raw.length > 0) {
+        await offlineDB.saveCustomers(raw);
+        await offlineDB.setCachedData('customers', raw);
+      }
+    }
+  }
+
+  async retryFailed() {
+    await offlineDB.retryFailed();
+    await this.updateCounts();
+    if (this.status.isOnline) this.syncAll();
+  }
+
   subscribe(listener: (status: SyncStatus) => void) {
     this.listeners.push(listener);
-    listener(this.status); // Immediately call with current status
-    
+    listener({ ...this.status });
     return () => {
-      this.listeners = this.listeners.filter(l => l !== listener);
+      this.listeners = this.listeners.filter((l) => l !== listener);
     };
   }
 
   private notifyListeners() {
-    this.listeners.forEach(listener => listener({ ...this.status }));
+    this.listeners.forEach((l) => l({ ...this.status }));
   }
 
   getStatus(): SyncStatus {
     return { ...this.status };
   }
 
-  // Manual sync trigger
-  async triggerSync() {
-    if (this.status.isOnline) {
-      await this.syncAll();
-    } else {
-      console.warn('⚠️ Cannot sync - no internet connection');
-    }
-  }
-
-  // Check if we can make API requests
   canMakeRequest(): boolean {
     return this.status.isOnline;
   }
 
-  // Cleanup
+  async triggerSync() {
+    if (this.status.isOnline) await this.syncAll();
+  }
+
   destroy() {
-    if (this.syncInterval) {
-      clearInterval(this.syncInterval);
-    }
+    if (this.syncInterval) clearInterval(this.syncInterval);
     if (typeof window !== 'undefined') {
-      window.removeEventListener('online', () => this.handleOnline());
-      window.removeEventListener('offline', () => this.handleOffline());
+      window.removeEventListener('online', this.handleOnline);
+      window.removeEventListener('offline', this.handleOffline);
     }
   }
 }
 
-// Create singleton instance
 export const syncManager = new OfflineSyncManager();
-
 export default syncManager;
-

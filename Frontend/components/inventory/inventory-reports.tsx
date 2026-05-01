@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { DatePicker } from "@/components/ui/date-picker";
+import { format, parseISO } from "date-fns";
 import { 
   Download, 
   FileText, 
@@ -200,22 +202,18 @@ export function InventoryReports() {
 
           <div className="flex flex-wrap items-end gap-3 pt-4 border-t border-slate-100">
             <div className="space-y-1.5 flex-1 min-w-[120px]">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider ml-1">From Date</label>
-              <Input
-                type="date"
-                value={filters.startDate}
-                onChange={(e) => setFilters({ ...filters, startDate: e.target.value })}
-                className="h-9 border-slate-200 bg-slate-50/50 text-xs font-semibold"
+              <label className="text-[10px] text-slate-500 uppercase tracking-wider ml-1">From Date</label>
+              <DatePicker
+                date={filters.startDate ? parseISO(filters.startDate) : undefined}
+                setDate={(date) => setFilters({ ...filters, startDate: date ? format(date, "yyyy-MM-dd") : "" })}
               />
             </div>
 
             <div className="space-y-1.5 flex-1 min-w-[120px]">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider ml-1">To Date</label>
-              <Input
-                type="date"
-                value={filters.endDate}
-                onChange={(e) => setFilters({ ...filters, endDate: e.target.value })}
-                className="h-9 border-slate-200 bg-slate-50/50 text-xs font-semibold"
+              <label className="text-[10px] text-slate-500 uppercase tracking-wider ml-1">To Date</label>
+              <DatePicker
+                date={filters.endDate ? parseISO(filters.endDate) : undefined}
+                setDate={(date) => setFilters({ ...filters, endDate: date ? format(date, "yyyy-MM-dd") : "" })}
               />
             </div>
 
@@ -297,8 +295,8 @@ export function InventoryReports() {
                        <RefreshCw className="h-5 w-5 text-blue-600 animate-pulse" />
                     </div>
                   </div>
-                  <h3 className="text-sm font-black text-slate-800 tracking-tight uppercase mb-1">Generating Neural Report...</h3>
-                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest italic animate-pulse">Aggregating Cross-Branch Ledger Data</p>
+                  <h3 className="text-sm font-medium text-slate-800 tracking-tight uppercase mb-1">Generating Report...</h3>
+                  <p className="text-[10px] text-slate-400 uppercase tracking-widest italic animate-pulse">Aggregating Data</p>
                </div>
              ) : reportType === "valuation" && data?.byLocation ? (
                 <div className="divide-y divide-slate-100">
@@ -328,11 +326,11 @@ export function InventoryReports() {
                           <TableBody>
                             {(loc.items || []).map((item: any, i: number) => (
                               <TableRow key={i} className="hover:bg-slate-50/30">
-                                <TableCell className="font-bold text-slate-700 text-xs">{item.product?.name}</TableCell>
-                                <TableCell className="text-xs text-slate-400 font-medium">{item.product?.sku}</TableCell>
-                                <TableCell className="text-right font-bold text-slate-800 text-xs">{item.quantity}</TableCell>
-                                <TableCell className="text-right text-xs text-slate-400">{formatCurrency(item.value / item.quantity)}</TableCell>
-                                <TableCell className="text-right font-extrabold text-slate-900 text-xs">{formatCurrency(item.value)}</TableCell>
+                                <TableCell className="font-medium text-slate-700 text-xs">{item.product?.name}</TableCell>
+                                <TableCell className="text-xs text-slate-500">{item.product?.sku}</TableCell>
+                                <TableCell className="text-right font-medium text-slate-800 text-xs">{item.quantity}</TableCell>
+                                <TableCell className="text-right text-xs text-slate-500">{formatCurrency(item.value / item.quantity)}</TableCell>
+                                <TableCell className="text-right font-medium text-slate-900 text-xs">{formatCurrency(item.value)}</TableCell>
                               </TableRow>
                             ))}
                           </TableBody>

@@ -54,6 +54,8 @@ import {
 } from "lucide-react";
 import apiClient from "@/lib/apiClient";
 import { API_BASE } from "@/config/constants";
+import { offlineDB } from "@/lib/offline-db";
+import { cachedGet, queueMutation } from "@/lib/offline-helpers";
 import { useToast } from "@/hooks/use-toast";
 import { PageLoader } from "@/components/ui/page-loader";
 import { StatCardSkeleton } from "@/components/ui/stat-card-skeleton";
@@ -93,35 +95,35 @@ export function Customers({ onViewLedger }: CustomersProps) {
   const [isSummaryLoading, setIsSummaryLoading] = useState(false);
   const [ledgerCustomerId, setLedgerCustomerId] = useState<string | null>(null);
 
-  // 1) Fetch customers
+  // 1) Fetch customers — falls back to IndexedDB when offline
   const fetchCustomers = async () => {
     setIsLoading(true);
     try {
-      const res = await apiClient.get(`${API_BASE}/customer`);
-      // API shape: { success, message, data: Customer[] }
-      setCustomers(res.data.data);
+      if (!navigator.onLine) {
+        const cached = await offlineDB.getCustomers();
+        if (cached.length > 0) {
+          setCustomers(cached.map((c) => c.data as Customer));
+          return;
+        }
+      }
+      const data = await cachedGet<Customer[]>('/customer', undefined, 'customers-mgmt');
+      setCustomers(data || []);
     } catch (err: any) {
       console.log(err);
-      let errorMessage = "Failed to load customers";
-      if (err.response?.data?.message) errorMessage = err.response.data.message;
-      else if (err.message) errorMessage = err.message;
-      toast({
-        title: "Error",
-        description: errorMessage,
-        variant: "destructive",
-      });
+      toast({ title: "Error", description: "Failed to load customers", variant: "destructive" });
     } finally {
       setIsLoading(false);
     }
   };
 
   const fetchCreditSummary = async () => {
+    if (!navigator.onLine) return; // skip when offline — cached value stays
     setIsSummaryLoading(true);
     try {
       const res = await apiClient.get(`${API_BASE}/customer-ledger/summary`);
       setCreditSummary({
         totalOutstanding: res.data.data?.totalOutstanding || 0,
-        totalPayable: res.data.data?.totalPayable || 0
+        totalPayable: res.data.data?.totalPayable || 0,
       });
     } catch (err) {
       console.error("Summary fetch error:", err);
@@ -142,70 +144,59 @@ export function Customers({ onViewLedger }: CustomersProps) {
     loadData();
   }, []);
 
-  // 2) Create customer (all fields)
+  // 2) Create customer
   const handleAddCustomer = async () => {
-    if (!newCustomer.email) return;
     setIsAdding(true);
     try {
-      await apiClient.post(`${API_BASE}/customer`, {
+      const payload = {
         email: newCustomer.email,
         name: newCustomer.name || "",
         phone_number: newCustomer.phone_number || "",
         address: newCustomer.address || "",
-        billing_address: newCustomer.billing_address || "",
+        billing_address: (newCustomer as any).billing_address || "",
         credit_limit: newCustomer.credit_limit ? Number(newCustomer.credit_limit) : 0,
-      });
+      };
+      const { queued } = await queueMutation('POST', '/customer', payload, 'customer');
       setNewCustomer({});
       setIsAddDialogOpen(false);
-      toast({
-        title: "Success",
-        description: "Customer created successfully",
-      });
-      fetchCustomers();
+      if (queued) {
+        toast({ title: "Saved Offline", description: "Customer will sync when connected." });
+      } else {
+        toast({ title: "Success", description: "Customer created successfully." });
+        fetchCustomers();
+      }
     } catch (err: any) {
-      console.log(err);
-      let errorMessage = "Failed to create customer";
-      if (err.response?.data?.message) errorMessage = err.response.data.message;
-      else if (err.message) errorMessage = err.message;
-      toast({
-        title: "Error",
-        description: errorMessage,
-        variant: "destructive",
-      });
+      toast({ title: "Error", description: err.response?.data?.message || "Failed to create customer", variant: "destructive" });
     } finally {
       setIsAdding(false);
     }
   };
 
-  // Edit customer (all fields, use PUT)
+  // Edit customer
   const handleEditCustomer = async () => {
     if (!editingCustomer) return;
     setIsEditing(true);
     try {
-      await apiClient.put(`${API_BASE}/customer/${editingCustomer.id}`, {
+      const payload = {
         email: editingCustomer.email,
         name: editingCustomer.name || "",
         phone_number: editingCustomer.phone_number || "",
         address: editingCustomer.address || "",
-        billing_address: editingCustomer.billing_address || "",
+        billing_address: (editingCustomer as any).billing_address || "",
         credit_limit: editingCustomer.credit_limit ? Number(editingCustomer.credit_limit) : 0,
-      });
+      };
+      const { queued } = await queueMutation('PUT', `/customer/${editingCustomer.id}`, payload, 'customer');
       setEditingCustomer(null);
-      toast({
-        title: "Success",
-        description: "Customer updated successfully",
-      });
-      fetchCustomers();
+      if (queued) {
+        // Optimistic local update
+        setCustomers((prev) => prev.map((c) => c.id === editingCustomer.id ? { ...c, ...payload } : c));
+        toast({ title: "Saved Offline", description: "Customer update will sync when connected." });
+      } else {
+        toast({ title: "Success", description: "Customer updated successfully." });
+        fetchCustomers();
+      }
     } catch (err: any) {
-      console.log(err);
-      let errorMessage = "Failed to update customer";
-      if (err.response?.data?.message) errorMessage = err.response.data.message;
-      else if (err.message) errorMessage = err.message;
-      toast({
-        title: "Error",
-        description: errorMessage,
-        variant: "destructive",
-      });
+      toast({ title: "Error", description: err.response?.data?.message || "Failed to update customer", variant: "destructive" });
     } finally {
       setIsEditing(false);
     }
@@ -216,23 +207,18 @@ export function Customers({ onViewLedger }: CustomersProps) {
     if (!deleteTargetCustomer) return;
     setIsDeletingCustomer(true);
     try {
-      await apiClient.delete(`${API_BASE}/customer/${deleteTargetCustomer.id}`);
-      toast({
-        title: "Success",
-        description: "Customer deleted successfully",
-      });
+      const { queued } = await queueMutation('DELETE', `/customer/${deleteTargetCustomer.id}`, undefined, 'customer');
+      if (queued) {
+        // Optimistic local removal
+        setCustomers((prev) => prev.filter((c) => c.id !== deleteTargetCustomer.id));
+        toast({ title: "Deleted Offline", description: "Deletion will sync when connected." });
+      } else {
+        toast({ title: "Success", description: "Customer deleted successfully." });
+        fetchCustomers();
+      }
       setDeleteTargetCustomer(null);
-      fetchCustomers();
     } catch (err: any) {
-      console.log(err);
-      let errorMessage = "Failed to delete customer";
-      if (err.response?.data?.message) errorMessage = err.response.data.message;
-      else if (err.message) errorMessage = err.message;
-      toast({
-        title: "Error",
-        description: errorMessage,
-        variant: "destructive",
-      });
+      toast({ title: "Error", description: err.response?.data?.message || "Failed to delete customer", variant: "destructive" });
     } finally {
       setIsDeletingCustomer(false);
     }
@@ -516,9 +502,7 @@ export function Customers({ onViewLedger }: CustomersProps) {
                     </TableCell>
                     <TableCell>
                       <Badge
-                        variant={
-                          customer.is_active ? "default" : "secondary"
-                        }
+                        variant="status"
                         className={
                           customer.is_active
                             ? "bg-green-100 text-green-800"
@@ -738,18 +722,16 @@ export function Customers({ onViewLedger }: CustomersProps) {
         open={!!ledgerCustomerId} 
         onOpenChange={(open) => !open && setLedgerCustomerId(null)}
       >
-        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto p-0 border-none bg-transparent shadow-none">
+        <DialogContent className="max-w-[95vw] w-full lg:max-w-[1400px] max-h-[95vh] overflow-hidden p-0 border-none bg-white shadow-2xl rounded-xl">
           <DialogHeader className="sr-only">
             <DialogTitle>Customer Ledger History</DialogTitle>
             <DialogDescription>View transaction and payment history for this customer.</DialogDescription>
           </DialogHeader>
           {ledgerCustomerId && (
-            <div className="bg-white rounded-xl shadow-2xl p-1 overflow-hidden">
-               <CustomerLedger 
-                customerId={ledgerCustomerId} 
-                onBack={() => setLedgerCustomerId(null)} 
-              />
-            </div>
+            <CustomerLedger 
+              customerId={ledgerCustomerId} 
+              onBack={() => setLedgerCustomerId(null)} 
+            />
           )}
         </DialogContent>
       </Dialog>

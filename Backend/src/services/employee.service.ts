@@ -1,5 +1,6 @@
 import { prisma } from '../prisma/client';
 import { CreateEmployeeInput } from '../validations/employee.validation';
+import { AppError } from '../utils/apiError';
 
 export class EmployeeService {
   async createEmployee(data: CreateEmployeeInput, branch_id: string) {
@@ -40,9 +41,28 @@ export class EmployeeService {
   }
 
   async deleteEmployee(id: string) {
-    const employee = await prisma.employee.delete({
+    const employee = await prisma.employee.findUnique({
+      where: { id },
+      include: {
+        _count: {
+          select: {
+            salaries: true,
+            shift_assignments: true,
+          }
+        }
+      }
+    });
+
+    if (!employee) {
+      throw new AppError(404, 'Employee not found');
+    }
+
+    if (employee._count.salaries > 0 || employee._count.shift_assignments > 0) {
+      throw new AppError(400, 'Cannot delete this employee because they have linked salary records or shift assignments. Please delete those records first or deactivate the employee instead.');
+    }
+
+    return await prisma.employee.delete({
       where: { id },
     });
-    return employee;
   }
 }

@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -125,6 +126,9 @@ export function Categories() {
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
   const [editingCategory, setEditingCategory] = useState<Category | null>(null)
   const [loading, setLoading] = useState(false)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [categoryToDelete, setCategoryToDelete] = useState<Category | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [branchesLoading, setBranchesLoading] = useState(false)
   const [imagePreview, setImagePreview] = useState<string | null>(null)
@@ -519,20 +523,25 @@ export function Categories() {
     }
   }
 
+  // Open delete confirmation modal
+  const openDeleteDialog = (category: Category) => {
+    setCategoryToDelete(category)
+    setDeleteOpen(true)
+  }
+
   // Delete category
-  const handleDeleteCategory = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this category?")) return
-
+  const handleDeleteCategory = async () => {
+    if (!categoryToDelete) return
+    setDeleting(true)
     try {
-      setLoading(true)
-      await apiClient.delete(`/categories/${id}`)
-
+      await apiClient.delete(`/categories/${categoryToDelete.id}`)
       toast({
         title: "Success",
-        description: "Category deleted successfully",
+        description: `Category "${categoryToDelete.name}" deleted successfully`,
       })
-
-      setCategories(categories.filter((c) => c.id !== id))
+      setCategories(categories.filter((c) => c.id !== categoryToDelete.id))
+      setDeleteOpen(false)
+      setCategoryToDelete(null)
     } catch (error: any) {
       console.log("Error deleting category:", error)
       toast({
@@ -541,7 +550,7 @@ export function Categories() {
         variant: "destructive",
       })
     } finally {
-      setLoading(false)
+      setDeleting(false)
     }
   }
 
@@ -957,9 +966,9 @@ export function Categories() {
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => handleDeleteCategory(category.id)}
-                    className="text-red-600 hover:text-red-700"
-                    disabled={loading}
+                    onClick={() => openDeleteDialog(category)}
+                    className="text-red-600 hover:bg-red-50 hover:text-red-700 border-red-200"
+                    disabled={deleting}
                   >
                     <Trash2 className="h-3 w-3" />
                   </Button>
@@ -1212,6 +1221,34 @@ export function Categories() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Delete Category Confirmation */}
+      <AlertDialog open={deleteOpen} onOpenChange={(open) => { if (!deleting) { setDeleteOpen(open); if (!open) setCategoryToDelete(null); } }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Category</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete the category{" "}
+              <span className="font-semibold text-gray-900">"{categoryToDelete?.name}"</span>?{" "}
+              This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => { e.preventDefault(); handleDeleteCategory(); }}
+              disabled={deleting}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              {deleting ? (
+                <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Deleting...</>
+              ) : (
+                <><Trash2 className="h-4 w-4 mr-2" /> Delete</>
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

@@ -36,3 +36,8 @@ export const listBrands = asyncHandler(async (req: Request, res: Response) => {
 
     new ApiResponse(result.data, 'Brands retrieved successfully', 200).send(res);
 });
+
+export const deleteBrand = asyncHandler(async (req: Request, res: Response) => {
+    await brandService.deleteBrand(req.params.id);
+    new ApiResponse(null, 'Brand deleted successfully').send(res);
+});

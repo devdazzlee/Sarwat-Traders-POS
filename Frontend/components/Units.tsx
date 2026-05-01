@@ -6,9 +6,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Search, Plus, Loader2, Edit, Eye } from "lucide-react";
+import { Search, Plus, Loader2, Edit, Eye, Trash2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { LoadingButton } from "@/components/ui/loading-button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
@@ -35,6 +36,9 @@ const Units: React.FC = () => {
   const [addOpen, setAddOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [unitToDelete, setUnitToDelete] = useState<Unit | null>(null);
   const [current, setCurrent] = useState<Unit | null>(null);
   const [formName, setFormName] = useState("");
   const [error, setError] = useState<string>("");
@@ -82,6 +86,27 @@ const Units: React.FC = () => {
   const openDetail = (u: Unit) => {
     setCurrent(u);
     setDetailOpen(true);
+  };
+
+  const openDelete = (u: Unit) => {
+    setUnitToDelete(u);
+    setDeleteOpen(true);
+  };
+
+  const handleDelete = async () => {
+    if (!unitToDelete) return;
+    setDeleting(true);
+    try {
+      await apiClient.delete(`${API_BASE}/units/${unitToDelete.id}`);
+      toast({ title: "Deleted", description: `Unit "${unitToDelete.name}" has been deleted.` });
+      setDeleteOpen(false);
+      setUnitToDelete(null);
+      fetchUnits();
+    } catch (err: any) {
+      toast({ title: "Error", description: err?.response?.data?.message || "Failed to delete unit", variant: "destructive" });
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const submit = async () => {
@@ -197,12 +222,9 @@ const Units: React.FC = () => {
                     <TableCell>{u.product_count}</TableCell>
                     <TableCell>{u.created_at.split('T')[0]}</TableCell>
                     <TableCell className="flex space-x-2">
-                      <Button size="sm" variant="outline" onClick={() => openDetail(u)}>
-                        <Eye className="h-4 w-4" />
-                      </Button>
-                      <Button size="sm" variant="outline" onClick={() => openEdit(u)}>
-                        <Edit className="h-4 w-4" />
-                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => openDetail(u)}><Eye className="h-4 w-4" /></Button>
+                      <Button size="sm" variant="outline" onClick={() => openEdit(u)}><Edit className="h-4 w-4" /></Button>
+                      <Button size="sm" variant="outline" className="text-red-600 hover:bg-red-50 hover:text-red-700 border-red-200" onClick={() => openDelete(u)}><Trash2 className="h-4 w-4" /></Button>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -256,6 +278,24 @@ const Units: React.FC = () => {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Delete Confirmation */}
+      <AlertDialog open={deleteOpen} onOpenChange={(open) => { if (!deleting) { setDeleteOpen(open); if (!open) setUnitToDelete(null); } }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Unit</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete the unit <span className="font-semibold text-gray-900">"{unitToDelete?.name}"</span>? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={(e) => { e.preventDefault(); handleDelete(); }} disabled={deleting} className="bg-red-600 hover:bg-red-700">
+              {deleting ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Deleting...</> : <><Trash2 className="h-4 w-4 mr-2" /> Delete</>}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

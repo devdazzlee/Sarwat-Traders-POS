@@ -26,6 +26,7 @@ import { StatCardSkeleton } from "@/components/ui/stat-card-skeleton"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import apiClient from "@/lib/apiClient"
+import { offlineDB } from "@/lib/offline-db"
 import { downloadReturnNote, printReturnNote, type ReturnNoteData } from "@/lib/pdf-generator"
 
 interface Sale {
@@ -745,8 +746,24 @@ export function Returns() {
         payload.customerId = newReturn.customerId
       }
 
-      console.log("📤 Processing return with payload:", payload)
-      
+      console.log("Processing return with payload:", payload)
+
+      if (!navigator.onLine) {
+        await offlineDB.enqueue({
+          operationId: crypto.randomUUID(),
+          type: 'refund',
+          url: `/sale/${newReturn.saleId}/refund`,
+          method: 'PATCH',
+          payload,
+          maxRetries: 5,
+          priority: 9,
+          headers: {},
+        })
+        toast({ title: "Queued Offline", description: "Return will be processed when connection is restored." })
+        setLoading(false)
+        return
+      }
+
       const response = await apiClient.patch(`/sale/${newReturn.saleId}/refund`, payload)
 
       // Build success data for the return note PDF — use correct field names from SelectedReturnItem
@@ -1952,7 +1969,12 @@ function buildReturnNoteHtml(d: {
   <style>body{font-family:sans-serif;padding:30px;max-width:600px;margin:auto}h2{margin:0}table{width:100%;border-collapse:collapse;margin:16px 0}th,td{border:1px solid #e2e8f0;padding:8px 12px;text-align:left}th{background:#f8fafc;font-weight:600}.total{font-weight:700}.brand{color:#4f46e5;font-size:20px;font-weight:800}</style>
   </head><body>
   <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #e2e8f0;padding-bottom:12px;margin-bottom:16px">
-    <div><p class="brand">SARWAT TRADER</p><p style="margin:2px 0;color:#64748b;font-size:13px">Return / Exchange Note</p></div>
+    <div>
+      <p class="brand">SARWAT TRADER</p>
+      <p style="margin:2px 0;color:#64748b;font-size:11px">Shop no 109, 1st floor city shopping mall, Marston road Karachi, Pakistan.</p>
+      <p style="margin:2px 0;color:#64748b;font-size:11px">Contact: 02132727444</p>
+      <p style="margin:2px 0;color:#64748b;font-size:13px">Return / Exchange Note</p>
+    </div>
     <div style="text-align:right;font-size:13px;color:#64748b"><p>${d.saleNumber}</p><p>Ref: ${d.originalSaleNumber}</p><p>${d.date}</p></div>
   </div>
   <table><thead><tr><th>Type</th><th>Product</th><th>Qty</th><th>Unit Price</th><th>Amount</th></tr></thead><tbody>

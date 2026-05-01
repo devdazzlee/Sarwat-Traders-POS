@@ -7,7 +7,17 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Search, Plus, Loader2, Edit, Eye, ToggleRight, ToggleLeft } from "lucide-react";
+import { Search, Plus, Loader2, Edit, Eye, ToggleRight, ToggleLeft, Trash2, AlertTriangle } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import apiClient from "@/lib/apiClient";
 import { API_BASE } from "@/config/constants";
 import { useToast } from "@/hooks/use-toast";
@@ -47,7 +57,9 @@ const Suppliers: React.FC = () => {
   const [addOpen, setAddOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [current, setCurrent] = useState<Supplier | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const [form, setForm] = useState({
     name: "",
@@ -179,6 +191,33 @@ const Suppliers: React.FC = () => {
     }
   };
 
+  const openDelete = (s: Supplier) => {
+    setCurrent(s);
+    setDeleteOpen(true);
+  };
+
+  const confirmDelete = async () => {
+    if (!current) return;
+    setDeleting(true);
+    try {
+      await apiClient.delete(`${API_BASE}/suppliers/${current.id}`);
+      toast({
+        title: "Success",
+        description: "Supplier deleted successfully",
+      });
+      setDeleteOpen(false);
+      fetchList();
+    } catch (e: any) {
+      toast({
+        title: "Error",
+        description: e?.response?.data?.message || e?.message || "Failed to delete supplier",
+        variant: "destructive",
+      });
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const filtered = list.filter(s =>
     s.name.toLowerCase().includes(search.toLowerCase()) ||
     s.code.includes(search)
@@ -256,6 +295,7 @@ const Suppliers: React.FC = () => {
                       <Button size="sm" variant="outline" onClick={() => toggleStatus(s.id)}>
                         {s.status === 'active' ? 'Disable' : 'Enable'}
                       </Button>
+                      <Button size="sm" variant="destructive" onClick={() => openDelete(s)}><Trash2 className="h-4 w-4"/></Button>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -353,6 +393,40 @@ const Suppliers: React.FC = () => {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-red-500" />
+              Are you absolutely sure?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This action cannot be undone. This will permanently delete the supplier
+              <span className="font-bold text-gray-900"> {current?.name}</span> and remove their data from our servers.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <Button
+              variant="destructive"
+              onClick={confirmDelete}
+              disabled={deleting}
+              className="min-w-[80px]"
+            >
+              {deleting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                "Delete"
+              )}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

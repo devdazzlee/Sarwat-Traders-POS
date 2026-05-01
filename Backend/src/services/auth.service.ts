@@ -102,6 +102,30 @@ class AuthService {
   async logout(userId: string) {
     await prisma.session.deleteMany({ where: { user_id: userId } });
   }
+
+  async changePassword(userId: string, data: { currentPassword: string; newPassword: string }) {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new AppError(404, 'User not found');
+    }
+
+    const isPasswordValid = await bcrypt.compare(data.currentPassword, user.password);
+    if (!isPasswordValid) {
+      throw new AppError(400, 'Invalid current password');
+    }
+
+    const hashedPassword = await bcrypt.hash(data.newPassword, 10);
+    await prisma.user.update({
+      where: { id: userId },
+      data: { password: hashedPassword },
+    });
+
+    // Optionally logout from other sessions or the current session
+    // For now, we just update the password
+  }
 }
 
 export { AuthService };

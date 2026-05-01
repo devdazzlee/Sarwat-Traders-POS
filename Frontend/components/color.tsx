@@ -6,9 +6,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Search, Plus, Loader2, Edit, Eye } from "lucide-react";
+import { Search, Plus, Loader2, Edit, Eye, Trash2 } from "lucide-react";
 import { API_BASE } from "@/config/constants";
 import { useToast } from "@/hooks/use-toast";
 import { LoadingButton } from "@/components/ui/loading-button";
@@ -34,6 +35,9 @@ const Colors: React.FC = () => {
   const [addOpen, setAddOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [colorToDelete, setColorToDelete] = useState<Color | null>(null);
   const [current, setCurrent] = useState<Color | null>(null);
   const [formName, setFormName] = useState("");
   const [error, setError] = useState<string>("");
@@ -74,6 +78,27 @@ const Colors: React.FC = () => {
   const openDetail = (c: Color) => {
     setCurrent(c);
     setDetailOpen(true);
+  };
+
+  const openDelete = (c: Color) => {
+    setColorToDelete(c);
+    setDeleteOpen(true);
+  };
+
+  const handleDelete = async () => {
+    if (!colorToDelete) return;
+    setDeleting(true);
+    try {
+      await apiClient.delete(`${API_BASE}/colors/${colorToDelete.id}`);
+      toast({ title: "Deleted", description: `Color "${colorToDelete.name}" has been deleted.` });
+      setDeleteOpen(false);
+      setColorToDelete(null);
+      fetchColors();
+    } catch (err: any) {
+      toast({ title: "Error", description: err?.response?.data?.message || "Failed to delete color", variant: "destructive" });
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const submit = async () => {
@@ -184,6 +209,7 @@ const Colors: React.FC = () => {
                     <TableCell className="flex space-x-2">
                       <Button size="sm" variant="outline" onClick={() => openDetail(c)}><Eye className="h-4 w-4"/></Button>
                       <Button size="sm" variant="outline" onClick={() => openEdit(c)}><Edit className="h-4 w-4"/></Button>
+                      <Button size="sm" variant="outline" className="text-red-600 hover:bg-red-50 hover:text-red-700 border-red-200" onClick={() => openDelete(c)}><Trash2 className="h-4 w-4"/></Button>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -238,6 +264,24 @@ const Colors: React.FC = () => {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Delete Confirmation */}
+      <AlertDialog open={deleteOpen} onOpenChange={(open) => { if (!deleting) { setDeleteOpen(open); if (!open) setColorToDelete(null); } }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Color</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete the color <span className="font-semibold text-gray-900">"{colorToDelete?.name}"</span>? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={(e) => { e.preventDefault(); handleDelete(); }} disabled={deleting} className="bg-red-600 hover:bg-red-700">
+              {deleting ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Deleting...</> : <><Trash2 className="h-4 w-4 mr-2" /> Delete</>}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

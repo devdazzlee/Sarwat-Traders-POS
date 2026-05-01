@@ -550,8 +550,10 @@ export function ManualSale() {
       subtotal,
       total,
       paymentMethod,
-      cashier: "Muhammad",
-      store: "Sarwat Trader #001",
+      cashier: localStorage.getItem("userName") || "Admin",
+      storeName: "SARWAT TRADER",
+      address: "Shop no 109, 1st floor city shopping mall, Marston road Karachi, Pakistan.",
+      storePhone: "02132727444",
       amountPaid,
       changeAmount,
       discount,
@@ -762,13 +764,14 @@ export function ManualSale() {
           
           console.log("🏢 Current Branch:", storedBranchName);
           
-          const fullAddress = "Karachi, Pakistan";
+          const fullAddress = "Shop no 109, 1st floor city shopping mall, Marston road Karachi, Pakistan.";
          
           console.log("fullAddress", fullAddress);
           const receiptDataForServer: ReceiptData = {
             storeName: storedBranchName || branchInfo.name || "SARWAT TRADER",
             tagline: "Quality • Service • Value",
             address: fullAddress,
+            storePhone: "02132727444",
             transactionId: transactionId,
             timestamp: new Date().toISOString(),
             cashier: receiptData.cashier || "Walk-in",

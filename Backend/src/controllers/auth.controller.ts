@@ -30,4 +30,9 @@ const getCurrentUser = asyncHandler(async (req: Request, res: Response) => {
   new ApiResponse(req.user, 'Current user fetched').send(res);
 });
 
-export { register, login, logout, registerAdmin, getCurrentUser };
+const changePassword = asyncHandler(async (req: Request, res: Response) => {
+  await authService.changePassword(req.user?.id!, req.body);
+  new ApiResponse(null, 'Password changed successfully').send(res);
+});
+
+export { register, login, logout, registerAdmin, getCurrentUser, changePassword };

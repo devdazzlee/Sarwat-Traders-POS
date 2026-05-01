@@ -4,6 +4,7 @@ import {
     getUnit,
     updateUnit,
     listUnits,
+    deleteUnit,
 } from '../controllers/unit.controller';
 import {
     createUnitSchema,
@@ -22,5 +23,6 @@ router.post('/', validate(createUnitSchema), createUnit);
 router.get('/', validate(listUnitsSchema), listUnits);
 router.get('/:id', validate(getUnitSchema), getUnit);
 router.patch('/:id', validate(updateUnitSchema), updateUnit);
+router.delete('/:id', validate(getUnitSchema), deleteUnit);
 
 export default router;

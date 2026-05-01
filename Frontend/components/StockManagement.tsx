@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -440,17 +440,17 @@ export function StockManagement() {
 
   if (isInitialLoading) {
     return (
-      <PageLoader message="Loading inventory engine..." />
+      <PageLoader message="Syncing Operational Data..." />
     );
   }
 
   return (
-    <div className="p-4 md:p-8 space-y-8 bg-slate-50/30 min-h-screen">
+    <div className="p-4 md:p-5 space-y-8 bg-slate-50/30 min-h-screen">
       {/* HEADER SECTION: THE COMMAND CENTER */}
       <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-6">
         <div className="space-y-1">
           <div className="flex items-center gap-3">
-            <div className="h-10 w-10 bg-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-100">
+            <div className="h-10 w-10 bg-slate-900 rounded-lg shadow-md shadow-slate-100 flex items-center justify-center">
               <Package className="h-5 w-5 text-white" />
             </div>
             <div>
@@ -462,29 +462,34 @@ export function StockManagement() {
           </div>
         </div>
 
-        <div className="flex flex-col md:flex-row items-center gap-3">
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              onClick={handleExport}
-              className="hidden sm:flex text-slate-600 border-slate-200 bg-white hover:bg-slate-50 font-black h-11 px-6 rounded-xl text-[11px] tracking-widest uppercase gap-3 transition-all shadow-sm"
-            >
-              <FileDown className="h-4 w-4 text-indigo-500" /> Export
-            </Button>
+        <div className="flex flex-wrap items-center gap-3">
+          <Button
+            variant="outline"
+            onClick={handleExport}
+            className="hidden sm:flex h-9 border-slate-300 rounded-md text-slate-600 bg-white hover:bg-slate-50 text-xs font-medium gap-2 px-4 shadow-sm"
+          >
+            <FileDown className="h-4 w-4" /> Export
+          </Button>
 
-            <Button
-              variant="outline"
-              onClick={() => setIsBulkImportOpen(true)}
-              className="hidden sm:flex text-slate-600 border-slate-200 bg-white hover:bg-slate-50 font-black h-11 px-6 rounded-xl text-[11px] tracking-widest uppercase gap-3 transition-all shadow-sm"
-            >
-              <Upload className="h-4 w-4 text-indigo-500" /> Bulk Import
-            </Button>
+          <Button
+            variant="outline"
+            onClick={() => setIsBulkImportOpen(true)}
+            className="hidden sm:flex h-9 border-slate-300 rounded-md text-slate-600 bg-white hover:bg-slate-50 text-xs font-medium gap-2 px-4 shadow-sm"
+          >
+            <Upload className="h-4 w-4" /> Bulk Import
+          </Button>
 
-            <Button variant="outline" size="icon" onClick={() => { refreshAllData(); triggerGlobalRefresh(); }} disabled={isLoading || globalLoading} className="rounded-xl h-11 w-11 border-slate-200 bg-white shadow-sm flex-shrink-0">
-              <RefreshCw className={`h-4 w-4 ${isLoading || globalLoading ? 'animate-spin' : ''}`} />
-            </Button>
-          </div>
-          <div className="flex items-center bg-white p-1 rounded-xl border border-slate-200 shadow-sm gap-1 h-11">
+          <Button 
+            variant="outline" 
+            size="icon" 
+            onClick={() => { refreshAllData(); triggerGlobalRefresh(); }} 
+            disabled={isLoading || globalLoading} 
+            className="h-9 w-9 border-slate-300 rounded-md bg-white shadow-sm flex-shrink-0"
+          >
+            <RefreshCw className={`h-4 w-4 ${isLoading || globalLoading ? 'animate-spin' : ''}`} />
+          </Button>
+        </div>
+          <div className="flex items-center bg-white p-1 rounded-md border border-slate-200 shadow-sm gap-1">
             <Dialog
               open={isAddOpen}
               onOpenChange={(open) => {
@@ -493,21 +498,22 @@ export function StockManagement() {
               }}
             >
               <DialogTrigger asChild>
-                <Button className="bg-slate-900 hover:bg-black text-white font-black h-9 px-4 rounded-lg text-xs gap-2">
+                <Button className="bg-slate-900 hover:bg-black text-white font-medium h-8 px-4 rounded-sm text-xs gap-2">
                   <Plus className="h-3.5 w-3.5" /> RECORD
                 </Button>
               </DialogTrigger>
-              <DialogContent className="max-w-lg bg-white rounded-2xl border-none shadow-2xl p-0 overflow-hidden [&>button]:text-white [&>button]:opacity-80 [&>button]:hover:opacity-100 [&>button]:top-5 [&>button]:right-5">
-                <DialogHeader className="p-6 bg-slate-900">
-                  <DialogTitle className="text-lg font-black text-white uppercase tracking-tight">Add Stock</DialogTitle>
-                  <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mt-0.5">Add new stock entry</p>
+              <DialogContent className="max-w-lg bg-white border border-slate-100 shadow-xl">
+                <DialogHeader>
+                  <DialogTitle className="text-xl font-bold text-slate-900">Add Stock</DialogTitle>
+                  <DialogDescription className="text-xs font-medium text-slate-500 uppercase tracking-wider">
+                    Add new stock entry to inventory levels
+                  </DialogDescription>
                 </DialogHeader>
-                <div className="p-6 space-y-6">
-                  {/* PRODUCT SELECTOR */}
+                <div className="space-y-4 py-4">
                   <div className="space-y-2 relative" ref={addProductDropdownRef}>
-                    <Label className="text-[10px] font-black uppercase text-slate-500 tracking-wider">Product</Label>
+                    <Label className="text-xs font-semibold text-slate-700">Product</Label>
                     <div className="relative group">
-                      <Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-600 transition-colors" />
+                      <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-600 transition-colors" />
                       <Input
                         placeholder="Search product..."
                         value={productSearch}
@@ -517,21 +523,18 @@ export function StockManagement() {
                           setProductSearch(e.target.value);
                           setAddProductDropdownOpen(true);
                         }}
-                        className="pl-11 h-12 bg-slate-50 border-none rounded-xl font-bold text-slate-800 focus:bg-white transition-all shadow-sm"
+                        className="pl-10 h-10 border-slate-300 rounded-md bg-white text-sm"
                       />
                       {addProductDropdownOpen && (
-                        <Card className="absolute left-0 right-0 z-[100] mt-2 max-h-60 overflow-y-auto rounded-xl border border-slate-100 bg-white shadow-2xl backdrop-blur-sm animate-in fade-in zoom-in-95 duration-200">
+                        <Card className="absolute left-0 right-0 z-[100] mt-1 max-h-60 overflow-y-auto rounded-md border border-slate-200 bg-white shadow-lg">
                           {filteredProducts.length === 0 ? (
-                            <div className="p-6 text-center">
-                              <Package className="h-6 w-6 text-slate-200 mx-auto mb-1" />
-                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter italic">No products found</p>
-                            </div>
+                            <div className="p-4 text-center text-xs text-slate-400">No products found</div>
                           ) : (
                             <div className="p-1">
                               {filteredProducts.map((p) => (
                                 <button
                                   key={p.id}
-                                  className="flex w-full items-center justify-between px-3 py-2 text-left hover:bg-indigo-50 transition-all rounded-lg group"
+                                  className="flex w-full items-center justify-between px-3 py-2 text-left hover:bg-slate-50 transition-all rounded-sm group"
                                   onClick={() => {
                                     setAddForm({ ...addForm, productId: p.id });
                                     setProductSearch(p.name);
@@ -539,10 +542,9 @@ export function StockManagement() {
                                   }}
                                 >
                                   <div className="flex flex-col">
-                                    <span className="font-black text-slate-800 uppercase text-[11px] group-hover:text-indigo-700">{p.name}</span>
-                                    <span className="text-[9px] font-bold text-slate-400 group-hover:text-indigo-400 tracking-tighter uppercase">{p.sku || p.id.slice(0, 8)}</span>
+                                    <span className="text-xs font-semibold text-slate-800">{p.name}</span>
+                                    <span className="text-[10px] text-slate-500 uppercase">{p.sku || p.id.slice(0, 8)}</span>
                                   </div>
-                                  <Badge variant="outline" className="text-[8px] font-black border-slate-200 bg-white group-hover:bg-indigo-600 group-hover:text-white transition-all uppercase">Pick</Badge>
                                 </button>
                               ))}
                             </div>
@@ -553,48 +555,50 @@ export function StockManagement() {
                   </div>
 
                   <div className="space-y-2">
-                    <Label className="text-[10px] font-black uppercase text-slate-500 tracking-wider">Quantity</Label>
+                    <Label className="text-xs font-semibold text-slate-700">Quantity</Label>
                     <div className="relative">
                       <Input
-                        type="number"
                         placeholder="0"
+                        type="number"
                         value={addForm.quantity}
                         onChange={(e) => setAddForm({ ...addForm, quantity: e.target.value })}
-                        className="h-12 bg-slate-50 border-none rounded-xl font-black text-slate-900 text-lg pr-12"
+                        className="h-10 border-slate-300 rounded-md bg-white pr-12 text-sm"
                       />
-                      <span className="absolute right-4 top-1/2 -translate-y-1/2 text-[9px] font-black text-slate-400 uppercase">Qty</span>
+                      <div className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400 uppercase">QTY</div>
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+                  <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <Label className="text-[10px] font-black uppercase text-slate-500 tracking-wider">Supplier</Label>
+                      <Label className="text-xs font-semibold text-slate-700">Supplier</Label>
                       <Select value={addForm.supplierId} onValueChange={(v) => setAddForm({ ...addForm, supplierId: v })}>
-                        <SelectTrigger className="h-11 bg-slate-50 border-none rounded-xl font-bold text-slate-600 text-[11px] focus:ring-2 focus:ring-indigo-600/20">
-                          <SelectValue placeholder="Provider" />
+                        <SelectTrigger className="h-10 border-slate-300 rounded-md bg-white text-sm">
+                          <SelectValue placeholder="Select Supplier" />
                         </SelectTrigger>
-                        <SelectContent className="rounded-xl border-none shadow-xl">
-                          {suppliers?.map((s: any) => <SelectItem key={s.id} value={s.id} className="font-bold text-[11px]">{s.name}</SelectItem>)}
+                        <SelectContent className="rounded-md shadow-xl">
+                          {suppliers?.map((s: any) => <SelectItem key={s.id} value={s.id} className="text-sm">{s.name}</SelectItem>)}
                         </SelectContent>
                       </Select>
                     </div>
                     <div className="space-y-2">
-                      <Label className="text-[10px] font-black uppercase text-slate-500 tracking-wider">Cost Price</Label>
+                      <Label className="text-xs font-semibold text-slate-700">Cost Price</Label>
                       <Input
-                        placeholder="Cost"
+                        placeholder="0.00"
                         type="number"
                         value={addForm.unitCost}
                         onChange={(e) => setAddForm({ ...addForm, unitCost: e.target.value })}
-                        className="h-11 bg-slate-50 border-none rounded-xl font-bold text-slate-700 text-[11px] focus:ring-2 focus:ring-indigo-600/20"
+                        className="h-10 border-slate-300 rounded-md bg-white text-sm"
                       />
                     </div>
                   </div>
-
-                  <Button className="w-full h-14 bg-slate-900 hover:bg-black text-white font-black rounded-xl shadow-lg text-xs tracking-widest uppercase transition-all gap-2" onClick={handleAddStock} disabled={isTransferring}>
-                    {isTransferring ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                </div>
+                <DialogFooter className="gap-2 border-t border-slate-100 pt-5">
+                  <Button variant="outline" className="h-10 px-6" onClick={() => setIsAddOpen(false)}>Cancel</Button>
+                  <Button className="bg-slate-900 hover:bg-slate-800 text-white h-10 px-6 font-medium rounded-md shadow-sm text-sm transition-all" onClick={handleAddStock} disabled={isTransferring}>
+                    {isTransferring && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
                     Save Stock
                   </Button>
-                </div>
+                </DialogFooter>
               </DialogContent>
             </Dialog>
 
@@ -606,22 +610,24 @@ export function StockManagement() {
               }}
             >
               <DialogTrigger asChild>
-                <Button variant="ghost" className="text-slate-600 hover:bg-slate-50 font-bold h-9 px-4 rounded-lg text-xs gap-2">
-                  <Edit className="h-3.5 w-3.5 text-amber-500" /> ADJUST
+                <Button variant="ghost" className="text-slate-600 hover:bg-slate-50 font-bold h-8 px-4 rounded-lg text-xs gap-2">
+                  <Edit className="h-3.5 w-3.5 text-slate-500" /> ADJUST
                 </Button>
               </DialogTrigger>
-              <DialogContent className="max-w-md bg-white rounded-2xl border-none shadow-2xl p-0 overflow-hidden [&>button]:text-white [&>button]:opacity-80 [&>button]:hover:opacity-100 [&>button]:top-5 [&>button]:right-5">
-                <DialogHeader className="p-6 bg-slate-900">
-                  <DialogTitle className="text-lg font-black text-white uppercase tracking-tight">Adjust Stock</DialogTitle>
-                  <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mt-0.5">Modify existing stock quantity</p>
+              <DialogContent className="max-w-md bg-white border border-slate-100 shadow-xl">
+                <DialogHeader>
+                  <DialogTitle className="text-xl font-bold text-slate-900">Adjust Stock</DialogTitle>
+                  <DialogDescription className="text-xs font-medium text-slate-500 uppercase tracking-wider">
+                    Modify existing stock levels for correction
+                  </DialogDescription>
                 </DialogHeader>
-                <div className="p-8 space-y-6">
+                <div className="space-y-4 py-4">
                   <div className="space-y-2 relative" ref={adjustProductDropdownRef}>
-                    <Label className="text-[11px] font-black uppercase text-slate-400 tracking-wider">Product</Label>
+                    <Label className="text-xs font-semibold text-slate-700">Search Product</Label>
                     <div className="relative group">
-                      <Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-600 transition-colors" />
                       <Input
-                        placeholder="Search asset..."
+                        placeholder="Type SKU or Product Name..."
                         value={productSearch}
                         onFocus={() => setAdjustProductDropdownOpen(true)}
                         autoComplete="off"
@@ -629,18 +635,18 @@ export function StockManagement() {
                           setProductSearch(e.target.value);
                           setAdjustProductDropdownOpen(true);
                         }}
-                        className="pl-11 h-12 bg-slate-50 border-none rounded-xl font-bold text-slate-800 focus:bg-white shadow-sm"
+                        className="pl-10 h-10 border-slate-300 rounded-md bg-white text-sm"
                       />
                       {adjustProductDropdownOpen && (
-                        <Card className="absolute left-0 right-0 z-[100] mt-2 max-h-60 overflow-y-auto rounded-xl border border-slate-100 bg-white shadow-2xl dropdown-animate">
+                        <Card className="absolute left-0 right-0 z-[100] mt-1 max-h-60 overflow-y-auto rounded-md border border-slate-200 bg-white shadow-lg">
                           {filteredProducts.length === 0 ? (
-                            <div className="p-4 text-center text-[10px] font-bold text-slate-300 uppercase">Target missed</div>
+                            <div className="p-4 text-center text-xs text-slate-400">No matching products</div>
                           ) : (
                             <div className="p-1">
                               {filteredProducts.map((p) => (
                                 <button
                                   key={p.id}
-                                  className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-amber-50 transition-all rounded-lg group"
+                                  className="flex w-full items-center justify-between px-3 py-2 text-left hover:bg-slate-50 transition-all rounded-sm group"
                                   onClick={() => {
                                     setAdjustForm({ ...adjustForm, productId: p.id });
                                     setProductSearch(p.name);
@@ -648,10 +654,9 @@ export function StockManagement() {
                                   }}
                                 >
                                   <div className="flex flex-col">
-                                    <span className="font-black text-slate-700 uppercase text-[11px] group-hover:text-amber-600">{p.name}</span>
-                                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">{p.sku || p.id.slice(0, 8)}</span>
+                                    <span className="text-xs font-semibold text-slate-800">{p.name}</span>
+                                    <span className="text-[10px] text-slate-500 uppercase">{p.sku || p.id.slice(0, 8)}</span>
                                   </div>
-                                  <ArrowRightLeft className="w-3 h-3 text-slate-200 group-hover:text-amber-500" />
                                 </button>
                               ))}
                             </div>
@@ -661,37 +666,67 @@ export function StockManagement() {
                     </div>
                   </div>
 
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label className="text-xs font-semibold text-slate-700">Action</Label>
+                      <Select value={adjustForm.reason === 'CORRECTION' ? 'FIXED' : 'DELTA'} onValueChange={() => {}}>
+                        <SelectTrigger className="h-10 border-slate-300 rounded-md bg-white text-sm">
+                          <SelectValue placeholder="Set Fixed Qty" />
+                        </SelectTrigger>
+                        <SelectContent className="rounded-md shadow-xl">
+                          <SelectItem value="FIXED" className="text-sm">Set Fixed Qty</SelectItem>
+                          <SelectItem value="DELTA" className="text-sm">Adjust Delta (±)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs font-semibold text-slate-700">Reason</Label>
+                      <Select value={adjustForm.reason} onValueChange={(v) => setAdjustForm({ ...adjustForm, reason: v })}>
+                        <SelectTrigger className="h-10 border-slate-300 rounded-md bg-white text-sm">
+                          <SelectValue placeholder="Correction" />
+                        </SelectTrigger>
+                        <SelectContent className="rounded-md shadow-xl">
+                          <SelectItem value="CORRECTION" className="text-sm">Correction</SelectItem>
+                          <SelectItem value="DAMAGE" className="text-sm">Damage</SelectItem>
+                          <SelectItem value="EXPIRED" className="text-sm">Expired</SelectItem>
+                          <SelectItem value="THEFT" className="text-sm">Theft</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+
+                  <div className="p-4 rounded-lg border border-slate-200 bg-slate-50/50 flex items-center justify-between gap-4">
+                    <div className="flex-1">
+                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Current Qty</p>
+                      <h4 className="text-2xl font-bold text-slate-900">—</h4>
+                    </div>
+                    <div className="flex-1 space-y-2">
+                      <Label className="text-xs font-semibold text-slate-700">New Total Qty</Label>
+                      <Input
+                        type="number"
+                        placeholder="0"
+                        value={adjustForm.quantityChange}
+                        onChange={(e) => setAdjustForm({ ...adjustForm, quantityChange: e.target.value })}
+                        className="h-10 bg-white border border-slate-300 rounded-md text-sm font-semibold text-slate-900"
+                      />
+                    </div>
+                  </div>
+
                   <div className="space-y-2">
-                    <Label className="text-[11px] font-black uppercase text-slate-400 tracking-wider">Adjustment (±)</Label>
+                    <Label className="text-xs font-semibold text-slate-700">Remarks (Optional)</Label>
                     <Input
-                      type="number"
-                      placeholder="Enter delta (e.g. +5 or -3)"
-                      value={adjustForm.quantityChange}
-                      onChange={(e) => setAdjustForm({ ...adjustForm, quantityChange: e.target.value })}
-                      className="h-12 bg-slate-50 border-none rounded-xl font-black text-slate-900 text-xl text-center"
+                      placeholder="Add any additional details..."
+                      className="h-10 border-slate-300 rounded-md bg-white text-sm"
                     />
                   </div>
-
-                  <div className="space-y-2">
-                    <Label className="text-[11px] font-black uppercase text-slate-400 tracking-wider">Reason</Label>
-                    <Select value={adjustForm.reason} onValueChange={(v) => setAdjustForm({ ...adjustForm, reason: v })}>
-                      <SelectTrigger className="h-12 bg-slate-100/50 border-none rounded-xl font-bold text-slate-700">
-                        <SelectValue placeholder="Select Reason" />
-                      </SelectTrigger>
-                      <SelectContent className="rounded-xl border-none shadow-xl">
-                        <SelectItem value="CORRECTION" className="font-bold text-xs">Inventory Correction</SelectItem>
-                        <SelectItem value="LOST" className="font-bold text-xs">Lost / Unaccounted</SelectItem>
-                        <SelectItem value="FOUND" className="font-bold text-xs">Found / Surprise Entry</SelectItem>
-                        <SelectItem value="PROMOTIONAL" className="font-bold text-xs">Promotional Redistribution</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <Button className="w-full h-14 bg-slate-900 hover:bg-black text-white font-black rounded-xl shadow-lg uppercase tracking-widest text-xs gap-3" onClick={handleAdjustStock} disabled={isTransferring}>
-                    {isTransferring ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                    Execute Delta Update
-                  </Button>
                 </div>
+                <DialogFooter className="gap-2 border-t border-slate-100 pt-5">
+                  <Button variant="outline" className="h-10 px-6" onClick={() => setIsAdjustOpen(false)}>Cancel</Button>
+                  <Button className="bg-slate-900 hover:bg-slate-800 text-white h-10 px-6 font-medium rounded-md shadow-sm text-sm transition-all" onClick={handleAdjustStock} disabled={isTransferring}>
+                    {isTransferring && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+                    Save Adjustment
+                  </Button>
+                </DialogFooter>
               </DialogContent>
             </Dialog>
             <Dialog
@@ -702,22 +737,24 @@ export function StockManagement() {
               }}
             >
               <DialogTrigger asChild>
-                <Button variant="ghost" className="text-slate-600 hover:bg-slate-50 font-bold h-9 px-4 rounded-lg text-xs gap-2">
-                  <TrendingDown className="h-3.5 w-3.5 text-rose-500" /> DISPOSE
+                <Button variant="ghost" className="text-slate-600 hover:bg-slate-50 font-bold h-8 px-4 rounded-lg text-xs gap-2">
+                  <TrendingDown className="h-3.5 w-3.5 text-slate-500" /> DISPOSE
                 </Button>
               </DialogTrigger>
-              <DialogContent className="max-w-lg bg-white rounded-2xl border-none shadow-2xl p-0 overflow-hidden [&>button]:text-white [&>button]:opacity-80 [&>button]:hover:opacity-100 [&>button]:top-5 [&>button]:right-5">
-                <DialogHeader className="p-6 bg-slate-900">
-                  <DialogTitle className="text-lg font-black text-white uppercase tracking-tight">Remove Stock</DialogTitle>
-                  <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mt-0.5">Dispose or write off inventory</p>
+              <DialogContent className="max-w-md bg-white border border-slate-100 shadow-xl">
+                <DialogHeader>
+                  <DialogTitle className="text-xl font-bold text-slate-900">Remove Stock</DialogTitle>
+                  <DialogDescription className="text-xs font-medium text-slate-500 uppercase tracking-wider">
+                    Dispose or write off inventory items
+                  </DialogDescription>
                 </DialogHeader>
-                <div className="p-6 space-y-6">
+                <div className="space-y-4 py-4">
                   <div className="space-y-2 relative" ref={removeProductDropdownRef}>
-                    <Label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Product</Label>
+                    <Label className="text-xs font-semibold text-slate-700">Select Asset</Label>
                     <div className="relative group">
-                      <Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-600 transition-colors" />
                       <Input
-                        placeholder="Search asset..."
+                        placeholder="Search product to dispose..."
                         value={productSearch}
                         onFocus={() => setRemoveProductDropdownOpen(true)}
                         autoComplete="off"
@@ -725,18 +762,18 @@ export function StockManagement() {
                           setProductSearch(e.target.value);
                           setRemoveProductDropdownOpen(true);
                         }}
-                        className="pl-11 h-12 bg-slate-50 border-none rounded-xl font-bold text-slate-800 focus:bg-white shadow-sm"
+                        className="pl-10 h-10 border-slate-300 rounded-md bg-white text-sm"
                       />
                       {removeProductDropdownOpen && (
-                        <Card className="absolute left-0 right-0 z-[100] mt-2 max-h-60 overflow-y-auto rounded-xl border border-slate-100 bg-white shadow-2xl dropdown-animate">
+                        <Card className="absolute left-0 right-0 z-[100] mt-1 max-h-60 overflow-y-auto rounded-md border border-slate-200 bg-white shadow-lg">
                           {filteredProducts.length === 0 ? (
-                            <div className="p-4 text-center text-[10px] font-bold text-slate-300 uppercase italic">Entity not identified</div>
+                            <div className="p-4 text-center text-xs text-slate-400">No products found</div>
                           ) : (
                             <div className="p-1">
                               {filteredProducts.map((p) => (
                                 <button
                                   key={p.id}
-                                  className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-rose-50 transition-all rounded-lg group"
+                                  className="flex w-full items-center justify-between px-3 py-2 text-left hover:bg-slate-50 transition-all rounded-sm group"
                                   onClick={() => {
                                     setRemoveForm({ ...removeForm, productId: p.id });
                                     setProductSearch(p.name);
@@ -744,10 +781,9 @@ export function StockManagement() {
                                   }}
                                 >
                                   <div className="flex flex-col">
-                                    <span className="font-black text-slate-700 uppercase text-[11px] group-hover:text-rose-600">{p.name}</span>
-                                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">{p.sku || p.id.slice(0, 8)}</span>
+                                    <span className="text-xs font-semibold text-slate-800">{p.name}</span>
+                                    <span className="text-[10px] text-slate-500 uppercase">{p.sku || p.id.slice(0, 8)}</span>
                                   </div>
-                                  <X className="w-3 h-3 text-slate-200 group-hover:text-rose-500" />
                                 </button>
                               ))}
                             </div>
@@ -757,37 +793,50 @@ export function StockManagement() {
                     </div>
                   </div>
 
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label className="text-xs font-semibold text-slate-700">Quantity</Label>
+                      <Input
+                        type="number"
+                        placeholder="0"
+                        value={removeForm.quantity}
+                        onChange={(e) => setRemoveForm({ ...removeForm, quantity: e.target.value })}
+                        className="h-10 border-slate-300 rounded-md bg-white text-sm"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs font-semibold text-slate-700">Reason</Label>
+                      <Select value={removeForm.reason} onValueChange={(v) => setRemoveForm({ ...removeForm, reason: v })}>
+                        <SelectTrigger className="h-10 border-slate-300 rounded-md bg-white text-sm">
+                          <SelectValue placeholder="Select Reason" />
+                        </SelectTrigger>
+                        <SelectContent className="rounded-md shadow-xl">
+                          <SelectItem value="DAMAGE" className="text-sm">Damaged / Defected</SelectItem>
+                          <SelectItem value="WASTE" className="text-sm">Wastage / Garbage</SelectItem>
+                          <SelectItem value="THEFT" className="text-sm">Theft / Loss</SelectItem>
+                          <SelectItem value="EXPIRED" className="text-sm">Expired Goods</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+
                   <div className="space-y-2">
-                    <Label className="text-[11px] font-black uppercase text-slate-400 tracking-wider">Quantity to Remove</Label>
+                    <Label className="text-xs font-semibold text-slate-700">Disposal Notes</Label>
                     <Input
-                      type="number"
-                      placeholder="0"
-                      value={removeForm.quantity}
-                      onChange={(e) => setRemoveForm({ ...removeForm, quantity: e.target.value })}
-                      className="h-12 bg-slate-50 border-none rounded-xl font-black text-slate-900 text-xl text-center"
+                      placeholder="Explain the reason for removal..."
+                      value={removeForm.notes}
+                      onChange={(e) => setRemoveForm({ ...removeForm, notes: e.target.value })}
+                      className="h-10 border-slate-300 rounded-md bg-white text-sm"
                     />
                   </div>
-
-                  <div className="space-y-2">
-                    <Label className="text-[11px] font-black uppercase text-slate-400 tracking-wider">Reason</Label>
-                    <Select value={removeForm.reason} onValueChange={(v) => setRemoveForm({ ...removeForm, reason: v })}>
-                      <SelectTrigger className="h-12 bg-slate-50 border-none rounded-xl font-bold text-slate-700">
-                        <SelectValue placeholder="Method" />
-                      </SelectTrigger>
-                      <SelectContent className="rounded-xl border-none shadow-xl">
-                        <SelectItem value="DAMAGE" className="font-bold text-xs">Damaged / Defected</SelectItem>
-                        <SelectItem value="WASTE" className="font-bold text-xs">Wastage / Garbage</SelectItem>
-                        <SelectItem value="THEFT" className="font-bold text-xs">Theft / Loss</SelectItem>
-                        <SelectItem value="EXPIRED" className="font-bold text-xs">Expired Goods</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <Button className="w-full h-14 bg-slate-900 hover:bg-black text-white font-black rounded-xl shadow-lg uppercase tracking-widest text-xs gap-3" onClick={handleRemoveStock} disabled={isTransferring}>
-                    {isTransferring ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                    Authorize Elimination
-                  </Button>
                 </div>
+                <DialogFooter className="gap-2 border-t border-slate-100 pt-5">
+                  <Button variant="outline" className="h-10 px-6" onClick={() => setIsRemoveOpen(false)}>Cancel</Button>
+                  <Button className="bg-slate-900 hover:bg-slate-800 text-white h-10 px-6 font-medium rounded-md shadow-sm text-sm transition-all" onClick={handleRemoveStock} disabled={isTransferring}>
+                    {isTransferring && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+                    Confirm Disposal
+                  </Button>
+                </DialogFooter>
               </DialogContent>
             </Dialog>
             <Dialog
@@ -798,22 +847,24 @@ export function StockManagement() {
               }}
             >
               <DialogTrigger asChild>
-                <Button variant="ghost" className="text-slate-600 hover:bg-slate-50 font-bold h-9 px-4 rounded-lg text-xs gap-2">
-                  <ArrowRightLeft className="h-3.5 w-3.5 text-indigo-500" /> TRANSFER
+                <Button variant="ghost" className="text-slate-600 hover:bg-slate-50 font-bold h-8 px-4 rounded-lg text-xs gap-2">
+                  <ArrowRightLeft className="h-3.5 w-3.5 text-slate-500" /> TRANSFER
                 </Button>
               </DialogTrigger>
-              <DialogContent className="max-w-lg bg-white rounded-2xl border-none shadow-2xl p-0 overflow-hidden [&>button]:text-white [&>button]:opacity-80 [&>button]:hover:opacity-100 [&>button]:top-5 [&>button]:right-5">
-                <DialogHeader className="p-6 bg-slate-900">
-                  <DialogTitle className="text-lg font-black text-white uppercase tracking-tight">Inter-Branch Logistic Flow</DialogTitle>
-                  <p className="text-slate-400 text-[9px] font-bold uppercase tracking-widest mt-0.5">Multi-Node Movement</p>
+              <DialogContent className="max-w-md bg-white border border-slate-100 shadow-xl">
+                <DialogHeader>
+                  <DialogTitle className="text-xl font-bold text-slate-900">Transfer Stock</DialogTitle>
+                  <DialogDescription className="text-xs font-medium text-slate-500 uppercase tracking-wider">
+                    Move inventory between branch nodes
+                  </DialogDescription>
                 </DialogHeader>
-                <div className="p-6 space-y-6">
-                  <div className="space-y-3 relative" ref={transferProductDropdownRef}>
-                    <Label className="text-[11px] font-black uppercase text-slate-500 tracking-wider">Asset for Transit</Label>
+                <div className="space-y-4 py-4">
+                  <div className="space-y-2 relative" ref={transferProductDropdownRef}>
+                    <Label className="text-xs font-semibold text-slate-700">Asset for Transit</Label>
                     <div className="relative group">
-                      <Search className="w-5 h-5 absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-600 transition-colors" />
+                      <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-600 transition-colors" />
                       <Input
-                        placeholder="Search asset for movement..."
+                        placeholder="Search product to transfer..."
                         value={productSearch}
                         onFocus={() => setTransferProductDropdownOpen(true)}
                         autoComplete="off"
@@ -821,20 +872,18 @@ export function StockManagement() {
                           setProductSearch(e.target.value);
                           setTransferProductDropdownOpen(true);
                         }}
-                        className="pl-12 h-14 bg-slate-50 border-none rounded-2xl font-bold text-slate-800 shadow-sm"
+                        className="pl-10 h-10 border-slate-300 rounded-md bg-white text-sm"
                       />
                       {transferProductDropdownOpen && (
-                        <Card className="absolute left-0 right-0 z-[100] mt-2 max-h-72 overflow-y-auto rounded-2xl border border-slate-100 bg-white shadow-2xl dropdown-animate">
+                        <Card className="absolute left-0 right-0 z-[100] mt-1 max-h-60 overflow-y-auto rounded-md border border-slate-200 bg-white shadow-lg">
                           {filteredProducts.length === 0 ? (
-                            <div className="p-8 text-center">
-                              <p className="text-xs font-bold text-slate-400 uppercase tracking-tighter">No assets matching criteria</p>
-                            </div>
+                            <div className="p-4 text-center text-xs text-slate-400">No products found</div>
                           ) : (
-                            <div className="p-2">
+                            <div className="p-1">
                               {filteredProducts.map((p) => (
                                 <button
                                   key={p.id}
-                                  className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-indigo-50 transition-all rounded-xl group"
+                                  className="flex w-full items-center justify-between px-3 py-2 text-left hover:bg-slate-50 transition-all rounded-sm group"
                                   onClick={() => {
                                     setTransferForm({ ...transferForm, productId: p.id });
                                     setProductSearch(p.name);
@@ -842,10 +891,9 @@ export function StockManagement() {
                                   }}
                                 >
                                   <div className="flex flex-col">
-                                    <span className="font-black text-slate-800 uppercase text-xs group-hover:text-indigo-700">{p.name}</span>
-                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">{p.sku || p.id.slice(0, 8)}</span>
+                                    <span className="text-xs font-semibold text-slate-800">{p.name}</span>
+                                    <span className="text-[10px] text-slate-500 uppercase">{p.sku || p.id.slice(0, 8)}</span>
                                   </div>
-                                  <MapPin className="w-4 h-4 text-slate-200 group-hover:text-indigo-500" />
                                 </button>
                               ))}
                             </div>
@@ -855,106 +903,81 @@ export function StockManagement() {
                     </div>
                   </div>
 
-                  <div className="flex flex-col md:flex-row items-center gap-6">
-                    <div className="flex-1 w-full space-y-3">
-                      <Label className="text-[11px] font-black uppercase text-slate-500 tracking-wider">Point of Origin (Source)</Label>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label className="text-xs font-semibold text-slate-700">Source Branch</Label>
                       <Select value={transferForm.fromBranchId} onValueChange={(v) => setTransferForm({ ...transferForm, fromBranchId: v })}>
-                        <SelectTrigger className="h-14 bg-slate-50 border-none rounded-2xl font-bold text-slate-700">
+                        <SelectTrigger className="h-10 border-slate-300 rounded-md bg-white text-sm">
                           <SelectValue placeholder="Select Source" />
                         </SelectTrigger>
-                        <SelectContent className="rounded-2xl border-none shadow-xl">
+                        <SelectContent className="rounded-md shadow-xl">
                           {branches.map(b => (
-                            <SelectItem
-                              key={b.id}
-                              value={b.id}
-                              disabled={b.id === transferForm.toBranchId}
-                              className="font-bold text-xs py-3"
-                            >
-                              <div className="flex items-center justify-between w-full gap-4">
-                                <span>{b.name}</span>
-                                {b.id === transferForm.toBranchId && <Badge variant="outline" className="text-[9px] border-amber-200 text-amber-600 bg-amber-50">SELECTED DEST</Badge>}
-                              </div>
-                            </SelectItem>
+                            <SelectItem key={b.id} value={b.id} disabled={b.id === transferForm.toBranchId} className="text-sm">{b.name}</SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
                     </div>
-
-                    <div className="h-12 w-12 bg-slate-100 rounded-full flex items-center justify-center rotate-90 md:rotate-0">
-                      <ArrowRightLeft className="h-5 w-5 text-slate-400" />
-                    </div>
-
-                    <div className="flex-1 w-full space-y-3">
-                      <Label className="text-[11px] font-black uppercase text-slate-500 tracking-wider">Target Node (Destination)</Label>
+                    <div className="space-y-2">
+                      <Label className="text-xs font-semibold text-slate-700">Destination Branch</Label>
                       <Select value={transferForm.toBranchId} onValueChange={(v) => setTransferForm({ ...transferForm, toBranchId: v })}>
-                        <SelectTrigger className="h-14 bg-white border-2 border-indigo-600/10 rounded-2xl font-bold text-slate-700 hover:border-indigo-600/30 transition-all">
+                        <SelectTrigger className="h-10 border-slate-300 rounded-md bg-white text-sm">
                           <SelectValue placeholder="Select Destination" />
                         </SelectTrigger>
-                        <SelectContent className="rounded-2xl border-none shadow-xl">
+                        <SelectContent className="rounded-md shadow-xl">
                           {branches.map(b => (
-                            <SelectItem
-                              key={b.id}
-                              value={b.id}
-                              disabled={b.id === transferForm.fromBranchId}
-                              className="font-bold text-xs py-3"
-                            >
-                              <div className="flex items-center justify-between w-full gap-4">
-                                <span>{b.name}</span>
-                                {b.id === transferForm.fromBranchId && <Badge variant="outline" className="text-[9px] border-indigo-200 text-indigo-600 bg-indigo-50">SELECTED SOURCE</Badge>}
-                              </div>
-                            </SelectItem>
+                            <SelectItem key={b.id} value={b.id} disabled={b.id === transferForm.fromBranchId} className="text-sm">{b.name}</SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="space-y-3">
-                      <Label className="text-[11px] font-black uppercase text-slate-500 tracking-wider">Transit Volume</Label>
-                      <Input
-                        type="number"
-                        placeholder="Quantity"
-                        value={transferForm.quantity}
-                        onChange={(e) => setTransferForm({ ...transferForm, quantity: e.target.value })}
-                        className="h-14 bg-slate-50 border-none rounded-2xl font-black text-indigo-600 text-2xl pr-12"
-                      />
-                    </div>
-                    <div className="space-y-3">
-                      <Label className="text-[11px] font-black uppercase text-slate-500 tracking-wider">Dispatcher / Notes</Label>
-                      <Input
-                        placeholder="Carrier name or ref..."
-                        value={transferForm.notes}
-                        onChange={(e) => setTransferForm({ ...transferForm, notes: e.target.value })}
-                        className="h-14 bg-slate-50 border-none rounded-2xl font-bold text-slate-700 text-sm"
-                      />
-                    </div>
+                  <div className="space-y-2">
+                    <Label className="text-xs font-semibold text-slate-700">Quantity</Label>
+                    <Input
+                      type="number"
+                      placeholder="0"
+                      value={transferForm.quantity}
+                      onChange={(e) => setTransferForm({ ...transferForm, quantity: e.target.value })}
+                      className="h-10 border-slate-300 rounded-md bg-white text-sm"
+                    />
                   </div>
 
-                  <Button className="w-full h-16 bg-indigo-600 hover:bg-slate-900 text-white font-black rounded-2xl shadow-xl shadow-indigo-100 mt-2 uppercase tracking-[0.2em] text-sm transition-all" onClick={handleTransfer} disabled={isTransferring}>
-                    {isTransferring ? <Loader2 className="h-5 w-5 animate-spin mr-2" /> : <ArrowRightLeft className="h-5 w-5 mr-3" />}
-                    Initiate Inter-Branch Transit
-                  </Button>
+                  <div className="space-y-2">
+                    <Label className="text-xs font-semibold text-slate-700">Transfer Remarks</Label>
+                    <Input
+                      placeholder="Optional details..."
+                      value={transferForm.notes}
+                      onChange={(e) => setTransferForm({ ...transferForm, notes: e.target.value })}
+                      className="h-10 border-slate-300 rounded-md bg-white text-sm"
+                    />
+                  </div>
                 </div>
+                <DialogFooter className="gap-2 border-t border-slate-100 pt-5">
+                  <Button variant="outline" className="h-10 px-6" onClick={() => setIsTransferOpen(false)}>Cancel</Button>
+                  <Button className="bg-slate-900 hover:bg-slate-800 text-white h-10 px-6 font-medium rounded-md shadow-sm text-sm transition-all" onClick={handleTransfer} disabled={isTransferring}>
+                    {isTransferring && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+                    Confirm Transfer
+                  </Button>
+                </DialogFooter>
               </DialogContent>
             </Dialog>
 
           </div>
         </div>
-      </div>
 
       {/* KPI GRID: THE POWER PANEL */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
         {/* TOTAL SKUs */}
-        <Card className="border-none shadow-md bg-white rounded-3xl overflow-hidden transition-all hover:shadow-xl hover:-translate-y-0.5">
+        <Card className="border-none shadow-md bg-white rounded-xl overflow-hidden transition-all hover:shadow-xl hover:-translate-y-0.5">
           <CardContent className="p-5">
             <div className="flex items-start justify-between">
               <div>
-                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-0.5">Inventory SKUs</p>
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-0.5">Inventory SKUs</p>
                 {isLoading ? (
                   <div className="h-9 w-20 bg-slate-100 animate-pulse rounded-lg mt-1" />
                 ) : (
-                  <h3 className="text-3xl font-black text-slate-800 tracking-tighter">{totalStocks}</h3>
+                  <h3 className="text-2xl font-medium text-slate-800 tracking-tighter">{totalStocks}</h3>
                 )}
               </div>
               <div className="h-10 w-10 rounded-xl bg-indigo-50 flex items-center justify-center">
@@ -970,15 +993,15 @@ export function StockManagement() {
         </Card>
 
         {/* AGGREGATE QUANTITY */}
-        <Card className="border-none shadow-md bg-white rounded-3xl overflow-hidden transition-all hover:shadow-xl hover:-translate-y-0.5">
+        <Card className="border-none shadow-md bg-white rounded-xl overflow-hidden transition-all hover:shadow-xl hover:-translate-y-0.5">
           <CardContent className="p-5">
             <div className="flex items-start justify-between">
               <div>
-                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-0.5">Total Units</p>
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-0.5">Total Units</p>
                 {isLoading ? (
                   <div className="h-9 w-24 bg-emerald-50 animate-pulse rounded-lg mt-1" />
                 ) : (
-                  <h3 className={`text-3xl font-black tracking-tighter ${totalUnits < 0 ? 'text-rose-600' : 'text-slate-900'}`}>{formatQty(totalUnits)}</h3>
+                  <h3 className={`text-2xl font-bold tracking-tighter ${totalUnits < 0 ? 'text-rose-600' : 'text-slate-900'}`}>{formatQty(totalUnits)}</h3>
                 )}
               </div>
               <div className="h-10 w-10 rounded-xl bg-emerald-50 flex items-center justify-center">
@@ -990,15 +1013,15 @@ export function StockManagement() {
         </Card>
 
         {/* LOW STOCK */}
-        <Card className="border-none shadow-md bg-white rounded-3xl overflow-hidden transition-all hover:shadow-xl hover:-translate-y-0.5 border-l-4 border-l-rose-500">
+        <Card className="border-none shadow-md bg-white rounded-xl overflow-hidden transition-all hover:shadow-xl hover:-translate-y-0.5 border-l-4 border-l-rose-500">
           <CardContent className="p-5">
             <div className="flex items-start justify-between">
               <div>
-                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-0.5">Restock Alerts</p>
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-0.5">Restock Alerts</p>
                 {isLoading ? (
                   <div className="h-9 w-16 bg-rose-50 animate-pulse rounded-lg mt-1" />
                 ) : (
-                  <h3 className="text-3xl font-black text-rose-600 tracking-tighter">{alerts}</h3>
+                  <h3 className="text-2xl font-bold text-rose-600 tracking-tighter">{alerts}</h3>
                 )}
               </div>
               <div className="h-10 w-10 rounded-xl bg-rose-50 flex items-center justify-center">
@@ -1010,7 +1033,7 @@ export function StockManagement() {
         </Card>
 
         {/* TODAY'S MOVEMENTS */}
-        <Card className="border-none shadow-md bg-white rounded-3xl overflow-hidden transition-all hover:shadow-xl hover:-translate-y-0.5">
+        <Card className="border-none shadow-md bg-white rounded-xl overflow-hidden transition-all hover:shadow-xl hover:-translate-y-0.5">
           <CardContent className="p-5">
             <div className="flex items-start justify-between">
               <div>
@@ -1018,7 +1041,7 @@ export function StockManagement() {
                 {isLoading ? (
                   <div className="h-9 w-12 bg-blue-50 animate-pulse rounded-lg mt-1" />
                 ) : (
-                  <h3 className="text-3xl font-black text-blue-600 tracking-tighter">{todayMovements.length}</h3>
+                  <h3 className="text-2xl font-bold text-blue-600 tracking-tighter">{todayMovements.length}</h3>
                 )}
               </div>
               <div className="h-10 w-10 rounded-xl bg-blue-50 flex items-center justify-center">
@@ -1030,27 +1053,28 @@ export function StockManagement() {
         </Card>
       </div>
 
-      {/* FILTER STATIONS */}
-      <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex flex-col md:flex-row items-center gap-6">
+      <div className="bg-white p-4 rounded-md shadow-sm border border-slate-200 flex flex-col md:flex-row items-center gap-4">
         <div className="flex-1 w-full relative group">
-          <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 group-focus-within:text-indigo-500 transition-colors" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
           <Input
-            placeholder="Search by Product Name or SKU Identity..."
+            placeholder="Search by Product Name or SKU..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="pl-12 h-12 rounded-2xl bg-slate-50 border-none font-bold text-slate-700 placeholder:text-slate-300 focus:ring-2 focus:ring-indigo-500/10"
+            className="pl-10 h-10 rounded-md border-slate-300 bg-white text-sm"
           />
         </div>
 
-        <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
+        <div className="flex items-center gap-2 w-full md:w-auto">
           <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-            <SelectTrigger className="w-full md:w-48 h-12 rounded-2xl border-slate-100 bg-white font-bold text-slate-600 shadow-sm transition-all focus:ring-2 focus:ring-indigo-500/10">
-              <Filter className="h-3.5 w-3.5 mr-2 text-indigo-500 shadow-sm" />
+            <SelectTrigger className="w-full md:w-48 h-10 rounded-md border-slate-300 bg-white text-sm shadow-sm">
+              <Filter className="h-3.5 w-3.5 mr-2 text-slate-400" />
               <SelectValue placeholder="Category" />
             </SelectTrigger>
-            <SelectContent className="rounded-2xl shadow-xl border-slate-100">
-              <SelectItem value="all" className="font-bold text-xs uppercase tracking-tight">All Categories</SelectItem>
-              {categories.map((c: any) => <SelectItem key={c.id} value={c.id} className="font-bold text-xs uppercase tracking-tight">{c.name}</SelectItem>)}
+            <SelectContent className="rounded-md shadow-xl">
+              <SelectItem value="all" className="text-sm">All Categories</SelectItem>
+              {categories.filter((c: any) => c.name?.toLowerCase() !== 'all' && c.id !== 'all').map((c: any) => (
+                <SelectItem key={c.id} value={c.id} className="text-sm">{c.name}</SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </div>
@@ -1058,24 +1082,24 @@ export function StockManagement() {
 
       <div className="flex flex-wrap items-center gap-2 px-2">
         <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest mr-2">Status Legend:</span>
-        <Badge variant="outline" className="bg-emerald-50 text-emerald-600 border-none font-black text-[9px] px-3 py-1 uppercase rounded-full">In Stock</Badge>
-        <Badge variant="outline" className="bg-amber-50 text-amber-600 border-none font-black text-[9px] px-3 py-1 uppercase rounded-full">Low</Badge>
-        <Badge variant="outline" className="bg-rose-50 text-rose-600 border-none font-black text-[9px] px-3 py-1 uppercase rounded-full">Out</Badge>
+        <Badge variant="outline" className="bg-slate-100 text-slate-600">In Stock</Badge>
+        <Badge variant="outline" className="bg-slate-100 text-slate-600">Low</Badge>
+        <Badge variant="outline" className="bg-slate-100 text-slate-600">Out</Badge>
       </div>
 
       {/* Tabs for Stock and History */}
       <Tabs defaultValue="stock" className="space-y-6">
         <div className="flex px-1">
-          <TabsList className="bg-white p-1 rounded-xl border border-slate-200 shadow-sm h-11 shrink-0 w-full max-w-md grid grid-cols-3">
-            <TabsTrigger value="stock" className="rounded-lg h-9 font-black text-[10px] uppercase tracking-widest data-[state=active]:bg-slate-900 data-[state=active]:text-white transition-all">Stock List</TabsTrigger>
-            <TabsTrigger value="history" className="rounded-lg h-9 font-black text-[10px] uppercase tracking-widest data-[state=active]:bg-slate-900 data-[state=active]:text-white transition-all">Movement Log</TabsTrigger>
-            <TabsTrigger value="today" className="rounded-lg h-9 font-black text-[10px] uppercase tracking-widest data-[state=active]:bg-slate-900 data-[state=active]:text-white transition-all">Today's Phase</TabsTrigger>
+          <TabsList className="bg-white p-1 rounded-xl border border-slate-200 shadow-sm h-10 shrink-0 w-full max-w-md grid grid-cols-3">
+            <TabsTrigger value="stock" className="rounded-lg h-8 font-black text-[10px] uppercase tracking-widest data-[state=active]:bg-slate-900 data-[state=active]:text-white transition-all">Stock List</TabsTrigger>
+            <TabsTrigger value="history" className="rounded-lg h-8 font-black text-[10px] uppercase tracking-widest data-[state=active]:bg-slate-900 data-[state=active]:text-white transition-all">Movement Log</TabsTrigger>
+            <TabsTrigger value="today" className="rounded-lg h-8 font-black text-[10px] uppercase tracking-widest data-[state=active]:bg-slate-900 data-[state=active]:text-white transition-all">Today's Phase</TabsTrigger>
           </TabsList>
         </div>
 
         {/* Current Stock Tab Content */}
         <TabsContent value="stock" className="mt-0 outline-none">
-          <Card className="border-none shadow-sm rounded-3xl overflow-hidden bg-white">
+          <Card className="border-none shadow-sm rounded-xl overflow-hidden bg-white">
             <CardHeader className="bg-slate-50/50 px-8 py-5 border-b border-slate-100">
               <div className="flex items-center justify-between">
                 <div>
@@ -1088,7 +1112,7 @@ export function StockManagement() {
                     <SelectTrigger className="w-20 h-8 border-slate-200 bg-white rounded-lg text-xs font-bold">
                       <SelectValue />
                     </SelectTrigger>
-                    <SelectContent className="rounded-xl border-slate-100">
+                    <SelectContent className="rounded-md border-slate-300">
                       {paginationOptions.map((size) => <SelectItem key={size} value={String(size)} className="font-bold text-xs">{size}</SelectItem>)}
                     </SelectContent>
                   </Select>
@@ -1096,25 +1120,26 @@ export function StockManagement() {
               </div>
             </CardHeader>
             <CardContent className="p-0 relative">
-              {isLoading && (
-                <div className="absolute inset-0 z-50 bg-white/60 backdrop-blur-[2px] flex flex-col items-center justify-center p-20">
-                  <div className="h-14 w-14 rounded-full border-4 border-slate-100 border-t-indigo-600 animate-spin mb-4" />
-                  <div className="text-[10px] font-black uppercase tracking-widest text-indigo-600 animate-pulse">Syncing Operational Data...</div>
-                </div>
-              )}
+
 
               <Table>
                 <TableHeader className="bg-slate-50/30">
                   <TableRow className="hover:bg-transparent border-slate-100">
-                    <TableHead className="w-[300px] font-black text-[10px] uppercase tracking-widest text-slate-400 p-8 py-4">Product Detail</TableHead>
+                    <TableHead className="w-[300px] font-black text-[10px] uppercase tracking-widest text-slate-400 p-5 py-4">Product Detail</TableHead>
                     <TableHead className="font-black text-[10px] uppercase tracking-widest text-slate-400 py-4">Identity / SKU</TableHead>
                     <TableHead className="font-black text-[10px] uppercase tracking-widest text-slate-400 py-4 text-center">In-Hand Units</TableHead>
                     <TableHead className="font-black text-[10px] uppercase tracking-widest text-slate-400 py-4">Status</TableHead>
-                    <TableHead className="font-black text-[10px] uppercase tracking-widest text-slate-400 p-8 py-4 text-right">Synchronization</TableHead>
+                    <TableHead className="font-black text-[10px] uppercase tracking-widest text-slate-400 p-5 py-4 text-right">Synchronization</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {allStocks.length === 0 ? (
+                  {isLoading ? (
+                    <TableRow>
+                      <TableCell colSpan={6} className="p-0">
+                        <PageLoader message="Syncing Ledger..." className="min-h-[300px]" />
+                      </TableCell>
+                    </TableRow>
+                  ) : allStocks.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={5} className="text-center p-24">
                         <div className="flex flex-col items-center opacity-20">
@@ -1129,7 +1154,7 @@ export function StockManagement() {
                       const status = getStockStatusMeta(qty);
                       return (
                         <TableRow key={s.id} className="hover:bg-slate-50/50 group transition-all duration-200 border-slate-50">
-                          <TableCell className="p-8 py-5">
+                          <TableCell className="p-5 py-5">
                             <div className="flex flex-col">
                               <span className="font-black text-slate-800 text-sm group-hover:text-indigo-600 transition-colors uppercase tracking-tight">{s.product.name}</span>
                               <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter mt-1">{s.branch?.name} Cluster</span>
@@ -1148,7 +1173,7 @@ export function StockManagement() {
                               {status.label}
                             </div>
                           </TableCell>
-                          <TableCell className="p-8 py-5 text-right">
+                          <TableCell className="p-5 py-5 text-right">
                             <div className="flex flex-col items-end">
                               <span className="text-[10px] font-bold text-slate-500 uppercase tracking-tighter">{new Date(s.last_updated).toLocaleDateString()}</span>
                               <span className="text-[9px] font-medium text-slate-300 uppercase italic">Checked: {new Date(s.last_updated).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
@@ -1163,7 +1188,7 @@ export function StockManagement() {
 
               {/* Pagination Section */}
               {totalStockPages > 1 && (
-                <div className="flex flex-col sm:flex-row items-center justify-between p-8 bg-slate-50/30 border-t border-slate-100 gap-4">
+                <div className="flex flex-col sm:flex-row items-center justify-between p-5 bg-slate-50/30 border-t border-slate-100 gap-4">
                   <div className="text-[10px] font-black uppercase text-slate-400 tracking-widest">
                     Cluster Domain Partition {stockPage} of {totalStockPages}
                   </div>
@@ -1196,32 +1221,38 @@ export function StockManagement() {
 
         {/* Movement History Tab Content */}
         <TabsContent value="history" className="mt-0 outline-none">
-          <Card className="border-none shadow-sm rounded-3xl overflow-hidden bg-white">
+          <Card className="border-none shadow-sm rounded-xl overflow-hidden bg-white">
             <Table>
               <TableHeader className="bg-slate-50/30">
                 <TableRow className="border-slate-100">
-                  <TableHead className="font-black text-[10px] uppercase p-8 py-4 text-slate-400 tracking-widest">Chronology</TableHead>
+                  <TableHead className="font-black text-[10px] uppercase p-5 py-4 text-slate-400 tracking-widest">Chronology</TableHead>
                   <TableHead className="font-black text-[10px] uppercase text-slate-400 tracking-widest">Entity Profile</TableHead>
                   <TableHead className="font-black text-[10px] uppercase text-slate-400 tracking-widest">Action Protocol</TableHead>
                   <TableHead className="font-black text-[10px] uppercase text-center text-slate-400 tracking-widest">$\Delta$ Quantity</TableHead>
                   <TableHead className="font-black text-[10px] uppercase text-slate-400 tracking-widest">State Sync (Old &rarr; New)</TableHead>
-                  <TableHead className="font-black text-[10px] uppercase p-8 py-4 text-right text-slate-400 tracking-widest">Executor ID</TableHead>
+                  <TableHead className="font-black text-[10px] uppercase p-5 py-4 text-right text-slate-400 tracking-widest">Executor ID</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {history.length === 0 ? (
+                {isLoading ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="p-0">
+                      <PageLoader message="Retrieving Logs..." className="min-h-[300px]" />
+                    </TableCell>
+                  </TableRow>
+                ) : history.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={6} className="text-center p-20 italic text-slate-300 text-xs uppercase font-black">No movement history discovered</TableCell>
                   </TableRow>
                 ) : (
                   history.map((m) => (
                     <TableRow key={m.id} className="hover:bg-slate-50/50 border-slate-50 transition-colors">
-                      <TableCell className="p-8 py-4 text-[10px] font-bold text-slate-500 whitespace-nowrap">
+                      <TableCell className="p-5 py-4 text-[10px] font-bold text-slate-500 whitespace-nowrap">
                         {new Date(m.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
                       </TableCell>
                       <TableCell>
                         <div className="flex flex-col min-w-[200px]">
-                          <span className="font-black text-slate-800 text-xs uppercase tracking-tighter">{m.product.name}</span>
+                          <span className="text-sm font-medium text-slate-900s uppercase tracking-tighter">{m.product.name}</span>
                           <span className="text-[9px] font-bold text-indigo-400 uppercase tracking-widest">{m.branch?.name}</span>
                         </div>
                       </TableCell>
@@ -1238,7 +1269,7 @@ export function StockManagement() {
                           <span className="bg-slate-900 text-white px-2 py-0.5 rounded font-black">{formatQty(Number(m.new_qty))}</span>
                         </div>
                       </TableCell>
-                      <TableCell className="p-8 py-4 text-right text-[10px] font-black text-slate-400 uppercase tracking-tighter max-w-[120px] truncate">
+                      <TableCell className="p-5 py-4 text-right text-[10px] font-black text-slate-400 uppercase tracking-tighter max-w-[120px] truncate">
                         {m.user?.email.split('@')[0] || "SYSTEM"}
                       </TableCell>
                     </TableRow>
@@ -1255,23 +1286,29 @@ export function StockManagement() {
             <Table>
               <TableHeader className="bg-slate-50/30">
                 <TableRow className="border-slate-100">
-                  <TableHead className="font-black text-[10px] uppercase p-8 py-4 text-slate-400 tracking-widest">Timestamp</TableHead>
+                  <TableHead className="font-black text-[10px] uppercase p-5 py-4 text-slate-400 tracking-widest">Timestamp</TableHead>
                   <TableHead className="font-black text-[10px] uppercase text-slate-400 tracking-widest">Target Entity</TableHead>
                   <TableHead className="font-black text-[10px] uppercase text-slate-400 tracking-widest">Protocol</TableHead>
                   <TableHead className="font-black text-[10px] uppercase text-center text-slate-400 tracking-widest">Variance</TableHead>
                   <TableHead className="font-black text-[10px] uppercase text-slate-400 tracking-widest">Final State</TableHead>
-                  <TableHead className="font-black text-[10px] uppercase p-8 py-4 text-right text-slate-400 tracking-widest">Audit Notes</TableHead>
+                  <TableHead className="font-black text-[10px] uppercase p-5 py-4 text-right text-slate-400 tracking-widest">Audit Notes</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {todayMovements.length === 0 ? (
+                {isLoading ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="p-0">
+                      <PageLoader message="Syncing Today's Phase..." className="min-h-[300px]" />
+                    </TableCell>
+                  </TableRow>
+                ) : todayMovements.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={6} className="text-center p-20 italic text-slate-300 text-xs uppercase font-black">No events recorded today</TableCell>
                   </TableRow>
                 ) : (
                   todayMovements.map((m) => (
                     <TableRow key={m.id} className="hover:bg-slate-50/50 border-slate-50 transition-colors">
-                      <TableCell className="p-8 py-4 text-[10px] font-black text-indigo-600 uppercase">
+                      <TableCell className="p-5 py-4 text-[10px] font-black text-indigo-600 uppercase">
                         {new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </TableCell>
                       <TableCell className="font-black text-slate-700 text-xs uppercase tracking-tighter">{m.product.name}</TableCell>
@@ -1280,7 +1317,7 @@ export function StockManagement() {
                       <TableCell>
                         <div className="bg-slate-900 text-white px-2 py-0.5 rounded font-black text-[10px] inline-block">{formatQty(Number(m.new_qty))}</div>
                       </TableCell>
-                      <TableCell className="p-8 py-4 text-right text-[10px] font-bold text-slate-400 max-w-[150px] truncate italic uppercase tracking-tighter">
+                      <TableCell className="p-5 py-4 text-right text-[10px] font-bold text-slate-400 max-w-[150px] truncate italic uppercase tracking-tighter">
                         {m.notes || "-"}
                       </TableCell>
                     </TableRow>

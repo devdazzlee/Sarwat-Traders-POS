@@ -175,11 +175,11 @@ class CustomerLedgerService {
     const salesMap: Record<string, { sale_number: string; payment_method: string }> = {};
     if (saleIds.length > 0) {
       const sales = await prisma.sale.findMany({
-        where: { id: { in: saleIds } },
+        where: { sale_number: { in: saleIds } },
         select: { id: true, sale_number: true, payment_method: true },
       });
       for (const s of sales) {
-        salesMap[s.id] = { sale_number: s.sale_number, payment_method: s.payment_method };
+        salesMap[s.sale_number] = { sale_number: s.sale_number, payment_method: s.payment_method };
       }
     }
 

@@ -1,5 +1,6 @@
 import { prisma } from '../prisma/client';
 import { CreateExpenseInput } from '../validations/expense.validation';
+import { AppError } from '../utils/apiError';
 
 export class ExpenseService {
     async createExpense(data: CreateExpenseInput) {
@@ -44,6 +45,23 @@ export class ExpenseService {
     }
 
     async delete(id: string) {
+        const employeeType = await prisma.employeeType.findUnique({
+            where: { id },
+            include: {
+                _count: {
+                    select: { employees: true }
+                }
+            }
+        });
+
+        if (!employeeType) {
+            throw new AppError(404, 'Designation not found');
+        }
+
+        if (employeeType._count.employees > 0) {
+            throw new AppError(400, 'Cannot delete this designation because it is currently assigned to one or more employees. Please reassign the employees first.');
+        }
+
         return prisma.employeeType.delete({ where: { id } });
     }
 }

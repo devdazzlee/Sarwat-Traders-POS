@@ -30,8 +30,9 @@ export const getShiftHistory = asyncHandler(async (req: Request, res: Response) 
 
 export const endCurrentShift = asyncHandler(async (req: Request, res: Response) => {
   const { employee_id } = req.params;
-  await shiftAssignmentService.endCurrentShift(employee_id);
-  new ApiResponse(null, 'Current shift ended successfully', 200).send(res);
+  const { sales } = req.body;
+  const endedShift = await shiftAssignmentService.endCurrentShift(employee_id, Number(sales) || 0);
+  new ApiResponse(endedShift, 'Current shift ended successfully', 200).send(res);
 });
 
 export const getAllShifts = asyncHandler(async (req: Request, res: Response) => {
@@ -41,11 +42,13 @@ export const getAllShifts = asyncHandler(async (req: Request, res: Response) => 
 
 export const updateShift = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
-  const { shift_time, start_date, end_date } = req.body;
+  const { shift_time, start_date, end_date, status, sales } = req.body;
   const updated = await shiftAssignmentService.updateShift(id, {
     shift_time,
     start_date: start_date ? new Date(start_date) : undefined,
     end_date: end_date ? new Date(end_date) : undefined,
+    status,
+    sales: sales !== undefined ? Number(sales) : undefined,
   });
   new ApiResponse(updated, 'Shift updated successfully', 200).send(res);
 });

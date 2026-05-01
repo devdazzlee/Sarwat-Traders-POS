@@ -4,6 +4,7 @@ import { useEffect } from 'react'
 import { useStore } from '@/lib/store'
 import { useToast } from '@/hooks/use-toast'
 import { initializeOfflineMode } from '@/lib/offline-init'
+import { OfflineIndicator } from '@/components/offline-indicator'
 
 interface DataProviderProps {
   children: React.ReactNode
@@ -18,15 +19,12 @@ export function DataProvider({ children }: DataProviderProps) {
     if (!token) return
 
     // Evict any stale server data that was previously persisted to localStorage.
-    // Products/categories/customers are now session-only (never written to localStorage).
     localStorage.removeItem('pos-store')
 
     const initializeData = async () => {
       try {
-        // Initialize offline mode first
         await initializeOfflineMode()
 
-        // Always fetch fresh on page load — force:true bypasses in-memory TTL
         await Promise.all([
           fetchProducts({ force: true }),
           fetchCategories(true),
@@ -35,7 +33,6 @@ export function DataProvider({ children }: DataProviderProps) {
         console.log('✅ All data initialized successfully')
       } catch (error) {
         console.log('❌ Failed to initialize data:', error)
-        // Don't show toast for offline mode - it's expected
         if (navigator.onLine) {
           toast({
             variant: "destructive",
@@ -50,5 +47,10 @@ export function DataProvider({ children }: DataProviderProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  return <>{children}</>
-} 
+  return (
+    <>
+      {children}
+      <OfflineIndicator />
+    </>
+  )
+}

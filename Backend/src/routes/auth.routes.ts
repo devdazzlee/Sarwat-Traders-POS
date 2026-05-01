@@ -1,7 +1,7 @@
 import express from 'express';
-import { getCurrentUser, login, logout, register, registerAdmin } from '../controllers/auth.controller';
+import { getCurrentUser, login, logout, register, registerAdmin, changePassword } from '../controllers/auth.controller';
 import { validate } from '../middleware/validation.middleware';
-import { loginSchema, registerSchema } from '../validations/auth.validation';
+import { loginSchema, registerSchema, changePasswordSchema } from '../validations/auth.validation';
 import { authenticate, authorize } from '../middleware/auth.middleware';
 
 const router = express.Router();
@@ -14,5 +14,6 @@ router.post('/logout', authenticate, logout);
 router.use(authenticate, authorize(['SUPER_ADMIN', 'ADMIN']));
 router.post('/register/admin', validate(registerSchema), registerAdmin);
 router.get('/me', getCurrentUser);
+router.post('/change-password', validate(changePasswordSchema), changePassword);
 
 export default router;

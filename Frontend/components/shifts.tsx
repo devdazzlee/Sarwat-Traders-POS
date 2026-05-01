@@ -18,13 +18,14 @@ import {
 } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Plus, Search, Clock, Users,  DollarSign, Eye, StopCircle, Edit, Trash2, Loader2, Calendar as CalendarIcon } from "lucide-react"
+import { Plus, Search, Clock, Users,  DollarSign, Eye, StopCircle, Edit, Trash2, Loader2, Calendar as CalendarIcon, CheckCircle2 } from "lucide-react"
 import { PageLoader } from "@/components/ui/page-loader"
 import apiClient from "@/lib/apiClient"
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
+import { useToast } from "@/hooks/use-toast";
 
 interface Employee {
   id: string
@@ -57,6 +58,7 @@ interface NewShiftForm {
 }
 
 export function Shifts() {
+  const { toast } = useToast()
   const [employees, setEmployees] = useState<Employee[]>([])
   const [shifts, setShifts] = useState<Shift[]>([])
 
@@ -105,19 +107,46 @@ export function Shifts() {
   const getAllShifts = async () => {
     try {
       const res = await apiClient.get("/shift-assignment");
-      const apiShifts = res.data.data.map((shift: any) => ({
-        id: shift.id,
-        employee: shift.employee?.name || "",
-        employeeId: shift.employee_id,
-        date: shift.start_date?.split("T")[0] || "",
-        startTime: shift.shift_time?.split("-")[0]?.trim() || "",
-        endTime: shift.shift_time?.split("-")[1]?.trim() || "",
-        breakTime: shift.break_time || "1 hour",
-        totalHours: shift.total_hours || 0,
-        status: shift.status || "scheduled",
-        sales: shift.sales || 0,
-        hourlyRate: shift.hourly_rate || 15,
-      }));
+      const apiShifts = res.data.data.map((shift: any) => {
+        const startTime = shift.shift_time?.split("-")[0]?.trim() || "";
+        const endTime = shift.shift_time?.split("-")[1]?.trim() || "";
+        
+        // Determine status
+        let status: Shift["status"] = "scheduled";
+        if (shift.end_date) {
+          status = "completed";
+        } else {
+          const startDate = new Date(shift.start_date);
+          if (startDate <= new Date()) {
+            status = "active";
+          }
+        }
+
+        // Calculate total hours if not provided by backend
+        let totalHours = Number(shift.total_hours) || 0;
+        if (!totalHours && startTime && endTime) {
+          const start = new Date(`2000-01-01T${startTime}:00`);
+          const end = new Date(`2000-01-01T${endTime}:00`);
+          let diff = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
+          if (diff < 0) diff += 24;
+          const breakVal = parseFloat(shift.break_time) || 1;
+          totalHours = Math.max(0, diff - breakVal);
+        }
+
+        return {
+          id: shift.id,
+          employee: shift.employee?.name || "Unknown",
+          employeeId: shift.employee_id,
+          date: shift.start_date ? format(new Date(shift.start_date), "yyyy-MM-dd") : "",
+          startTime,
+          endTime,
+          breakTime: shift.break_time || "1 hour",
+          totalHours: Number((Number(totalHours) || 0).toFixed(2)),
+          status,
+          sales: shift.sales || 0,
+          hourlyRate: shift.hourly_rate || 15,
+        };
+      });
       setShifts(apiShifts);
     } catch (error) {
       console.log("Error fetching shifts:", error);
@@ -136,7 +165,15 @@ export function Shifts() {
     loadData()
   }, [])
 
-  const getStatusColor = (status: string) => "bg-gray-100 text-gray-800";
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case "active": return "bg-emerald-100 text-emerald-800 border-emerald-200";
+      case "scheduled": return "bg-blue-100 text-blue-800 border-blue-200";
+      case "completed": return "bg-gray-100 text-gray-800 border-gray-200";
+      case "cancelled": return "bg-red-100 text-red-800 border-red-200";
+      default: return "bg-gray-100 text-gray-800";
+    }
+  };
 
   const calculateHours = (startTime: string, endTime: string, breakHours: number) => {
     const start = new Date(`2000-01-01T${startTime}:00`)
@@ -171,16 +208,26 @@ export function Shifts() {
 
   // Add (Assign) Shift
   const handleCreateShift = async () => {
-    if (newShift.employeeId && newShift.date && newShift.startTime && newShift.endTime) {
+    if (newShift.employeeId && date && newShift.startTime && newShift.endTime) {
       setLoading(true)
       try {
         const shift_time = `${newShift.startTime} - ${newShift.endTime}`
-        const startDateTime = new Date(`${newShift.date}T${newShift.startTime}:00`).toISOString()
+        // Combine date and time correctly
+        const startDateTime = new Date(date)
+        const [hours, minutes] = newShift.startTime.split(":").map(Number)
+        startDateTime.setHours(hours, minutes, 0, 0)
+
         await apiClient.post("/shift-assignment", {
           employee_id: newShift.employeeId,
           shift_time,
-          start_date: startDateTime,
+          start_date: startDateTime.toISOString(),
         })
+        
+        toast({
+          title: "Success",
+          description: "Shift scheduled successfully",
+        })
+        
         setIsCreateShiftOpen(false)
         setNewShift({
           employee: "",
@@ -191,12 +238,24 @@ export function Shifts() {
           endTime: "",
           breakTime: "1",
         })
+        setDate(undefined)
         await getAllShifts()
-      } catch (error) {
+      } catch (error: any) {
         console.log("Error assigning shift:", error)
+        toast({
+          title: "Error",
+          description: error?.response?.data?.message || "Failed to schedule shift",
+          variant: "destructive",
+        })
       } finally {
         setLoading(false)
       }
+    } else {
+      toast({
+        title: "Validation Error",
+        description: "Please fill all required fields",
+        variant: "destructive",
+      })
     }
   }
 
@@ -288,13 +347,12 @@ export function Shifts() {
     if (status) {
       switch (status) {
         case "today":
-          const today = new Date().toISOString().split("T")[0]
-          filtered = filtered.filter((shift) => shift.date === today)
+          const todayStr = format(new Date(), "yyyy-MM-dd")
+          filtered = filtered.filter((shift) => shift.date === todayStr || shift.status === "active")
           break
         case "week":
-          const weekAgo = new Date()
-          weekAgo.setDate(weekAgo.getDate() - 7)
-          filtered = filtered.filter((shift) => new Date(shift.date) >= weekAgo)
+          const weekAgoStr = format(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), "yyyy-MM-dd")
+          filtered = filtered.filter((shift) => shift.date >= weekAgoStr)
           break
         case "scheduled":
           filtered = filtered.filter((shift) => shift.status === "scheduled")
@@ -324,8 +382,8 @@ export function Shifts() {
   }
 
   // Calculate statistics
-  const today = new Date().toISOString().split("T")[0]
-  const todayShifts = shifts.filter((shift) => shift.date === today)
+  const todayLocal = format(new Date(), "yyyy-MM-dd")
+  const todayShifts = shifts.filter((shift) => shift.date === todayLocal)
   const todayHours = todayShifts.reduce((sum, shift) => {
     // Parse start and end times
     const [startHour, startMinute] = shift.startTime.split(":").map(Number);
@@ -341,12 +399,13 @@ export function Shifts() {
 
     return sum + hours;
   }, 0);
-  const activeShifts = shifts.filter((shift) => shift.status === "active" || shift.status === "scheduled").length;
   const tomorrowShifts = shifts.filter((shift) => {
     const tomorrow = new Date()
     tomorrow.setDate(tomorrow.getDate() + 1)
-    return shift.date === tomorrow.toISOString().split("T")[0] && shift.status === "scheduled"
+    const tomorrowStr = format(tomorrow, "yyyy-MM-dd")
+    return shift.date === tomorrowStr && shift.status === "scheduled"
   }).length
+  const activeShifts = shifts.filter((shift) => shift.status === "active" || shift.status === "scheduled").length;
   const todayLaborCost = todayShifts.reduce((sum, shift) => sum + shift.totalHours * shift.hourlyRate, 0)
 
   if (isInitialLoading) {
@@ -377,7 +436,7 @@ export function Shifts() {
             <TableCell>{shift.startTime}</TableCell>
             <TableCell>{shift.endTime}</TableCell>
             <TableCell>
-              <Badge className={getStatusColor(shift.status)}>{shift.status}</Badge>
+              <Badge variant="status" className={getStatusColor(shift.status)}>{shift.status}</Badge>
             </TableCell>
             <TableCell>
               <div className="flex gap-1">
@@ -388,8 +447,13 @@ export function Shifts() {
                   <Edit className="h-3 w-3" />
                 </Button>
                 {shift.status === "active" && (
-                  <Button variant="outline" size="sm" onClick={() => handleEndShift(shift)}>
-                    <StopCircle className="h-3 w-3" />
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={() => handleEndShift(shift)}
+                    className="bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border-emerald-200"
+                  >
+                    <CheckCircle2 className="h-3 w-3 mr-1" /> Complete
                   </Button>
                 )}
                 {shift.status === "scheduled" && (
@@ -712,7 +776,7 @@ export function Shifts() {
                 </div>
                 <div>
                   <Label className="text-sm font-medium text-gray-500">Status</Label>
-                  <Badge className={getStatusColor(selectedShift.status)}>{selectedShift.status}</Badge>
+                  <Badge variant="status" className={getStatusColor(selectedShift.status)}>{selectedShift.status}</Badge>
                 </div>
                 <div>
                   <Label className="text-sm font-medium text-gray-500">Start Time</Label>

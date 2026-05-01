@@ -1070,6 +1070,9 @@ class SaleService {
         },
         include: { sale_items: { include: { product: true } }, customer: true }
       });
+    }, {
+      maxWait: 20000,
+      timeout: 15000 
     });
   }
 }

@@ -545,7 +545,7 @@ export function Loyalty() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
-              <Label>Points per ₹1 spent</Label>
+              <Label>Points per Rs 1 spent</Label>
               <Input
                 type="number"
                 value={loyaltySettings.pointsPerRupee}

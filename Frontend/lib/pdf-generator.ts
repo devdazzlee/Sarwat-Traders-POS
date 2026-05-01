@@ -88,8 +88,8 @@ const buildInvoiceDoc = (data: InvoiceData): jsPDF => {
   doc.text('SARWAT TRADER', 20, 55);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
-  doc.text(data.storeAddress, 20, 60);
-  doc.text(`Contact: ${data.storePhone}`, 20, 65);
+  doc.text("Shop no 109, 1st floor city shopping mall, Marston road Karachi, Pakistan.", 20, 60);
+  doc.text(`Contact: 02132727444`, 20, 65);
   
   // Invoice Details (Right)
   doc.setFont('helvetica', 'bold');
@@ -123,11 +123,6 @@ const buildInvoiceDoc = (data: InvoiceData): jsPDF => {
   if (data.customerPhone) {
     doc.text(`Contact: ${data.customerPhone}`, 25, 102);
   }
-  
-  doc.setFont('helvetica', 'bold');
-  doc.text('PAYMENT STATUS:', pageWidth - 30, 87, { align: 'right' });
-  doc.setTextColor(data.paymentMethod === 'CREDIT' ? 220 : 22, 38, 38);
-  doc.text(data.paymentMethod.toUpperCase(), pageWidth - 30, 95, { align: 'right' });
 
   // --- Table Header ---
   const tableTopY = 120;
@@ -250,16 +245,6 @@ const buildInvoiceDoc = (data: InvoiceData): jsPDF => {
     }
   }
   
-  // --- Terms & Notes ---
-  currentY += 20;
-  doc.setFontSize(8);
-  doc.setTextColor(100, 116, 139);
-  doc.setFont('helvetica', 'bold');
-  doc.text('TERMS & CONDITIONS:', 20, currentY);
-  doc.setFont('helvetica', 'normal');
-  doc.text('1. Goods once sold are only exchangeable within 3 days in original condition.', 20, currentY + 5);
-  doc.text('2. This is a computer-generated invoice and does not require a physical signature.', 20, currentY + 9);
-  
   // --- Branding Footer ---
   doc.setFillColor(15, 23, 42);
   doc.rect(0, pageHeight - 20, pageWidth, 20, 'F');
@@ -364,8 +349,8 @@ const buildReturnNoteDoc = (data: ReturnNoteData): jsPDF => {
   doc.text('SARWAT TRADER', 20, 55);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
-  doc.text('Karachi, Pakistan', 20, 60);
-  doc.text('Contact: 0300 0000000', 20, 65);
+  doc.text('Shop no 109, 1st floor city shopping mall, Marston road Karachi, Pakistan.', 20, 60);
+  doc.text('Contact: 02132727444', 20, 65);
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
@@ -486,16 +471,6 @@ const buildReturnNoteDoc = (data: ReturnNoteData): jsPDF => {
   doc.text(netLabel, summaryX, currentY);
   doc.setTextColor(...netColor);
   doc.text(`Rs ${Math.abs(data.netAmount).toLocaleString()}`, pageWidth - 25, currentY, { align: 'right' });
-
-  // Footer
-  currentY += 20;
-  doc.setFontSize(8);
-  doc.setTextColor(100, 116, 139);
-  doc.setFont('helvetica', 'bold');
-  doc.text('TERMS & CONDITIONS:', 20, currentY);
-  doc.setFont('helvetica', 'normal');
-  doc.text('1. Exchanged items are subject to stock availability.', 20, currentY + 5);
-  doc.text('2. This is a computer-generated return note and does not require a physical signature.', 20, currentY + 9);
 
   doc.setFillColor(15, 23, 42);
   doc.rect(0, pageHeight - 20, pageWidth, 20, 'F');

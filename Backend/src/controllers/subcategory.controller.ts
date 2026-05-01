@@ -37,3 +37,8 @@ export const listSubcategories = asyncHandler(async (req: Request, res: Response
 
     new ApiResponse(result.data, 'Subcategories retrieved successfully', 200).send(res);
 });
+
+export const deleteSubcategory = asyncHandler(async (req: Request, res: Response) => {
+    await subcategoryService.deleteSubcategory(req.params.id);
+    new ApiResponse(null, 'Subcategory deleted successfully').send(res);
+});

@@ -15,6 +15,7 @@ const productBaseSchema = z.object({
     subcategory_id: z.string().optional(),
     min_qty: z.number().int().min(0).optional().default(10),
     max_qty: z.number().int().min(0).optional().default(10),
+    initial_stock: z.number().min(0).optional(),
     supplier_id: z.string().optional(),
     brand_id: z.string().optional(),
     color_id: z.string().optional(),

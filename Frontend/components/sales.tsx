@@ -35,6 +35,7 @@
   import { StatCardSkeleton } from "@/components/ui/stat-card-skeleton";
   import apiClient from "@/lib/apiClient";
   import { API_BASE } from "@/config/constants";
+  import { cachedGet, queueMutation } from "@/lib/offline-helpers";
   import { useToast } from "@/hooks/use-toast";
   import { CashRegister } from "@/components/cash-register";
   import { usePrinterSettings } from "@/hooks/use-printer-settings";
@@ -92,35 +93,26 @@ interface Sale {
       items: [{ productId: "", quantity: 1, price: 0 }],
     });
 
-    // 1) Load branches, customers, products
+    // 1) Load branches, customers, products (offline-aware)
     useEffect(() => {
       const loadMeta = async () => {
         setIsInitialLoading(true);
         try {
-          const [bRes, cRes, pRes] = await Promise.all([
-            apiClient.get(`${API_BASE}/branches?fetch_all=true`),
-            apiClient.get(`${API_BASE}/customer`),
-            apiClient.get(`${API_BASE}/products?fetch_all=true`),
+          const [branches, customers, products] = await Promise.all([
+            cachedGet<Branch[]>('/branches', { fetch_all: true }, 'branches'),
+            cachedGet<Customer[]>('/customer', undefined, 'customers-sales'),
+            cachedGet<Product[]>('/products', { fetch_all: true }, 'products-sales'),
           ]);
-          setBranches(bRes.data.data);
-          setCustomers(cRes.data.data);
-          setProducts(pRes.data.data);
-          // default branch filter
-          if (bRes.data.data.length) {
-            setBranchFilter(bRes.data.data[0].id);
-            setSaleForm(f => ({ ...f, branchId: bRes.data.data[0].id }));
+          setBranches(branches || []);
+          setCustomers(customers || []);
+          setProducts(products || []);
+          if (branches?.length) {
+            setBranchFilter(branches[0].id);
+            setSaleForm(f => ({ ...f, branchId: branches[0].id }));
           }
-          toast({
-            title: "Success",
-            description: "Sales data loaded successfully",
-          });
         } catch (err) {
           console.log(err);
-          toast({
-            title: "Error",
-            description: "Failed to load sales data",
-            variant: "destructive",
-          });
+          toast({ title: "Error", description: "Failed to load sales data", variant: "destructive" });
         } finally {
           setIsInitialLoading(false);
         }
@@ -128,26 +120,15 @@ interface Sale {
       loadMeta();
     }, [toast]);
 
-    // 2) Fetch sales when branchFilter changes
+    // 2) Fetch sales when branchFilter changes (offline-aware)
     useEffect(() => {
       if (!branchFilter) return;
       setIsLoading(true);
-      apiClient
-        .get(`${API_BASE}/sale`, { params: { branchId: branchFilter } })
-        .then(res => {
-          setSales(res.data.data);
-          toast({
-            title: "Success",
-            description: `Sales loaded for selected branch`,
-          });
-        })
+      cachedGet<Sale[]>('/sale', { branchId: branchFilter }, `sales-${branchFilter}`)
+        .then(data => setSales(data || []))
         .catch(err => {
           console.log(err);
-          toast({
-            title: "Error",
-            description: "Failed to load sales",
-            variant: "destructive",
-          });
+          toast({ title: "Error", description: "Failed to load sales", variant: "destructive" });
         })
         .finally(() => setIsLoading(false));
     }, [branchFilter, toast]);
@@ -164,39 +145,25 @@ interface Sale {
     const handleAddSale = async () => {
       setIsSubmitting(true);
       try {
-        await apiClient.post(`${API_BASE}/sale`, {
+        const payload = {
           branchId: saleForm.branchId,
           customerId: saleForm.customerId || undefined,
           paymentMethod: saleForm.paymentMethod,
           items: saleForm.items,
-        });
-        
-        toast({
-          title: "Success",
-          description: "Sale created successfully",
-        });
-        
+        };
+        const { queued } = await queueMutation('POST', '/sale', payload, 'sale', 10);
         setIsAddOpen(false);
-        // reset form
-        setSaleForm({
-          branchId,
-          customerId: "",
-          paymentMethod: "CASH",
-          printerName: "",
-          items: [{ productId: "", quantity: 1, price: 0 }],
-        });
-        // refresh
-        const res = await apiClient.get(`${API_BASE}/sale`, {
-          params: { branchId },
-        });
-        setSales(res.data.data);
+        setSaleForm({ branchId, customerId: "", paymentMethod: "CASH", printerName: "", items: [{ productId: "", quantity: 1, price: 0 }] });
+        if (queued) {
+          toast({ title: "Saved Offline", description: "Sale will sync when connected." });
+        } else {
+          toast({ title: "Success", description: "Sale created successfully." });
+          const fresh = await cachedGet<Sale[]>('/sale', { branchId }, `sales-${branchId}`);
+          setSales(fresh || []);
+        }
       } catch (err) {
         console.log(err);
-        toast({
-          title: "Error",
-          description: "Failed to create sale",
-          variant: "destructive",
-        });
+        toast({ title: "Error", description: "Failed to create sale", variant: "destructive" });
       } finally {
         setIsSubmitting(false);
       }
@@ -204,21 +171,17 @@ interface Sale {
 
     const handleRefund = async (saleId: string) => {
       try {
-        await apiClient.patch(`${API_BASE}/sale/${saleId}/refund`, {});
-        toast({
-          title: "Success",
-          description: "Sale refunded successfully",
-        });
-        // refresh
-        const res = await apiClient.get(`${API_BASE}/sale`, { params: { branchId } });
-        setSales(res.data.data);
+        const { queued } = await queueMutation('PATCH', `/sale/${saleId}/refund`, {}, 'refund');
+        if (queued) {
+          toast({ title: "Queued Offline", description: "Refund will process when connected." });
+        } else {
+          toast({ title: "Success", description: "Sale refunded successfully." });
+          const fresh = await cachedGet<Sale[]>('/sale', { branchId }, `sales-${branchId}`);
+          setSales(fresh || []);
+        }
       } catch (err) {
         console.log(err);
-        toast({
-          title: "Error",
-          description: "Failed to refund sale",
-          variant: "destructive",
-        });
+        toast({ title: "Error", description: "Failed to refund sale", variant: "destructive" });
       }
     };
 

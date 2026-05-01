@@ -846,6 +846,7 @@ model Employee {
   gender       String?
   join_date    DateTime
   is_active    Boolean  @default(true)
+  hourly_rate  Decimal  @default(0)
 
   // Relations
   branch_id String?
@@ -888,7 +889,19 @@ model ShiftAssignment {
 
   employee Employee @relation(fields: [employee_id], references: [id])
 
+  sales        Decimal @default(0)
+  hourly_rate  Decimal @default(0)
+  total_hours  Decimal @default(0)
+  status       String  @default("scheduled")
+
   @@unique([employee_id,start_date])
+}
+
+enum ShiftStatus {
+  scheduled
+  active
+  completed
+  cancelled
 }
 
 model Salary {

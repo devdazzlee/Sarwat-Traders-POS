@@ -130,7 +130,8 @@ const WebsiteOrders: React.FC = () => {
     return {
       storeName: "SARWAT TRADER",
       tagline: "Quality • Service • Value",
-      address: "Karachi",
+      address: "Shop no 109, 1st floor city shopping mall, Marston road Karachi, Pakistan.",
+      storePhone: "02132727444",
       transactionId: order.order_number,
       timestamp: order.created_at,
       cashier: "Website",

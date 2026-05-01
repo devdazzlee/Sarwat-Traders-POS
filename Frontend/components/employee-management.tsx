@@ -12,6 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Search, Plus, Edit, Trash2, Loader2, Users } from "lucide-react"
 import apiClient from "@/lib/apiClient"
+import { useToast } from "@/hooks/use-toast"
 import { PageLoader } from "@/components/ui/page-loader"
 import { StatCardSkeleton } from "@/components/ui/stat-card-skeleton"
 import { Calendar } from "@/components/ui/calendar"
@@ -45,6 +46,7 @@ interface EmployeeType {
 }
 
 export function EmployeeManagement() {
+  const { toast } = useToast()
   const [employees, setEmployees] = useState<Employee[]>([])
   const [employeeTypes, setEmployeeTypes] = useState<EmployeeType[]>([])
   const [typesLoading, setTypesLoading] = useState(false)
@@ -115,11 +117,20 @@ export function EmployeeManagement() {
         if (newEmployee.cnic) payload.cnic = newEmployee.cnic
         if (newEmployee.gender) payload.gender = newEmployee.gender
         await apiClient.post("/employee", payload)
+        toast({
+          title: "Success",
+          description: "Employee added successfully",
+        })
         setIsAddDialogOpen(false)
         setNewEmployee({ name: "", email: "", phone_number: "", cnic: "", gender: "", join_date: null, employee_type_id: "" })
         getEmployees()
-      } catch (error) {
+      } catch (error: any) {
         console.log("Add employee error", error)
+        toast({
+          title: "Error",
+          description: error?.response?.data?.message || "Failed to add employee",
+          variant: "destructive",
+        })
       } finally {
         setActionLoading(false)
       }
@@ -145,11 +156,20 @@ export function EmployeeManagement() {
           join_date: editingEmployee.join_date.toISOString(),
           employee_type_id: editingEmployee.employee_type_id,
         })
+        toast({
+          title: "Success",
+          description: "Employee updated successfully",
+        })
         setIsEditDialogOpen(false)
         setEditingEmployee(null)
         getEmployees()
-      } catch (error) {
+      } catch (error: any) {
         console.log("Edit employee error", error)
+        toast({
+          title: "Error",
+          description: error?.response?.data?.message || "Failed to update employee",
+          variant: "destructive",
+        })
       } finally {
         setActionLoading(false)
       }
@@ -167,11 +187,20 @@ export function EmployeeManagement() {
       setActionLoading(true)
       try {
         await apiClient.delete(`/employee/${deletingEmployee.id}`)
+        toast({
+          title: "Success",
+          description: "Employee deleted successfully",
+        })
         setIsDeleteDialogOpen(false)
         setDeletingEmployee(null)
         getEmployees()
-      } catch (error) {
+      } catch (error: any) {
         console.log("Delete employee error", error)
+        toast({
+          title: "Error",
+          description: error?.response?.data?.message || "Failed to delete employee",
+          variant: "destructive",
+        })
       } finally {
         setActionLoading(false)
       }

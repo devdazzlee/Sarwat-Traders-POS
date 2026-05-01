@@ -1,11 +1,5 @@
-/**
- * Offline Database - IndexedDB wrapper for storing POS data locally
- * This allows full functionality when offline
- */
-
 import Dexie, { Table } from 'dexie';
 
-// Define database schema types
 export interface Product {
   id: string;
   name: string;
@@ -13,7 +7,7 @@ export interface Product {
   price: number;
   stock?: number;
   category?: string;
-  data: any; // Full product data
+  data: any;
   lastSync: number;
 }
 
@@ -38,15 +32,23 @@ export interface Customer {
   lastSync: number;
 }
 
-export interface PendingRequest {
+export type SyncItemStatus = 'pending' | 'processing' | 'synced' | 'failed';
+
+export interface SyncQueueItem {
   id: string;
+  operationId: string;
+  type: string;
   url: string;
   method: string;
-  body?: any;
-  headers?: any;
-  timestamp: number;
-  retries: number;
-  priority: number; // Higher = more important
+  payload?: any;
+  headers?: Record<string, string>;
+  status: SyncItemStatus;
+  retryCount: number;
+  maxRetries: number;
+  priority: number;
+  createdAt: number;
+  lastAttemptAt: number | null;
+  errorMessage: string | null;
 }
 
 export interface CachedData {
@@ -56,40 +58,91 @@ export interface CachedData {
   expiresAt?: number;
 }
 
-// Create Dexie database
+interface LegacyPendingRequest {
+  id: string;
+  url: string;
+  method: string;
+  body?: any;
+  headers?: any;
+  timestamp: number;
+  retries: number;
+  priority: number;
+}
+
 class OfflineDatabase extends Dexie {
   products!: Table<Product>;
   sales!: Table<Sale>;
   customers!: Table<Customer>;
-  pendingRequests!: Table<PendingRequest>;
+  syncQueue!: Table<SyncQueueItem>;
   cachedData!: Table<CachedData>;
 
   constructor() {
     super('ManpasandPOSDB');
-    
+
     this.version(1).stores({
       products: 'id, name, sku, category, lastSync',
       sales: 'id, timestamp, synced, employeeId, branchId',
       customers: 'id, name, email, phone, lastSync',
       pendingRequests: 'id, timestamp, priority, retries',
-      cachedData: 'key, timestamp, expiresAt'
+      cachedData: 'key, timestamp, expiresAt',
     });
+
+    this.version(2)
+      .stores({
+        products: 'id, name, sku, category, lastSync',
+        sales: 'id, timestamp, synced, employeeId, branchId',
+        customers: 'id, name, email, phone, lastSync',
+        pendingRequests: null,
+        syncQueue: 'id, operationId, status, priority, createdAt',
+        cachedData: 'key, timestamp, expiresAt',
+      })
+      .upgrade(async (tx) => {
+        try {
+          const old = await tx.table<LegacyPendingRequest>('pendingRequests').toArray();
+          if (old.length > 0) {
+            const items: SyncQueueItem[] = old.map((req) => ({
+              id: req.id,
+              operationId: `migrated_${req.id}`,
+              type: 'generic',
+              url: req.url,
+              method: req.method,
+              payload: req.body,
+              headers: req.headers ?? {},
+              status: 'pending',
+              retryCount: req.retries ?? 0,
+              maxRetries: 5,
+              priority: req.priority ?? 5,
+              createdAt: req.timestamp ?? Date.now(),
+              lastAttemptAt: null,
+              errorMessage: null,
+            }));
+            await tx.table<SyncQueueItem>('syncQueue').bulkAdd(items);
+          }
+        } catch {
+          // No pendingRequests to migrate
+        }
+      });
   }
 }
 
-// Create single instance
 export const db = new OfflineDatabase();
 
-// Database helper functions
+// Reset any stuck 'processing' items on startup (crash recovery)
+db.open()
+  .then(() => {
+    db.syncQueue
+      .where('status')
+      .equals('processing')
+      .modify({ status: 'pending', lastAttemptAt: null });
+  })
+  .catch(() => {});
+
 export const offlineDB = {
-  // Products
+  // ---- Products ----
   async saveProducts(products: any[]) {
-    if (!Array.isArray(products)) {
-      console.warn('saveProducts: products is not an array', products);
-      return 0;
-    }
+    if (!Array.isArray(products)) return 0;
     const timestamp = Date.now();
-    const productsToStore = products.map(p => ({
+    const rows = products.map((p) => ({
       id: p.id || p._id || String(p.product_id),
       name: p.name || p.product_name,
       sku: p.sku,
@@ -97,49 +150,50 @@ export const offlineDB = {
       stock: p.stock || p.quantity,
       category: p.category?.name || p.category_name,
       data: p,
-      lastSync: timestamp
+      lastSync: timestamp,
     }));
-    await db.products.bulkPut(productsToStore);
-    return productsToStore.length;
+    await db.products.bulkPut(rows);
+    return rows.length;
   },
 
   async getProducts() {
-    return await db.products.toArray();
+    return db.products.toArray();
   },
 
   async getProduct(id: string) {
-    return await db.products.get(id);
+    return db.products.get(id);
   },
 
   async searchProducts(query: string) {
-    const lowerQuery = query.toLowerCase();
-    return await db.products
-      .filter(p => 
-        p.name.toLowerCase().includes(lowerQuery) ||
-        p.sku?.toLowerCase().includes(lowerQuery)
+    const q = query.toLowerCase();
+    return db.products
+      .filter(
+        (p) =>
+          p.name.toLowerCase().includes(q) ||
+          (p.sku?.toLowerCase().includes(q) ?? false)
       )
       .toArray();
   },
 
-  // Sales
+  // ---- Sales ----
   async saveSale(sale: any) {
-    const saleData: Sale = {
+    const row: Sale = {
       id: sale.id || `sale_${Date.now()}_${Math.random()}`,
-      products: sale.products || sale.items,
-      total: sale.total || sale.amount,
+      products: sale.products || sale.items || [],
+      total: sale.total || sale.amount || 0,
       customer: sale.customer,
       payment: sale.payment,
       timestamp: Date.now(),
       synced: false,
       employeeId: sale.employeeId || sale.employee_id,
-      branchId: sale.branchId || sale.branch_id
+      branchId: sale.branchId || sale.branch_id,
     };
-    await db.sales.put(saleData);
-    return saleData;
+    await db.sales.put(row);
+    return row;
   },
 
   async getUnsyncedSales() {
-    return await db.sales.where('synced').equals(0).toArray();
+    return db.sales.where('synced').equals(0).toArray();
   },
 
   async markSaleSynced(id: string) {
@@ -147,140 +201,164 @@ export const offlineDB = {
   },
 
   async getAllSales() {
-    return await db.sales.orderBy('timestamp').reverse().toArray();
+    return db.sales.orderBy('timestamp').reverse().toArray();
   },
 
-  // Customers
+  // ---- Customers ----
   async saveCustomers(customers: any[]) {
     const timestamp = Date.now();
-    const customersToStore = customers.map(c => ({
+    const rows = customers.map((c) => ({
       id: c.id || c._id || String(c.customer_id),
       name: c.name || c.customer_name,
       email: c.email,
-      phone: c.phone || c.mobile,
+      phone: c.phone || c.mobile || c.phone_number,
       data: c,
-      lastSync: timestamp
+      lastSync: timestamp,
     }));
-    await db.customers.bulkPut(customersToStore);
-    return customersToStore.length;
+    await db.customers.bulkPut(rows);
+    return rows.length;
   },
 
   async getCustomers() {
-    return await db.customers.toArray();
+    return db.customers.toArray();
   },
 
   async searchCustomers(query: string) {
-    const lowerQuery = query.toLowerCase();
-    return await db.customers
-      .filter(c => 
-        c.name.toLowerCase().includes(lowerQuery) ||
-        c.email?.toLowerCase().includes(lowerQuery) ||
-        c.phone?.includes(query)
+    const q = query.toLowerCase();
+    return db.customers
+      .filter(
+        (c) =>
+          c.name.toLowerCase().includes(q) ||
+          (c.email?.toLowerCase().includes(q) ?? false) ||
+          (c.phone?.includes(query) ?? false)
       )
       .toArray();
   },
 
-  // Pending Requests Queue
-  async queueRequest(request: {
-    url: string;
-    method: string;
-    body?: any;
-    headers?: any;
-    priority?: number;
-  }) {
-    const pendingRequest: PendingRequest = {
-      id: `req_${Date.now()}_${Math.random()}`,
-      url: request.url,
-      method: request.method,
-      body: request.body,
-      headers: request.headers,
-      timestamp: Date.now(),
-      retries: 0,
-      priority: request.priority || 5
+  // ---- Sync Queue ----
+  async enqueue(
+    item: Omit<SyncQueueItem, 'id' | 'retryCount' | 'status' | 'createdAt' | 'lastAttemptAt' | 'errorMessage'>
+  ): Promise<SyncQueueItem> {
+    const row: SyncQueueItem = {
+      ...item,
+      id: crypto.randomUUID(),
+      retryCount: 0,
+      status: 'pending',
+      createdAt: Date.now(),
+      lastAttemptAt: null,
+      errorMessage: null,
     };
-    await db.pendingRequests.put(pendingRequest);
-    return pendingRequest;
+    await db.syncQueue.add(row);
+    return row;
   },
 
-  async getPendingRequests() {
-    return await db.pendingRequests
-      .orderBy('priority')
-      .reverse()
-      .toArray();
+  async getPendingItems(): Promise<SyncQueueItem[]> {
+    const now = Date.now();
+    const all = await db.syncQueue.where('status').equals('pending').toArray();
+    return all
+      .filter((item) => {
+        if (!item.lastAttemptAt) return true;
+        const backoff = Math.min(1000 * Math.pow(2, item.retryCount), 60_000);
+        return now - item.lastAttemptAt >= backoff;
+      })
+      .sort((a, b) => b.priority - a.priority || a.createdAt - b.createdAt);
   },
 
-  async removePendingRequest(id: string) {
-    await db.pendingRequests.delete(id);
+  async markProcessing(id: string) {
+    await db.syncQueue.update(id, { status: 'processing', lastAttemptAt: Date.now() });
   },
 
-  async incrementRetries(id: string) {
-    const request = await db.pendingRequests.get(id);
-    if (request) {
-      await db.pendingRequests.update(id, { retries: request.retries + 1 });
+  async markSynced(id: string) {
+    await db.syncQueue.update(id, { status: 'synced', errorMessage: null });
+  },
+
+  async markFailed(id: string, errorMessage: string) {
+    const item = await db.syncQueue.get(id);
+    if (!item) return;
+    if (item.retryCount >= item.maxRetries) {
+      await db.syncQueue.update(id, { status: 'failed', errorMessage });
+    } else {
+      await db.syncQueue.update(id, {
+        status: 'pending',
+        retryCount: item.retryCount + 1,
+        errorMessage,
+        lastAttemptAt: Date.now(),
+      });
     }
   },
 
-  // Cached Data
+  async retryFailed() {
+    await db.syncQueue
+      .where('status')
+      .equals('failed')
+      .modify({ status: 'pending', retryCount: 0, errorMessage: null, lastAttemptAt: null });
+  },
+
+  async resetStuckItems() {
+    await db.syncQueue
+      .where('status')
+      .equals('processing')
+      .modify({ status: 'pending', lastAttemptAt: null });
+  },
+
+  async getPendingCount(): Promise<number> {
+    return db.syncQueue.where('status').anyOf(['pending', 'processing']).count();
+  },
+
+  async getFailedCount(): Promise<number> {
+    return db.syncQueue.where('status').equals('failed').count();
+  },
+
+  // ---- Cached Data ----
   async setCachedData(key: string, data: any, ttl?: number) {
-    const cachedData: CachedData = {
+    await db.cachedData.put({
       key,
       data,
       timestamp: Date.now(),
-      expiresAt: ttl ? Date.now() + ttl : undefined
-    };
-    await db.cachedData.put(cachedData);
+      expiresAt: ttl ? Date.now() + ttl : undefined,
+    });
   },
 
   async getCachedData(key: string) {
     const cached = await db.cachedData.get(key);
     if (!cached) return null;
-    
-    // Check if expired
     if (cached.expiresAt && cached.expiresAt < Date.now()) {
       await db.cachedData.delete(key);
       return null;
     }
-    
     return cached.data;
   },
 
   async clearExpiredCache() {
     const now = Date.now();
     await db.cachedData
-      .filter(item => item.expiresAt !== undefined && item.expiresAt < now)
+      .filter((item) => !!item.expiresAt && item.expiresAt < now)
       .delete();
   },
 
-  // Database management
+  // ---- Database management ----
   async clearAll() {
     await Promise.all([
       db.products.clear(),
       db.sales.clear(),
       db.customers.clear(),
-      db.pendingRequests.clear(),
-      db.cachedData.clear()
+      db.syncQueue.clear(),
+      db.cachedData.clear(),
     ]);
   },
 
   async getStats() {
-    const [products, sales, customers, pending, cached] = await Promise.all([
-      db.products.count(),
-      db.sales.count(),
-      db.customers.count(),
-      db.pendingRequests.count(),
-      db.cachedData.count()
-    ]);
-    
-    return {
-      products,
-      sales,
-      customers,
-      pendingRequests: pending,
-      cachedData: cached
-    };
-  }
+    const [products, sales, customers, pendingRequests, failedRequests, cachedData] =
+      await Promise.all([
+        db.products.count(),
+        db.sales.count(),
+        db.customers.count(),
+        offlineDB.getPendingCount(),
+        offlineDB.getFailedCount(),
+        db.cachedData.count(),
+      ]);
+    return { products, sales, customers, pendingRequests, failedRequests, cachedData };
+  },
 };
 
 export default offlineDB;
-
-

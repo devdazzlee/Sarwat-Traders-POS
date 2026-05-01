@@ -25,8 +25,40 @@ export const uploadProductImage = asyncHandler(async (req: Request, res: Respons
 });
 
 export const createProduct = asyncHandler(async (req: Request, res: Response) => {
-    const { image_urls, ...productData } = req.body;
+    const { image_urls, initial_stock, ...productData } = req.body;
     const product = await productService.createProduct(productData);
+
+    // Set initial stock if provided
+    const stockQty = Number(initial_stock || 0);
+    if (stockQty > 0) {
+        const activeBranch = await prisma.branch.findFirst({ where: { is_active: true } });
+        const branchId = activeBranch?.id;
+        const createdBy = (req as any).user?.id || undefined;
+
+        if (branchId) {
+            await prisma.stock.create({
+                data: {
+                    product_id: product.id,
+                    branch_id: branchId,
+                    current_quantity: stockQty,
+                }
+            });
+            await prisma.stockMovement.create({
+                data: {
+                    product_id: product.id,
+                    branch_id: branchId,
+                    movement_type: 'PURCHASE',
+                    quantity_change: stockQty,
+                    previous_qty: 0,
+                    new_qty: stockQty,
+                    unit_cost: Number(product.purchase_rate) || 0,
+                    notes: 'Initial Stock',
+                    created_by: createdBy,
+                    reference_type: 'initial_stock',
+                }
+            });
+        }
+    }
 
     // Handle pre-uploaded image URLs (new flow)
     if (Array.isArray(image_urls) && image_urls.length > 0) {
@@ -351,7 +383,7 @@ export const bulkUploadProducts = asyncHandler(async (req: Request, res: Respons
     // Resolve the active branch once — used for stock records
     const activeBranch = await prisma.branch.findFirst({ where: { is_active: true } });
     const branchId = activeBranch?.id ?? null;
-    const createdBy = (req as any).user?.id ?? 'system';
+    const createdBy = (req as any).user?.id || undefined;
 
     const results = [];
     for (const prod of products) {
@@ -446,6 +478,11 @@ export const bulkUploadProducts = asyncHandler(async (req: Request, res: Respons
     }
 
     new ApiResponse(results, 'Bulk upload completed').send(res);
+});
+
+export const deleteProduct = asyncHandler(async (req: Request, res: Response) => {
+    await productService.deleteProduct(req.params.id);
+    new ApiResponse(null, 'Product deleted successfully', 200).send(res);
 });
 
 export const deleteAllProducts = asyncHandler(async (req: Request, res: Response) => {

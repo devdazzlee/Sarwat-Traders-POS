@@ -306,30 +306,46 @@ export const useStore = create<StoreState>()(
       fetchCategories: async (force = false) => {
         const state = get()
         const now = Date.now()
-        
-        if (!force && 
-            state.categories.length > 0 && 
-            state.lastCategoriesFetch && 
+
+        if (!force &&
+            state.categories.length > 0 &&
+            state.lastCategoriesFetch &&
             (now - state.lastCategoriesFetch) < CACHE_DURATION) {
-          // Audit: Cache hit within duration
           return
         }
 
         set({ categoriesLoading: true })
-        
+
+        if (!syncManager.canMakeRequest()) {
+          const cached = await offlineDB.getCachedData('categories')
+          if (cached) {
+            set({ categories: cached, categoriesLoading: false, lastCategoriesFetch: now })
+            console.log(`Loaded ${cached.length} categories from offline cache`)
+            return
+          }
+        }
+
         try {
           const res = await apiClient.get("/categories")
           const categories = [{ id: "all", name: "All" }, ...res.data.data]
-          
-          set({ 
-            categories, 
+
+          await offlineDB.setCachedData('categories', categories)
+
+          set({
+            categories,
             categoriesLoading: false,
             lastCategoriesFetch: now
           })
-          
+
           console.log(`Loaded ${categories.length} categories`)
         } catch (error) {
           console.log('Failed to fetch categories:', error)
+          const cached = await offlineDB.getCachedData('categories')
+          if (cached) {
+            set({ categories: cached, categoriesLoading: false, lastCategoriesFetch: now })
+            console.log(`Using offline cache: ${cached.length} categories`)
+            return
+          }
           set({ categoriesLoading: false })
           throw error
         }
@@ -339,29 +355,45 @@ export const useStore = create<StoreState>()(
       fetchCustomers: async (force = false) => {
         const state = get()
         const now = Date.now()
-        
-        if (!force && 
-            state.customers.length > 0 && 
-            state.lastCustomersFetch && 
+
+        if (!force &&
+            state.customers.length > 0 &&
+            state.lastCustomersFetch &&
             (now - state.lastCustomersFetch) < CACHE_DURATION) {
-          // Audit: Cache hit within duration
           return
         }
 
         set({ customersLoading: true })
-        
+
+        if (!syncManager.canMakeRequest()) {
+          const cached = await offlineDB.getCustomers()
+          if (cached.length > 0) {
+            set({ customers: cached.map(c => c.data || c), customersLoading: false, lastCustomersFetch: now })
+            console.log(`Loaded ${cached.length} customers from offline cache`)
+            return
+          }
+        }
+
         try {
           const res = await apiClient.get("/customer")
-          
-          set({ 
-            customers: res.data.data, 
+
+          await offlineDB.saveCustomers(res.data.data)
+
+          set({
+            customers: res.data.data,
             customersLoading: false,
             lastCustomersFetch: now
           })
-          
+
           console.log(`Loaded ${res.data.data.length} customers`)
         } catch (error) {
           console.log('Failed to fetch customers:', error)
+          const cached = await offlineDB.getCustomers()
+          if (cached.length > 0) {
+            set({ customers: cached.map(c => c.data || c), customersLoading: false, lastCustomersFetch: now })
+            console.log(`Using offline cache: ${cached.length} customers`)
+            return
+          }
           set({ customersLoading: false })
           throw error
         }

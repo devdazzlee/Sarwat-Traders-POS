@@ -28,6 +28,9 @@ import {
 import apiClient from "@/lib/apiClient";
 import { usePosData } from "@/hooks/use-pos-data";
 import { PageLoader } from "@/components/ui/page-loader";
+import { DatePicker } from "@/components/ui/date-picker";
+import { format } from "date-fns";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 interface AuditSummary {
   totalRevenue: number;
@@ -204,21 +207,22 @@ export function InventoryAudit() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-2 bg-slate-50 px-3 h-10 rounded-lg border border-slate-200">
-            <Calendar className="h-3.5 w-3.5 text-slate-400" />
-            <input 
-              type="date" 
-              className="bg-transparent border-none text-xs text-slate-600 focus:ring-0 outline-none w-28 text-center"
-              value={filters.startDate}
-              onChange={(e) => setFilters(f => ({...f, startDate: e.target.value}))}
-            />
+          <div className="flex items-center gap-2">
+            <div className="w-[140px]">
+              <DatePicker 
+                 date={filters.startDate ? new Date(filters.startDate) : undefined}
+                 onDateChange={(date) => setFilters(f => ({...f, startDate: date ? format(date, 'yyyy-MM-dd') : ""}))}
+                 placeholder="Start Date"
+              />
+            </div>
             <span className="text-slate-300 text-[10px] font-bold">TO</span>
-            <input 
-              type="date" 
-              className="bg-transparent border-none text-xs text-slate-600 focus:ring-0 outline-none w-28 text-center"
-              value={filters.endDate}
-              onChange={(e) => setFilters(f => ({...f, endDate: e.target.value}))}
-            />
+            <div className="w-[140px]">
+              <DatePicker 
+                 date={filters.endDate ? new Date(filters.endDate) : undefined}
+                 onDateChange={(date) => setFilters(f => ({...f, endDate: date ? format(date, 'yyyy-MM-dd') : ""}))}
+                 placeholder="End Date"
+              />
+            </div>
           </div>
 
           <Button 
@@ -292,56 +296,70 @@ export function InventoryAudit() {
                   <SheetDescription className="text-xs">Filter report by category and specific products</SheetDescription>
                 </SheetHeader>
 
-                <div className="space-y-6 flex-1 overflow-y-auto">
+                <div className="space-y-6 flex-1 overflow-y-auto p-1 -m-1">
                   {/* CATEGORY DROPDOWN */}
                   <div className="space-y-2 relative" ref={catRef}>
                     <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Category</Label>
-                    <div className="relative">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
-                      <Input 
-                        placeholder="Search category..."
-                        className="h-10 pl-9 rounded-lg bg-slate-50 border-slate-200 text-xs"
-                        value={filters.categoryId === "all" ? catSearch : selectedCatName}
-                        onFocus={() => { setCatDropdownOpen(true); if(filters.categoryId !== "all") setFilters(f => ({...f, categoryId: "all"})); }}
-                        onChange={(e) => { setCatSearch(e.target.value); setCatDropdownOpen(true); }}
-                      />
-                    </div>
-                    {catDropdownOpen && (
-                      <div className="absolute left-0 right-0 z-50 mt-1 max-h-48 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-xl py-1">
-                        <button onClick={() => { setFilters(f => ({...f, categoryId: "all"})); setCatDropdownOpen(false); }} className="w-full px-4 py-2 text-left text-xs font-bold text-slate-400 hover:bg-slate-50 border-b border-slate-50">All Categories</button>
-                        {filteredCat.map(c => (
-                          <button key={c.id} onClick={() => { setFilters(f => ({...f, categoryId: c.id})); setCatDropdownOpen(false); }} className="w-full px-4 py-2 text-left hover:bg-slate-50 border-b border-slate-50 last:border-none">
-                             <span className="font-bold text-xs text-slate-800">{c.name}</span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
+                    <Popover open={catDropdownOpen} onOpenChange={setCatDropdownOpen}>
+                      <PopoverTrigger asChild>
+                        <div className="relative">
+                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+                          <Input 
+                            placeholder="Search category..."
+                            className="h-10 pl-9 rounded-lg bg-slate-50 border-slate-200 text-xs"
+                            value={filters.categoryId === "all" ? catSearch : selectedCatName}
+                            onFocus={() => { setCatDropdownOpen(true); if(filters.categoryId !== "all") setFilters(f => ({...f, categoryId: "all"})); }}
+                            onChange={(e) => { setCatSearch(e.target.value); setCatDropdownOpen(true); }}
+                          />
+                        </div>
+                      </PopoverTrigger>
+                      <PopoverContent 
+                        className="w-[var(--radix-popover-trigger-width)] p-0 z-[100]" 
+                        onOpenAutoFocus={(e) => e.preventDefault()}
+                      >
+                        <div className="max-h-48 overflow-y-auto rounded-lg bg-white py-1">
+                          <button onClick={() => { setFilters(f => ({...f, categoryId: "all"})); setCatDropdownOpen(false); }} className="w-full px-4 py-2 text-left text-xs font-bold text-slate-400 hover:bg-slate-50 border-b border-slate-50">All Categories</button>
+                          {filteredCat.map(c => (
+                            <button key={c.id} onClick={() => { setFilters(f => ({...f, categoryId: c.id})); setCatDropdownOpen(false); }} className="w-full px-4 py-2 text-left hover:bg-slate-50 border-b border-slate-50 last:border-none">
+                               <span className="font-bold text-xs text-slate-800">{c.name}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </PopoverContent>
+                    </Popover>
                   </div>
 
                   {/* PRODUCT DROPDOWN */}
                   <div className="space-y-2 relative" ref={prodRef}>
                     <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Product</Label>
-                    <div className="relative">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
-                      <Input 
-                        placeholder="Search SKU or Name..."
-                        className="h-10 pl-9 rounded-lg bg-slate-50 border-slate-200 text-xs"
-                        value={filters.productId === "all" ? prodSearch : selectedProdName}
-                        onFocus={() => { setProdDropdownOpen(true); if(filters.productId !== "all") setFilters(f => ({...f, productId: "all"})); }}
-                        onChange={(e) => { setProdSearch(e.target.value); setProdDropdownOpen(true); }}
-                      />
-                    </div>
-                    {prodDropdownOpen && (
-                      <div className="absolute left-0 right-0 z-50 mt-1 max-h-48 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-xl py-1">
-                        <button onClick={() => { setFilters(f => ({...f, productId: "all"})); setProdDropdownOpen(false); }} className="w-full px-4 py-2 text-left text-xs font-bold text-slate-400 hover:bg-slate-50 border-b border-slate-50">All Products</button>
-                        {filteredProd.map(p => (
-                          <button key={p.id} onClick={() => { setFilters(f => ({...f, productId: p.id})); setProdDropdownOpen(false); }} className="w-full px-4 py-2 text-left hover:bg-slate-50 border-b border-slate-50 last:border-none flex flex-col">
-                              <span className="font-bold text-xs text-slate-800">{p.name}</span>
-                              <span className="text-[10px] text-slate-400 uppercase tracking-tighter">SKU: {p.sku || "N/A"}</span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
+                    <Popover open={prodDropdownOpen} onOpenChange={setProdDropdownOpen}>
+                      <PopoverTrigger asChild>
+                        <div className="relative">
+                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+                          <Input 
+                            placeholder="Search SKU or Name..."
+                            className="h-10 pl-9 rounded-lg bg-slate-50 border-slate-200 text-xs"
+                            value={filters.productId === "all" ? prodSearch : selectedProdName}
+                            onFocus={() => { setProdDropdownOpen(true); if(filters.productId !== "all") setFilters(f => ({...f, productId: "all"})); }}
+                            onChange={(e) => { setProdSearch(e.target.value); setProdDropdownOpen(true); }}
+                          />
+                        </div>
+                      </PopoverTrigger>
+                      <PopoverContent 
+                        className="w-[var(--radix-popover-trigger-width)] p-0 z-[100]" 
+                        onOpenAutoFocus={(e) => e.preventDefault()}
+                      >
+                        <div className="max-h-48 overflow-y-auto rounded-lg bg-white py-1">
+                          <button onClick={() => { setFilters(f => ({...f, productId: "all"})); setProdDropdownOpen(false); }} className="w-full px-4 py-2 text-left text-xs font-bold text-slate-400 hover:bg-slate-50 border-b border-slate-50">All Products</button>
+                          {filteredProd.map(p => (
+                            <button key={p.id} onClick={() => { setFilters(f => ({...f, productId: p.id})); setProdDropdownOpen(false); }} className="w-full px-4 py-2 text-left hover:bg-slate-50 border-b border-slate-50 last:border-none flex flex-col">
+                                <span className="font-bold text-xs text-slate-800">{p.name}</span>
+                                <span className="text-[10px] text-slate-400 uppercase tracking-tighter">SKU: {p.sku || "N/A"}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </PopoverContent>
+                    </Popover>
                   </div>
                 </div>
 

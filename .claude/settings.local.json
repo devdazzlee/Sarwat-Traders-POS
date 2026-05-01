@@ -5,7 +5,8 @@
       "Bash(npx prisma *)",
       "Bash(xargs sed *)",
       "Bash(npx tsc *)",
-      "Bash(npx ts-node -e ' *)"
+      "Bash(npx ts-node -e ' *)",
+      "Bash(npx ts-node *)"
     ]
   }
 }

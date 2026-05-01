@@ -10,7 +10,7 @@ router.use(authenticate, authorize(['SUPER_ADMIN', 'ADMIN']));
 
 router.post('/', validate(createSalarySchema), createSalary);
 router.get('/', validate(listSalariesSchema), listSalaries);
-router.put('/:id', validate(salaryIdParamSchema), updateSalary); 
-router.put('/:id', validate(salaryIdParamSchema), deleteSalary); 
+router.put('/:salary_id', validate(salaryIdParamSchema), updateSalary); 
+router.delete('/:salary_id', validate(salaryIdParamSchema), deleteSalary); 
 
 export default router;

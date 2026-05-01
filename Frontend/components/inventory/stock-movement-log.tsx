@@ -44,6 +44,8 @@ import { toast } from "sonner";
 import { usePosData } from "@/hooks/use-pos-data";
 import { Label } from "@/components/ui/label";
 import { PageLoader } from "@/components/ui/page-loader";
+import { DatePicker } from "@/components/ui/date-picker";
+import { format, parseISO } from "date-fns";
 
 
 const MOVEMENT_TYPES = [
@@ -175,22 +177,19 @@ export function StockMovementLog() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-           <div className="flex items-center gap-2 bg-slate-50 px-3 h-10 rounded-lg border border-slate-200">
-              <Calendar className="h-3.5 w-3.5 text-slate-400" />
-              <input 
-                type="date"
-                className="bg-transparent border-none text-xs text-slate-600 focus:ring-0 outline-none w-28"
-                value={filters.startDate}
-                onChange={(e) => setFilters(f => ({...f, startDate: e.target.value}))}
-              />
-              <span className="text-slate-300 text-[10px] font-bold">TO</span>
-              <input 
-                type="date"
-                className="bg-transparent border-none text-xs text-slate-600 focus:ring-0 outline-none w-28"
-                value={filters.endDate}
-                onChange={(e) => setFilters(f => ({...f, endDate: e.target.value}))}
-              />
-           </div>
+        <div className="flex items-center gap-2">
+           <DatePicker 
+             date={filters.startDate ? parseISO(filters.startDate) : undefined}
+             onDateChange={(date) => setFilters(f => ({...f, startDate: date ? format(date, "yyyy-MM-dd") : ""}))}
+             placeholder="Start Date"
+           />
+           <span className="text-slate-400 text-xs font-medium">TO</span>
+           <DatePicker 
+             date={filters.endDate ? parseISO(filters.endDate) : undefined}
+             onDateChange={(date) => setFilters(f => ({...f, endDate: date ? format(date, "yyyy-MM-dd") : ""}))}
+             placeholder="End Date"
+           />
+        </div>
 
            <Button 
             variant="outline"

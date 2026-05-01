@@ -539,7 +539,7 @@ export function GiftCards() {
     <div class="gift-card">
         <div class="card-header">
             <div class="card-title">GIFT CARD</div>
-            <div class="card-subtitle">Your Store Name</div>
+            <div class="card-subtitle">SARWAT TRADER</div>
         </div>
         
         <div class="card-code">${card.code}</div>

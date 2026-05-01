@@ -11,6 +11,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
 import {
   Table,
@@ -28,9 +29,11 @@ import {
   Eye,
   ToggleRight,
   ToggleLeft,
+  Trash2,
 } from "lucide-react";
 import apiClient from "@/lib/apiClient";
 import { API_BASE } from "@/config/constants";
+import { useToast } from "@/hooks/use-toast";
 import { PageLoader } from "@/components/ui/page-loader";
 
 interface Subcategory {
@@ -45,6 +48,7 @@ interface Subcategory {
 }
 
 const Subcategories: React.FC = () => {
+  const { toast } = useToast();
   const [list, setList] = useState<Subcategory[]>([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
@@ -54,6 +58,9 @@ const Subcategories: React.FC = () => {
   const [addOpen, setAddOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [subToDelete, setSubToDelete] = useState<Subcategory | null>(null);
   const [current, setCurrent] = useState<Subcategory | null>(null);
 
   // form.image now holds base64 string or URL
@@ -120,7 +127,7 @@ const Subcategories: React.FC = () => {
 
   const submitForm = async (id?: string) => {
     if (!form.name.trim()) {
-      alert("Name is required");
+      toast({ title: "Validation Error", description: "Name is required", variant: "destructive" });
       return;
     }
     setSubmitting(true);
@@ -128,21 +135,43 @@ const Subcategories: React.FC = () => {
       const payload = {
         name: form.name,
         display_on_pos: form.display_on_pos,
-        image: form.image, // as base64 or URL string
+        image: form.image,
       };
       if (id) {
         await apiClient.patch(`${API_BASE}/subcategories/${id}`, payload);
+        toast({ title: "Success", description: "Subcategory updated successfully" });
       } else {
         await apiClient.post(`${API_BASE}/subcategories`, payload);
+        toast({ title: "Success", description: "Subcategory created successfully" });
       }
       setAddOpen(false);
       setEditOpen(false);
       fetchList();
-    } catch (e) {
-      console.log(e);
-      alert("Submission failed");
+    } catch (e: any) {
+      toast({ title: "Error", description: e?.response?.data?.message || "Submission failed", variant: "destructive" });
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const openDelete = (sub: Subcategory) => {
+    setSubToDelete(sub);
+    setDeleteOpen(true);
+  };
+
+  const handleDelete = async () => {
+    if (!subToDelete) return;
+    setDeleting(true);
+    try {
+      await apiClient.delete(`${API_BASE}/subcategories/${subToDelete.id}`);
+      toast({ title: "Deleted", description: `Subcategory "${subToDelete.name}" has been deleted.` });
+      setDeleteOpen(false);
+      setSubToDelete(null);
+      fetchList();
+    } catch (err: any) {
+      toast({ title: "Error", description: err?.response?.data?.message || "Failed to delete subcategory", variant: "destructive" });
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -246,6 +275,14 @@ const Subcategories: React.FC = () => {
                         onClick={() => toggleStatus(sub.id)}
                       >
                         {sub.is_active ? "Disable" : "Enable"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-red-600 hover:bg-red-50 hover:text-red-700 border-red-200"
+                        onClick={() => openDelete(sub)}
+                      >
+                        <Trash2 className="h-4 w-4" />
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -379,6 +416,34 @@ const Subcategories: React.FC = () => {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Delete Confirmation */}
+      <AlertDialog open={deleteOpen} onOpenChange={(open) => { if (!deleting) { setDeleteOpen(open); if (!open) setSubToDelete(null); } }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Subcategory</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete the subcategory{" "}
+              <span className="font-semibold text-gray-900">"{subToDelete?.name}"</span>?{" "}
+              This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => { e.preventDefault(); handleDelete(); }}
+              disabled={deleting}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              {deleting ? (
+                <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Deleting...</>
+              ) : (
+                <><Trash2 className="h-4 w-4 mr-2" /> Delete</>
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

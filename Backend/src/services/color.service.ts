@@ -53,6 +53,11 @@ export class ColorService {
         });
     }
 
+    async deleteColor(id: string) {
+        await this.getColorById(id);
+        return prisma.color.delete({ where: { id } });
+    }
+
     async listColors({
         page = 1,
         limit = 10,

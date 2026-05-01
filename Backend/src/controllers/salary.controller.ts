@@ -17,11 +17,11 @@ export const listSalaries = asyncHandler(async (req: Request, res: Response) => 
 });
 
 export const updateSalary = asyncHandler(async (req: Request, res: Response) => {
-  const salary = await salaryService.updateSalary(req.params.id, req.body);
+  const salary = await salaryService.updateSalary(req.params.salary_id, req.body);
   new ApiResponse(salary, 'Salary record updated successfully').send(res);
 });
 
 export const deleteSalary = asyncHandler(async (req: Request, res: Response) => {
-  await salaryService.deleteSalary(req.params.id);
+  await salaryService.deleteSalary(req.params.salary_id);
   new ApiResponse(null, 'Salary record deleted successfully').send(res);
 });

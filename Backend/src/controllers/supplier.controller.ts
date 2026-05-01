@@ -25,6 +25,11 @@ export const toggleSupplierStatus = asyncHandler(async (req: Request, res: Respo
     new ApiResponse(null, 'Supplier status changed successfully').send(res);
 });
 
+export const deleteSupplier = asyncHandler(async (req: Request, res: Response) => {
+    await supplierService.deleteSupplier(req.params.id);
+    new ApiResponse(null, 'Supplier deleted successfully').send(res);
+});
+
 export const listSuppliers = asyncHandler(async (req: Request, res: Response) => {
     const { page = 1, limit = 100, search, is_active } = req.query;
 

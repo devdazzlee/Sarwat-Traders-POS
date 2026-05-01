@@ -33,6 +33,7 @@ import {
   Warehouse,
   Printer as PrinterIcon,
   Download,
+  User,
   type LucideIcon,
 } from "lucide-react";
 
@@ -155,12 +156,12 @@ const menuSections: SidebarMenuSection[] = [
         icon: Warehouse,
         roles: INVENTORY_ROLES,
       },
-      {
-        id: "stock-view",
-        label: "Stock by Location",
-        icon: Warehouse,
-        roles: INVENTORY_ROLES,
-      },
+      // {
+      //   id: "stock-view",
+      //   label: "Stock By Location",
+      //   icon: Warehouse,
+      //   roles: INVENTORY_ROLES,
+      // },
       {
         id: "purchases",
         label: "Stock In (Purchases)",
@@ -228,7 +229,7 @@ const menuSections: SidebarMenuSection[] = [
     items: [
       { id: "customers", label: "Customers", icon: Users, roles: SALES_ROLES },
       { id: "employees", label: "Employees", icon: UserCheck, roles: ADMIN_ROLES },
-      { id: "shifts", label: "Shift Management", icon: Clock, roles: ADMIN_ROLES },
+      // { id: "shifts", label: "Shift Management", icon: Clock, roles: ADMIN_ROLES },
       { id: "salaries", label: "Salaries", icon: CreditCard, roles: ADMIN_ROLES },
       {
         id: "designation",
@@ -260,6 +261,12 @@ const menuSections: SidebarMenuSection[] = [
         label: "Printer Settings",
         icon: PrinterIcon,
         roles: STAFF_ROLES,
+      },
+      {
+        id: "profile",
+        label: "Profile Settings",
+        icon: User,
+        roles: ADMIN_ROLES,
       },
     ],
   },
@@ -374,8 +381,8 @@ export function Sidebar({
           <div className="flex items-center space-x-3">
             <img src="/logo.png" alt="Logo" className="h-10 w-auto" />
             <div>
-              <h1 className="text-xl font-bold text-gray-900">Sarwat Trader</h1>
-              <p className="text-sm text-gray-500">Enterprise POS</p>
+              <h1 className="text-xl font-bold text-gray-900 uppercase">SARWAT TRADER</h1>
+              <p className="text-sm text-gray-500">Enterprise POS System</p>
             </div>
           </div>
         </div>

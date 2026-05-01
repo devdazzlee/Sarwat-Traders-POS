@@ -62,6 +62,11 @@ export class SubcategoryService {
         });
     }
 
+    async deleteSubcategory(id: string) {
+        await this.getSubcategoryById(id);
+        return prisma.subcategory.delete({ where: { id } });
+    }
+
     async toggleSubcategoryStatus(id: string) {
         const subcategory = await this.getSubcategoryById(id);
         return prisma.subcategory.update({

@@ -1,16 +1,9 @@
-/**
- * React hooks for offline functionality
- */
-
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
 import { syncManager, SyncStatus } from '@/lib/offline-sync';
 import { offlineDB } from '@/lib/offline-db';
 
-/**
- * Hook to track online/offline status
- */
 export function useOnlineStatus() {
   const [status, setStatus] = useState<SyncStatus>(() => syncManager.getStatus());
 
@@ -22,9 +15,6 @@ export function useOnlineStatus() {
   return status;
 }
 
-/**
- * Hook to manually trigger sync
- */
 export function useSync() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [error, setError] = useState<Error | null>(null);
@@ -41,19 +31,21 @@ export function useSync() {
     }
   }, []);
 
-  return { sync, isSyncing, error };
+  const retryFailed = useCallback(async () => {
+    await syncManager.retryFailed();
+  }, []);
+
+  return { sync, retryFailed, isSyncing, error };
 }
 
-/**
- * Hook to get database statistics
- */
 export function useOfflineStats() {
   const [stats, setStats] = useState({
     products: 0,
     sales: 0,
     customers: 0,
     pendingRequests: 0,
-    cachedData: 0
+    failedRequests: 0,
+    cachedData: 0,
   });
   const [loading, setLoading] = useState(true);
 
@@ -76,40 +68,37 @@ export function useOfflineStats() {
   return { stats, loading, refresh };
 }
 
-/**
- * Hook to save data to offline storage
- */
 export function useOfflineStorage() {
   const saveProducts = useCallback(async (products: any[]) => {
-    return await offlineDB.saveProducts(products);
+    return offlineDB.saveProducts(products);
   }, []);
 
   const saveCustomers = useCallback(async (customers: any[]) => {
-    return await offlineDB.saveCustomers(customers);
+    return offlineDB.saveCustomers(customers);
   }, []);
 
   const saveSale = useCallback(async (sale: any) => {
-    return await offlineDB.saveSale(sale);
+    return offlineDB.saveSale(sale);
   }, []);
 
   const getProducts = useCallback(async () => {
-    return await offlineDB.getProducts();
+    return offlineDB.getProducts();
   }, []);
 
   const getCustomers = useCallback(async () => {
-    return await offlineDB.getCustomers();
+    return offlineDB.getCustomers();
   }, []);
 
   const getSales = useCallback(async () => {
-    return await offlineDB.getAllSales();
+    return offlineDB.getAllSales();
   }, []);
 
   const searchProducts = useCallback(async (query: string) => {
-    return await offlineDB.searchProducts(query);
+    return offlineDB.searchProducts(query);
   }, []);
 
   const searchCustomers = useCallback(async (query: string) => {
-    return await offlineDB.searchCustomers(query);
+    return offlineDB.searchCustomers(query);
   }, []);
 
   return {
@@ -120,13 +109,10 @@ export function useOfflineStorage() {
     getCustomers,
     getSales,
     searchProducts,
-    searchCustomers
+    searchCustomers,
   };
 }
 
-/**
- * Hook to check if app is ready for offline use
- */
 export function useOfflineReady() {
   const [isReady, setIsReady] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -136,8 +122,7 @@ export function useOfflineReady() {
       const stats = await offlineDB.getStats();
       const hasData = stats.products > 0 || stats.customers > 0;
       setIsReady(hasData);
-      
-      // Calculate progress based on data availability
+
       let progressValue = 0;
       if (stats.products > 0) progressValue += 50;
       if (stats.customers > 0) progressValue += 30;
@@ -147,11 +132,8 @@ export function useOfflineReady() {
 
     checkReady();
     const interval = setInterval(checkReady, 5000);
-    
     return () => clearInterval(interval);
   }, []);
 
   return { isReady, progress };
 }
-
-

@@ -4,6 +4,7 @@ import {
     getSize,
     updateSize,
     listSizes,
+    deleteSize,
 } from '../controllers/size.controller';
 import {
     createSizeSchema,
@@ -22,5 +23,6 @@ router.post('/', validate(createSizeSchema), createSize);
 router.get('/', validate(listSizesSchema), listSizes);
 router.get('/:id', validate(getSizeSchema), getSize);
 router.patch('/:id', validate(updateSizeSchema), updateSize);
+router.delete('/:id', validate(getSizeSchema), deleteSize);
 
 export default router;

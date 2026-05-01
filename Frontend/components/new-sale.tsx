@@ -934,8 +934,10 @@ export function NewSale() {
       subtotal,
       total,
       paymentMethod,
-      cashier: "Muhammad",
-      store: "Sarwat Trader #001",
+      cashier: localStorage.getItem("userName") || "Admin",
+      storeName: "SARWAT TRADER",
+      address: "Shop no 109, 1st floor city shopping mall, Marston road Karachi, Pakistan.",
+      storePhone: "02132727444",
       amountPaid,
       changeAmount,
     };
@@ -1084,10 +1086,17 @@ export function NewSale() {
               synced: false,
               discountAmount: globalDiscountAmount,
             });
-            
-            // Queue the API request for when online
-            await offlineAPIClient.post("/sale", payload, {
-              priority: 10 // High priority for sales
+
+            // Queue the API request directly — avoids a second live API call
+            await offlineDB.enqueue({
+              operationId: crypto.randomUUID(),
+              type: 'sale',
+              url: '/sale',
+              method: 'POST',
+              payload,
+              maxRetries: 5,
+              priority: 10,
+              headers: {},
             });
           }
         } else {
@@ -1117,13 +1126,20 @@ export function NewSale() {
             synced: false,
             discountAmount: globalDiscountAmount,
           });
-          
-          // Also queue the API request for when online
-          await offlineAPIClient.post("/sale", payload, {
-            priority: 10 // High priority for sales
+
+          // Queue for sync — direct enqueue, no extra API call
+          await offlineDB.enqueue({
+            operationId: crypto.randomUUID(),
+            type: 'sale',
+            url: '/sale',
+            method: 'POST',
+            payload,
+            maxRetries: 5,
+            priority: 10,
+            headers: {},
           });
-          
-          console.log("💾 Sale saved offline, will sync when connection restored");
+
+          console.log("Sale saved offline, will sync when connection restored");
         }
         const receiptData = generateReceiptData(
           transactionId,
@@ -1146,14 +1162,14 @@ export function NewSale() {
 
         let receiptDataForServer: any = null;
         const storedBranchName = localStorage.getItem("branchName");
-        const fullAddress = "Karachi, Pakistan";
+        const fullAddress = "Shop no 109, 1st floor city shopping mall, Marston road Karachi, Pakistan.";
 
         const selectedCustomerObj = customers.find((c) => c.id === selectedCustomer);
 
         return {
           storeName: receiptDataForServer?.storeName || "SARWAT TRADER",
-          storeAddress: receiptDataForServer?.address || "",
-          storePhone: "0300 0000000",
+          storeAddress: fullAddress,
+          storePhone: "02132727444",
           customerName: selectedCustomerObj?.name || "Walk-in Customer",
           customerPhone: selectedCustomerObj?.phone_number || "",
           customerWhatsApp: selectedCustomerObj?.whatsapp_number || selectedCustomerObj?.phone_number || "",
@@ -2762,42 +2778,48 @@ export function NewSale() {
               onClick={async () => {
                 try {
                   setIsAddingCustomer(true);
-                  const res = await apiClient.post("/customer", {
+                  const custPayload = {
                     name: newCustomerData.name,
                     ...(newCustomerData.email.trim() && { email: newCustomerData.email.trim().toLowerCase() }),
                     phone_number: newCustomerData.phone_number,
                     whatsapp_number: newCustomerData.whatsapp_number,
-                    // 0 = unlimited; empty input also means unlimited
                     credit_limit: newCustomerData.credit_limit ? Number(newCustomerData.credit_limit) : 0,
                     outstanding_balance: 0,
-                  });
-                  await fetchCustomers(true);
-                  if (res.data?.data?.id) {
-                    setSelectedCustomer(res.data.data.id);
+                  };
+
+                  if (!navigator.onLine) {
+                    // Queue creation; proceed without selecting customer (no server ID yet)
+                    await offlineDB.enqueue({
+                      operationId: crypto.randomUUID(),
+                      type: 'customer',
+                      url: '/customer',
+                      method: 'POST',
+                      payload: custPayload,
+                      maxRetries: 5,
+                      priority: 7,
+                      headers: {},
+                    });
+                    toast({
+                      title: "Saved Offline",
+                      description: "Customer will be created when connection is restored.",
+                    });
+                  } else {
+                    const res = await apiClient.post("/customer", custPayload);
+                    await fetchCustomers(true);
+                    if (res.data?.data?.id) setSelectedCustomer(res.data.data.id);
+                    toast({
+                      title: "Success",
+                      description: "Customer added and selected successfully",
+                      className: "bg-emerald-50 border-emerald-200 text-emerald-800",
+                    });
                   }
-                  
-                  toast({
-                    title: "Success",
-                    description: "Customer added and selected successfully",
-                    className: "bg-emerald-50 border-emerald-200 text-emerald-800",
-                  });
 
                   setIsAddCustomerOpen(false);
-                  setNewCustomerData({
-                    name: "",
-                    email: "",
-                    phone_number: "",
-                    whatsapp_number: "",
-                    credit_limit: "",
-                  });
+                  setNewCustomerData({ name: "", email: "", phone_number: "", whatsapp_number: "", credit_limit: "" });
                 } catch (error: any) {
                   console.error("Customer Add Error:", error);
                   const errMsg = error.response?.data?.message || error.response?.data?.errors?.[0]?.message || "Failed to create customer";
-                  toast({
-                    variant: "destructive",
-                    title: "Registration Failed",
-                    description: errMsg,
-                  });
+                  toast({ variant: "destructive", title: "Registration Failed", description: errMsg });
                 } finally {
                   setIsAddingCustomer(false);
                 }

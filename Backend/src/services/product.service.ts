@@ -1420,6 +1420,25 @@ export class ProductService {
         return relations;
     }
 
+    async deleteProduct(id: string) {
+        // Delete a single product and its related records in a transaction
+        return await prisma.$transaction(async (tx) => {
+            // 1. Delete related records first due to foreign key constraints
+            await tx.productImage.deleteMany({ where: { product_id: id } });
+            await tx.stockMovement.deleteMany({ where: { product_id: id } });
+            await tx.stock.deleteMany({ where: { product_id: id } });
+            await tx.saleItem.deleteMany({ where: { product_id: id } });
+            await tx.purchaseOrderItem.deleteMany({ where: { product_id: id } });
+            await tx.orderItem.deleteMany({ where: { product_id: id } });
+            await tx.purchase.deleteMany({ where: { product_id: id } });
+            await tx.transfer.deleteMany({ where: { product_id: id } });
+            await tx.stockAdjustment.deleteMany({ where: { product_id: id } });
+            
+            // 2. Finally, delete the Product
+            return await tx.product.delete({ where: { id } });
+        });
+    }
+
     async deleteAllProducts(): Promise<{ 
         deletedCount: number; 
         deletedImages: number; 
@@ -1432,25 +1451,18 @@ export class ProductService {
         // Delete all products and their related records in a transaction
         // Order matters due to foreign key constraints (ON DELETE RESTRICT)
         return await prisma.$transaction(async (tx) => {
-            // 1. Delete ProductImage records (no FK constraint issues)
+            // 1. Delete related records first due to foreign key constraints
             const deletedImages = await tx.productImage.deleteMany({});
-            
-            // 2. Delete StockMovement records (references Product with ON DELETE RESTRICT)
             const deletedStockMovements = await tx.stockMovement.deleteMany({});
-            
-            // 3. Delete Stock records (references Product with ON DELETE RESTRICT)
             const deletedStocks = await tx.stock.deleteMany({});
-            
-            // 4. Delete SaleItem records (references Product with ON DELETE RESTRICT)
             const deletedSaleItems = await tx.saleItem.deleteMany({});
-            
-            // 5. Delete PurchaseOrderItem records (references Product with ON DELETE RESTRICT)
             const deletedPurchaseOrderItems = await tx.purchaseOrderItem.deleteMany({});
-            
-            // 6. Delete OrderItem records (references Product with ON DELETE RESTRICT)
             const deletedOrderItems = await tx.orderItem.deleteMany({});
+            await tx.purchase.deleteMany({});
+            await tx.transfer.deleteMany({});
+            await tx.stockAdjustment.deleteMany({});
             
-            // 7. Finally, delete all Products
+            // 2. Finally, delete all Products
             const deletedProducts = await tx.product.deleteMany({});
             
             return {

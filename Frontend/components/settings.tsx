@@ -12,12 +12,12 @@ import { Store, User, Bell, CreditCard, Printer, Shield, Database, Wifi } from "
 
 export function Settings() {
   const [storeSettings, setStoreSettings] = useState({
-    storeName: "Sarwat Trader",
-    address: "123 Main Street, City, State 12345",
-    phone: "+1 (555) 123-4567",
-    email: "info@sarwattraders.com",
-    taxRate: "8.00",
-    currency: "USD",
+    storeName: "SARWAT TRADER",
+    address: "Shop no 109, 1st floor city shopping mall, Marston road Karachi, Pakistan.",
+    phone: "02132727444",
+    email: "info@sarwattrader.com",
+    taxRate: "0.00",
+    currency: "PKR",
   })
 
   const [userSettings, setUserSettings] = useState({
@@ -121,10 +121,10 @@ export function Settings() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="PKR">PKR (Rs)</SelectItem>
                     <SelectItem value="USD">USD ($)</SelectItem>
                     <SelectItem value="EUR">EUR (€)</SelectItem>
                     <SelectItem value="GBP">GBP (£)</SelectItem>
-                    <SelectItem value="INR">INR (₹)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

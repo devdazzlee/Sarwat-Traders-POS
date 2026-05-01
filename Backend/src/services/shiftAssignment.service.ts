@@ -14,12 +14,19 @@ export class ShiftAssignmentService {
         start_date: Date;
         end_date?: Date | null;
     }) {
+        // Get employee's current hourly rate
+        const employee = await prisma.employee.findUnique({
+            where: { id: employee_id }
+        });
+
         return await prisma.shiftAssignment.create({
             data: {
                 employee_id,
                 shift_time,
                 start_date,
                 end_date: end_date ?? null,
+                status: 'scheduled',
+                hourly_rate: employee?.hourly_rate ?? 0,
             },
         });
     }
@@ -30,6 +37,7 @@ export class ShiftAssignmentService {
             where: {
                 employee_id,
                 end_date: null,
+                status: { in: ['scheduled', 'active'] }
             },
             orderBy: {
                 start_date: 'desc',
@@ -46,14 +54,23 @@ export class ShiftAssignmentService {
     }
 
     // End current shift (set end_date)
-    async endCurrentShift(employee_id: Employee['id'], end_date = new Date()) {
-        return await prisma.shiftAssignment.updateMany({
-            where: {
-                employee_id,
-                end_date: null,
-            },
+    async endCurrentShift(employee_id: Employee['id'], sales: number = 0, end_date = new Date()) {
+        const currentShift = await this.getCurrentShift(employee_id);
+        if (!currentShift) return null;
+
+        // Calculate total hours
+        const start = new Date(currentShift.start_date);
+        const end = new Date(end_date);
+        let totalHours = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
+        totalHours = Math.max(0, totalHours);
+
+        return await prisma.shiftAssignment.update({
+            where: { id: currentShift.id },
             data: {
                 end_date,
+                sales,
+                total_hours: totalHours,
+                status: 'completed',
             },
         });
     }
@@ -67,7 +84,7 @@ export class ShiftAssignmentService {
     }
 
     // Update a shift by ID
-    async updateShift(id: string, data: Partial<{ shift_time: string; start_date: Date; end_date: Date | null; }>) {
+    async updateShift(id: string, data: Partial<{ shift_time: string; start_date: Date; end_date: Date | null; status: string; sales: number; }>) {
         return await prisma.shiftAssignment.update({
             where: { id },
             data,

@@ -26,6 +26,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import apiClient from "@/lib/apiClient";
+import { cachedGet, queueMutation } from "@/lib/offline-helpers";
 import { usePosData } from "@/hooks/use-pos-data";
 import { useStore } from "@/lib/store";
 import { toast } from "sonner";
@@ -35,6 +36,8 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { PageLoader } from "@/components/ui/page-loader";
+import { DatePicker } from "@/components/ui/date-picker";
+import { parseISO } from "date-fns";
 import * as XLSX from "xlsx";
 
 interface Product {
@@ -119,8 +122,8 @@ export function StockOut() {
   const fetchMeta = useCallback(async () => {
     setLoadingMeta(true);
     try {
-      const cRes = await apiClient.get("/customers", { params: { fetch_all: true } });
-      setCustomers(cRes.data?.data || []);
+      const customers = await cachedGet<any[]>('/customer', undefined, 'customers-stock-out');
+      setCustomers(customers || []);
       await fetchProducts();
     } catch (e) {
       console.error(e);
@@ -136,8 +139,8 @@ export function StockOut() {
       if (historyFilters.reason) params.reason = historyFilters.reason;
       if (historyFilters.startDate) params.startDate = historyFilters.startDate;
       if (historyFilters.endDate) params.endDate = historyFilters.endDate;
-      const res = await apiClient.get("/stock-out/history", { params });
-      setHistory(res.data?.data || []);
+      const data = await cachedGet<any[]>('/stock-out/history', params, `stock-out-history-${JSON.stringify(params)}`);
+      setHistory(data || []);
     } catch (e) {
       console.error(e);
     } finally {
@@ -151,9 +154,8 @@ export function StockOut() {
   // ── Available stock lookup ────────────────────────────────────────────────
   const fetchAvailableStock = useCallback(async (productId: string) => {
     try {
-      const res = await apiClient.get("/stock", { params: { productId } });
-      const stocks = res.data?.data || [];
-      const qty = stocks.reduce((sum: number, s: any) => sum + Number(s.current_quantity), 0);
+      const stocks = await cachedGet<any[]>('/stock', { productId }, `stock-product-${productId}`);
+      const qty = (stocks || []).reduce((sum: number, s: any) => sum + Number(s.current_quantity), 0);
       setAvailableStock(qty);
     } catch {
       setAvailableStock(0);
@@ -304,17 +306,21 @@ export function StockOut() {
     if (stagedItems.length === 0) { toast.error("Please add at least one item"); return; }
     setSubmitting(true);
     try {
-      await apiClient.post("/stock-out/bulk", {
+      const dispatchPayload = {
         ...header,
         customerId: header.customerId === "none" ? undefined : header.customerId,
         items: stagedItems.map(i => ({ productId: i.productId, quantity: i.quantity, notes: i.notes })),
-      });
-      toast.success("Inventory dispatched successfully");
+      };
+      const { queued } = await queueMutation('POST', '/stock-out/bulk', dispatchPayload, 'stock-out', 7);
       setStagedItems([]);
-      // Force-refresh global product store so stock counts update everywhere
-      refreshGlobalProducts({ force: true }).catch(() => {});
-      setActiveView("HISTORY");
-      fetchHistory();
+      if (queued) {
+        toast.success(`${stagedItems.length} items queued offline — will sync when connected`);
+      } else {
+        toast.success("Inventory dispatched successfully");
+        refreshGlobalProducts({ force: true }).catch(() => {});
+        setActiveView("HISTORY");
+        fetchHistory();
+      }
     } catch (e: any) {
       toast.error(e?.response?.data?.message || "Dispatch failed");
     } finally {
@@ -383,13 +389,19 @@ export function StockOut() {
               </div>
               <div className="flex-1 min-w-[160px]">
                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 ml-1">From Date</p>
-                <Input type="date" value={historyFilters.startDate} onChange={e => setHistoryFilters(f => ({ ...f, startDate: e.target.value }))}
-                  className="rounded-lg h-10 border-slate-200 text-xs" />
+                <DatePicker 
+                  date={historyFilters.startDate ? parseISO(historyFilters.startDate) : undefined}
+                  onDateChange={(date) => setHistoryFilters(f => ({ ...f, startDate: date ? format(date, "yyyy-MM-dd") : "" }))}
+                  placeholder="START DATE"
+                />
               </div>
               <div className="flex-1 min-w-[160px]">
                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 ml-1">To Date</p>
-                <Input type="date" value={historyFilters.endDate} onChange={e => setHistoryFilters(f => ({ ...f, endDate: e.target.value }))}
-                  className="rounded-lg h-10 border-slate-200 text-xs" />
+                <DatePicker 
+                  date={historyFilters.endDate ? parseISO(historyFilters.endDate) : undefined}
+                  onDateChange={(date) => setHistoryFilters(f => ({ ...f, endDate: date ? format(date, "yyyy-MM-dd") : "" }))}
+                  placeholder="END DATE"
+                />
               </div>
               <Button disabled={loadingHistory} onClick={fetchHistory} className="h-10 px-6 font-bold bg-slate-900 text-white rounded-lg text-xs gap-2">
                 {loadingHistory ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Search className="h-3.5 w-3.5" />}
@@ -419,8 +431,8 @@ export function StockOut() {
                 <TableBody>
                   {loadingHistory && (
                     <TableRow>
-                      <TableCell colSpan={6} className="py-16 text-center">
-                        <Loader2 className="h-6 w-6 text-slate-300 mx-auto animate-spin" />
+                      <TableCell colSpan={6} className="p-0">
+                        <PageLoader message="Syncing Logs..." className="min-h-[300px]" />
                       </TableCell>
                     </TableRow>
                   )}

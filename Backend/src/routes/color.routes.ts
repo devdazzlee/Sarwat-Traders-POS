@@ -4,6 +4,7 @@ import {
     getColor,
     updateColor,
     listColors,
+    deleteColor,
 } from '../controllers/color.controller';
 import {
     createColorSchema,
@@ -22,5 +23,6 @@ router.post('/', validate(createColorSchema), createColor);
 router.get('/', validate(listColorsSchema), listColors);
 router.get('/:id', validate(getColorSchema), getColor);
 router.patch('/:id', validate(updateColorSchema), updateColor);
+router.delete('/:id', validate(getColorSchema), deleteColor);
 
 export default router;

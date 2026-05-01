@@ -9,12 +9,14 @@ import { StatCardSkeleton } from "@/components/ui/stat-card-skeleton"
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
 import { useToast } from "@/hooks/use-toast"
-import { Search, Plus, Edit, Package, AlertTriangle, Upload, X, ImageIcon, RefreshCw } from "lucide-react"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
+import { Search, Plus, Edit, Package, AlertTriangle, Upload, X, ImageIcon, RefreshCw, Trash2, Loader2 } from "lucide-react"
 import apiClient from "@/lib/apiClient"
 import { usePosData } from "@/hooks/use-pos-data"
 
@@ -121,15 +123,15 @@ interface ProductFormData {
   pct_or_hs_code?: string
   description?: string
   sku: string
-  purchase_rate: number
-  sales_rate_exc_dis_and_tax: number
-  sales_rate_inc_dis_and_tax: number
-  discount_amount?: number
+  purchase_rate: number | string
+  sales_rate_exc_dis_and_tax: number | string
+  sales_rate_inc_dis_and_tax: number | string
+  discount_amount?: number | string
   tax_id?: string
   category_id: string
   subcategory_id?: string
-  min_qty?: number
-  max_qty?: number
+  min_qty?: number | string
+  max_qty?: number | string
   supplier_id?: string
   brand_id?: string
   color_id?: string
@@ -142,6 +144,7 @@ interface ProductFormData {
   is_deal?: boolean
   is_featured?: boolean
   images?: (string | File)[]
+  initial_stock?: number | string
 }
 
 const ProductForm = ({
@@ -184,13 +187,14 @@ const ProductForm = ({
   handleImageSelect: (event: React.ChangeEvent<HTMLInputElement>) => void
 }) => {
   const hasErrors = Object.values(formErrors).some((error) => !!error)
+  const isEditing = submitText === "Update Product"
 
   return (
-    <div className="space-y-6">
-      {/* Basic Information */}
+    <>
+      <div className="space-y-6">
       <div className="space-y-4">
-        <h3 className="text-lg font-semibold">Basic Information</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <h3 className="text-lg font-semibold">Required Information</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           <div>
             <Label htmlFor="name">Product Name *</Label>
             <Input
@@ -199,18 +203,6 @@ const ProductForm = ({
               onChange={(e) => updateFormData("name", e.target.value)}
               placeholder="Enter product name"
             />
-          </div>
-          <div>
-            <Label htmlFor="sku">SKU *</Label>
-            <Input
-              id="sku"
-              type="text"
-              value={formData.sku}
-              onChange={(e) => updateFormData("sku", e.target.value)}
-              placeholder="Enter SKU"
-              className={formErrors.sku ? "border-red-500" : ""}
-            />
-            {formErrors.sku && <p className="text-sm text-red-500 mt-1">{formErrors.sku}</p>}
           </div>
           <div>
             <Label htmlFor="unit_id">Unit *</Label>
@@ -242,55 +234,8 @@ const ProductForm = ({
               </SelectContent>
             </Select>
           </div>
-          <div>
-            <Label htmlFor="subcategory_id">Subcategory</Label>
-            <Select
-              value={formData.subcategory_id || ""}
-              onValueChange={(value) => updateFormData("subcategory_id", value === "none" ? "" : value)}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select subcategory" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">None</SelectItem>
-                {subcategories.map((subcategory) => (
-                  <SelectItem key={subcategory.id} value={subcategory.id}>
-                    {subcategory.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <Label htmlFor="pct_or_hs_code">PCT/HS Code</Label>
-            <Input
-              id="pct_or_hs_code"
-              type="text"
-              value={formData.pct_or_hs_code || ""}
-              onChange={(e) => updateFormData("pct_or_hs_code", e.target.value)}
-              placeholder="Enter PCT/HS code"
-              className={formErrors.pct_or_hs_code ? "border-red-500" : ""}
-            />
-            {formErrors.pct_or_hs_code && (
-              <p className="text-sm text-red-500 mt-1">{formErrors.pct_or_hs_code}</p>
-            )}
-          </div>
         </div>
-        <div>
-          <Label htmlFor="description">Description</Label>
-          <Textarea
-            id="description"
-            value={formData.description || ""}
-            onChange={(e) => updateFormData("description", e.target.value)}
-            placeholder="Enter product description"
-            rows={3}
-          />
-        </div>
-      </div>
-
-      {/* Pricing Information */}
-      <div className="space-y-4">
-        <h3 className="text-lg font-semibold">Pricing Information</h3>
+        
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
             <Label htmlFor="purchase_rate">Purchase Rate *</Label>
@@ -298,177 +243,39 @@ const ProductForm = ({
               id="purchase_rate"
               type="number"
               step="0.01"
-              value={formData.purchase_rate}
-              onChange={(e) => updateFormData("purchase_rate", Number.parseFloat(e.target.value) || 0)}
+              value={formData.purchase_rate || ""}
+              onChange={(e) => updateFormData("purchase_rate", e.target.value)}
               placeholder="0.00"
             />
           </div>
           <div>
-            <Label htmlFor="sales_rate_exc_dis_and_tax">Sales Rate (Exc. Discount & Tax) *</Label>
-            <Input
-              id="sales_rate_exc_dis_and_tax"
-              type="number"
-              step="0.01"
-              value={formData.sales_rate_exc_dis_and_tax}
-              onChange={(e) =>
-                updateFormData("sales_rate_exc_dis_and_tax", Number.parseFloat(e.target.value) || 0)
-              }
-              placeholder="0.00"
-            />
-          </div>
-          <div>
-            <Label htmlFor="sales_rate_inc_dis_and_tax">Sales Rate (Inc. Discount & Tax) *</Label>
+            <Label htmlFor="sales_rate_inc_dis_and_tax">Sales Rate *</Label>
             <Input
               id="sales_rate_inc_dis_and_tax"
               type="number"
               step="0.01"
-              value={formData.sales_rate_inc_dis_and_tax}
-              onChange={(e) =>
-                updateFormData("sales_rate_inc_dis_and_tax", Number.parseFloat(e.target.value) || 0)
-              }
+              value={formData.sales_rate_inc_dis_and_tax || ""}
+              onChange={(e) => {
+                const val = e.target.value;
+                // Update both to keep backend happy, but only show one to user
+                updateFormData("sales_rate_inc_dis_and_tax", val);
+                updateFormData("sales_rate_exc_dis_and_tax", val);
+              }}
               placeholder="0.00"
             />
           </div>
-          <div>
-            <Label htmlFor="discount_amount">Discount Amount</Label>
-            <Input
-              id="discount_amount"
-              type="number"
-              step="0.01"
-              value={formData.discount_amount || 0}
-              onChange={(e) => updateFormData("discount_amount", Number.parseFloat(e.target.value) || 0)}
-              placeholder="0.00"
-            />
-          </div>
-          <div>
-            <Label htmlFor="tax_id">Tax</Label>
-            <Select
-              value={formData.tax_id || ""}
-              onValueChange={(value) => updateFormData("tax_id", value === "none" ? "" : value)}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select tax" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">None</SelectItem>
-                {taxes.map((tax) => (
-                  <SelectItem key={tax.id} value={tax.id}>
-                    {tax.name} {tax.percentage && `(${tax.percentage}%)`}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-      </div>
-
-      {/* Inventory Information */}
-      <div className="space-y-4">
-        <h3 className="text-lg font-semibold">Inventory Information</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <Label htmlFor="min_qty">Minimum Quantity</Label>
-            <Input
-              id="min_qty"
-              type="number"
-              value={formData.min_qty || 0}
-              onChange={(e) => updateFormData("min_qty", Number.parseInt(e.target.value) || 0)}
-              placeholder="0"
-            />
-          </div>
-          <div>
-            <Label htmlFor="max_qty">Maximum Quantity</Label>
-            <Input
-              id="max_qty"
-              type="number"
-              value={formData.max_qty || 0}
-              onChange={(e) => updateFormData("max_qty", Number.parseInt(e.target.value) || 0)}
-              placeholder="0"
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* Additional Information */}
-      <div className="space-y-4">
-        <h3 className="text-lg font-semibold">Additional Information</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <Label htmlFor="supplier_id">Supplier</Label>
-            <Select
-              value={formData.supplier_id || ""}
-              onValueChange={(value) => updateFormData("supplier_id", value === "none" ? "" : value)}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select supplier" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">None</SelectItem>
-                {suppliers.map((supplier) => (
-                  <SelectItem key={supplier.id} value={supplier.id}>
-                    {supplier.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <Label htmlFor="brand_id">Brand</Label>
-            <Select
-              value={formData.brand_id || ""}
-              onValueChange={(value) => updateFormData("brand_id", value === "none" ? "" : value)}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select brand" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">None</SelectItem>
-                {brands.map((brand) => (
-                  <SelectItem key={brand.id} value={brand.id}>
-                    {brand.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <Label htmlFor="color_id">Color</Label>
-            <Select
-              value={formData.color_id || ""}
-              onValueChange={(value) => updateFormData("color_id", value === "none" ? "" : value)}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select color" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">None</SelectItem>
-                {colors.map((color) => (
-                  <SelectItem key={color.id} value={color.id}>
-                    {color.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <Label htmlFor="size_id">Size</Label>
-            <Select
-              value={formData.size_id || ""}
-              onValueChange={(value) => updateFormData("size_id", value === "none" ? "" : value)}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select size" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">None</SelectItem>
-                {sizes.map((size) => (
-                  <SelectItem key={size.id} value={size.id}>
-                    {size.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          {!isEditing && (
+            <div>
+              <Label htmlFor="initial_stock">Quantity</Label>
+              <Input
+                id="initial_stock"
+                type="number"
+                value={formData.initial_stock || ""}
+                onChange={(e) => updateFormData("initial_stock", e.target.value)}
+                placeholder="0"
+              />
+            </div>
+          )}
         </div>
       </div>
 
@@ -520,75 +327,15 @@ const ProductForm = ({
         </div>
       </div>
 
-      {/* Settings */}
-      <div className="space-y-4">
-        <h3 className="text-lg font-semibold">Settings</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="flex items-center space-x-2">
-            <Switch
-              id="is_active"
-              checked={formData.is_active}
-              onCheckedChange={(checked) => updateFormData("is_active", checked)}
-            />
-            <Label htmlFor="is_active">Active</Label>
-          </div>
-          <div className="flex items-center space-x-2">
-            <Switch
-              id="display_on_pos"
-              checked={formData.display_on_pos}
-              onCheckedChange={(checked) => updateFormData("display_on_pos", checked)}
-            />
-            <Label htmlFor="display_on_pos">Display on POS</Label>
-          </div>
-          <div className="flex items-center space-x-2">
-            <Switch
-              id="is_batch"
-              checked={formData.is_batch}
-              onCheckedChange={(checked) => updateFormData("is_batch", checked)}
-            />
-            <Label htmlFor="is_batch">Is Batch</Label>
-          </div>
-          <div className="flex items-center space-x-2">
-            <Switch
-              id="auto_fill_on_demand_sheet"
-              checked={formData.auto_fill_on_demand_sheet}
-              onCheckedChange={(checked) => updateFormData("auto_fill_on_demand_sheet", checked)}
-            />
-            <Label htmlFor="auto_fill_on_demand_sheet">Auto Fill on Demand Sheet</Label>
-          </div>
-          <div className="flex items-center space-x-2">
-            <Switch
-              id="non_inventory_item"
-              checked={formData.non_inventory_item}
-              onCheckedChange={(checked) => updateFormData("non_inventory_item", checked)}
-            />
-            <Label htmlFor="non_inventory_item">Non Inventory Item</Label>
-          </div>
-          <div className="flex items-center space-x-2">
-            <Switch
-              id="is_deal"
-              checked={formData.is_deal}
-              onCheckedChange={(checked) => updateFormData("is_deal", checked)}
-            />
-            <Label htmlFor="is_deal">Is Deal</Label>
-          </div>
-          <div className="flex items-center space-x-2">
-            <Switch
-              id="is_featured"
-              checked={formData.is_featured}
-              onCheckedChange={(checked) => updateFormData("is_featured", checked)}
-            />
-            <Label htmlFor="is_featured">Is Featured</Label>
-          </div>
-        </div>
-      </div>
+
 
       {/* Submit Button */}
-      <div className="flex justify-end">
+      <div className="flex justify-end pt-4 border-t">
         <Button
           onClick={onSubmit}
+          size="lg"
           disabled={
-            loading || !formData.name || !formData.sku || !formData.unit_id || !formData.category_id || hasErrors
+            loading || !formData.name || !formData.unit_id || !formData.category_id || hasErrors
           }
         >
           {loading ? (
@@ -602,6 +349,7 @@ const ProductForm = ({
         </Button>
       </div>
     </div>
+    </>
   )
 }
 
@@ -644,13 +392,17 @@ export default function Inventory() {
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
   const [editingProduct, setEditingProduct] = useState<Product | null>(null)
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
+  const [productToDelete, setProductToDelete] = useState<Product | null>(null)
+  const [deleteLoading, setDeleteLoading] = useState(false)
+  const [formLoading, setFormLoading] = useState(false)
   const [formData, setFormData] = useState<ProductFormData>({
     name: "",
     unit_id: "",
     sku: "",
-    purchase_rate: 0,
-    sales_rate_exc_dis_and_tax: 0,
-    sales_rate_inc_dis_and_tax: 0,
+    purchase_rate: "",
+    sales_rate_exc_dis_and_tax: "",
+    sales_rate_inc_dis_and_tax: "",
     category_id: "",
     is_active: true,
     display_on_pos: true,
@@ -660,8 +412,8 @@ export default function Inventory() {
     is_deal: false,
     is_featured: false,
     images: [],
+    initial_stock: "",
   })
-  const [formLoading, setFormLoading] = useState(false)
   const [formErrors, setFormErrors] = useState<{ sku?: string; pct_or_hs_code?: string }>({})
   const [imagePreviews, setImagePreviews] = useState<string[]>([])     // URLs for display (all are Cloudinary URLs)
   const [existingImageUrls, setExistingImageUrls] = useState<string[]>([]) // URLs to send in PATCH/POST
@@ -923,9 +675,16 @@ export default function Inventory() {
         ...formData,
         sku: String(formData.sku),
         pct_or_hs_code: formData.pct_or_hs_code ? String(formData.pct_or_hs_code) : undefined,
+        purchase_rate: Number(formData.purchase_rate) || 0,
+        sales_rate_exc_dis_and_tax: Number(formData.sales_rate_exc_dis_and_tax) || 0,
+        sales_rate_inc_dis_and_tax: Number(formData.sales_rate_inc_dis_and_tax) || 0,
+        discount_amount: Number(formData.discount_amount) || 0,
+        min_qty: Number(formData.min_qty) || 0,
+        max_qty: Number(formData.max_qty) || 0,
+        initial_stock: Number(formData.initial_stock) || 0,
       }
 
-      // Images are already uploaded — existingImageUrls has all Cloudinary URLs
+      // Images are already uploaded - existingImageUrls has all Cloudinary URLs
       await apiService.createProduct(dataToSubmit, existingImageUrls)
 
       toast({
@@ -956,8 +715,14 @@ export default function Inventory() {
         ...formData,
         sku: String(formData.sku),
         pct_or_hs_code: formData.pct_or_hs_code ? String(formData.pct_or_hs_code) : undefined,
+        purchase_rate: Number(formData.purchase_rate) || 0,
+        sales_rate_exc_dis_and_tax: Number(formData.sales_rate_exc_dis_and_tax) || 0,
+        sales_rate_inc_dis_and_tax: Number(formData.sales_rate_inc_dis_and_tax) || 0,
+        discount_amount: Number(formData.discount_amount) || 0,
+        min_qty: Number(formData.min_qty) || 0,
+        max_qty: Number(formData.max_qty) || 0,
       }
-      // All images are already Cloudinary URLs — no base64, no large payload
+      // All images are already Cloudinary URLs - no base64, no large payload
       await apiService.updateProduct(editingProduct.id, dataToSubmit, existingImageUrls)
 
       toast({
@@ -996,15 +761,39 @@ export default function Inventory() {
       })
     }
   }
+  
+  const handleDeleteProduct = async () => {
+    if (!productToDelete) return
+    
+    setDeleteLoading(true)
+    try {
+      await apiClient.delete(`/products/${productToDelete.id}`)
+      toast({
+        title: "Success",
+        description: "Product deleted successfully",
+      })
+      setIsDeleteDialogOpen(false)
+      setProductToDelete(null)
+      refreshAllData()
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to delete product. It might be used in sales or other records.",
+        variant: "destructive",
+      })
+    } finally {
+      setDeleteLoading(false)
+    }
+  }
 
   const resetForm = () => {
     setFormData({
       name: "",
       unit_id: "",
       sku: "",
-      purchase_rate: 0,
-      sales_rate_exc_dis_and_tax: 0,
-      sales_rate_inc_dis_and_tax: 0,
+      purchase_rate: "",
+      sales_rate_exc_dis_and_tax: "",
+      sales_rate_inc_dis_and_tax: "",
       category_id: "",
       is_active: true,
       display_on_pos: true,
@@ -1014,6 +803,7 @@ export default function Inventory() {
       is_deal: false,
       is_featured: false,
       images: [],
+      initial_stock: "",
     })
     setImagePreviews([])
     setExistingImageUrls([])
@@ -1056,7 +846,7 @@ export default function Inventory() {
   }
 
   const updateFormData = (field: keyof ProductFormData, value: any) => {
-    setFormData({ ...formData, [field]: value })
+    setFormData((prev) => ({ ...prev, [field]: value }))
 
     if (field === "sku" || field === "pct_or_hs_code") {
       // Basic validation: prevent purely numeric strings that might be misinterpreted as numbers.
@@ -1091,7 +881,7 @@ export default function Inventory() {
         // Compress the image
         const compressed = await compressImage(file)
 
-        // Upload immediately to Cloudinary via backend — returns a URL
+        // Upload immediately to Cloudinary via backend - returns a URL
         const url = await apiService.uploadImage(compressed)
 
         // Store the Cloudinary URL (not base64)
@@ -1214,7 +1004,7 @@ export default function Inventory() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Categories</SelectItem>
-              {categories.map((category) => (
+              {categories.filter(c => c.name?.toLowerCase() !== 'all' && c.id !== 'all').map((category) => (
                 <SelectItem key={category.id} value={category.id}>
                   {category.name}
                 </SelectItem>
@@ -1227,7 +1017,7 @@ export default function Inventory() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Subcategories</SelectItem>
-              {subcategories.map((subcategory) => (
+              {subcategories.filter(s => s.name?.toLowerCase() !== 'all' && s.id !== 'all').map((subcategory) => (
                 <SelectItem key={subcategory.id} value={subcategory.id}>
                   {subcategory.name}
                 </SelectItem>
@@ -1323,7 +1113,7 @@ export default function Inventory() {
                             <Button size="sm" variant="outline" onClick={() => openEditDialog(product)}>
                               <Edit className="h-3 w-3" />
                             </Button>
-                            <Button
+                            {/* <Button
                               size="sm"
                               variant="outline"
                               onClick={() => handleToggleStatus(product.id)}
@@ -1334,6 +1124,17 @@ export default function Inventory() {
                               }
                             >
                               {product.is_active ? "Deactivate" : "Activate"}
+                            </Button> */}
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                setProductToDelete(product)
+                                setIsDeleteDialogOpen(true)
+                              }}
+                              className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                            >
+                              <Trash2 className="h-3 w-3" />
                             </Button>
                           </div>
                         </TableCell>
@@ -1493,6 +1294,38 @@ export default function Inventory() {
             />
           </DialogContent>
         </Dialog>
+
+        <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This action cannot be undone. This will permanently delete the product
+                "{productToDelete?.name}" from the system.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={deleteLoading}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={(e) => {
+                  e.preventDefault()
+                  handleDeleteProduct()
+                }}
+                disabled={deleteLoading}
+                className="bg-red-600 hover:bg-red-700 text-white"
+              >
+                {deleteLoading ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Deleting...
+                  </>
+                ) : (
+                  "Delete"
+                )}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </div>
   )

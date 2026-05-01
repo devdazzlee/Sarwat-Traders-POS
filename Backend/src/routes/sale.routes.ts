@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { authenticate, authorize } from "../middleware/auth.middleware";
 import { validate } from "../middleware/validation.middleware";
+import { idempotency } from "../middleware/idempotency.middleware";
 import {
     getSalesController,
     getSalesForReturnsController,
@@ -44,7 +45,7 @@ router.get("/today", getTodaySalesController);
 router.get("/for-returns", getSalesForReturnsController);
 router.get("/", getSalesController);
 router.get("/:saleId", getSaleByIdController);
-router.post("/", validate(createSaleSchema), createSaleController);
+router.post("/", idempotency, validate(createSaleSchema), createSaleController);
 router.patch("/:saleId", updateSaleController);
 router.patch("/:saleId/refund", validate(refundSaleSchema), refundSaleController);
 

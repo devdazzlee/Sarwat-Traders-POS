@@ -30,6 +30,7 @@ export interface ReceiptData {
   storeName?: string;
   tagline?: string;
   address?: string;
+  storePhone?: string;
   strn?: string;
   transactionId: string;
   timestamp?: string;

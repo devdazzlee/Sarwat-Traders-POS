@@ -32,3 +32,8 @@ export const listUnits = asyncHandler(async (req: Request, res: Response) => {
 
     new ApiResponse(result.data, 'Units retrieved successfully', 200).send(res);
 });
+
+export const deleteUnit = asyncHandler(async (req: Request, res: Response) => {
+    await unitService.deleteUnit(req.params.id);
+    new ApiResponse(null, 'Unit deleted successfully').send(res);
+});

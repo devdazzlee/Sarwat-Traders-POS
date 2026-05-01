@@ -5,6 +5,7 @@ import {
     updateSupplier,
     toggleSupplierStatus,
     listSuppliers,
+    deleteSupplier,
 } from '../controllers/supplier.controller';
 import {
     createSupplierSchema,
@@ -24,5 +25,6 @@ router.get('/', validate(listSuppliersSchema), listSuppliers);
 router.get('/:id', validate(getSupplierSchema), getSupplier);
 router.put('/:id', validate(updateSupplierSchema), updateSupplier);
 router.patch('/:id/toggle-status', validate(getSupplierSchema), toggleSupplierStatus);
+router.delete('/:id', validate(getSupplierSchema), deleteSupplier);
 
 export default router;

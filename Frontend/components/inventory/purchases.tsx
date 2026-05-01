@@ -31,6 +31,7 @@ import {
   RefreshCw
 } from "lucide-react";
 import apiClient from "@/lib/apiClient";
+import { cachedGet, queueMutation } from "@/lib/offline-helpers";
 import { API_BASE } from "@/config/constants";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
@@ -39,6 +40,8 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { PageLoader } from "@/components/ui/page-loader";
+import { DatePicker } from "@/components/ui/date-picker";
+import { parseISO } from "date-fns";
 import * as XLSX from "xlsx";
 import { useStore } from "@/lib/store";
 
@@ -146,12 +149,12 @@ export function Purchases() {
   const fetchMeta = useCallback(async () => {
     setLoadingMeta(true);
     try {
-      const [pRes, sRes] = await Promise.all([
-        apiClient.get('/products', { params: { fetch_all: true, is_active: true } }),
-        apiClient.get('/suppliers', { params: { is_active: true, display_on_pos: undefined } }),
+      const [products, suppliers] = await Promise.all([
+        cachedGet<any[]>('/products', { fetch_all: true, is_active: true }, 'products-purchases'),
+        cachedGet<any[]>('/suppliers', { is_active: true }, 'suppliers'),
       ]);
-      setProducts(pRes.data?.data || []);
-      setSuppliers(sRes.data?.data || []);
+      setProducts(products || []);
+      setSuppliers(suppliers || []);
     } catch (e) {
       console.error(e);
       toast({ title: "Error", description: "Failed to load master data", variant: "destructive" });
@@ -167,8 +170,8 @@ export function Purchases() {
       if (filters.supplierId) params.supplierId = filters.supplierId;
       if (filters.startDate) params.startDate = filters.startDate;
       if (filters.endDate) params.endDate = filters.endDate;
-      const res = await apiClient.get('/purchases', { params });
-      setPurchases(res.data?.data || []);
+      const data = await cachedGet<any[]>('/purchases', params, `purchases-${JSON.stringify(params)}`);
+      setPurchases(data || []);
     } catch (e) {
       console.error(e);
     } finally {
@@ -230,7 +233,7 @@ export function Purchases() {
 
     setSubmitting(true);
     try {
-      await apiClient.post('/purchases', {
+      const purchasePayload = {
         ...header,
         items: stagedItems.map((item) => ({
           productId: item.productId,
@@ -246,17 +249,17 @@ export function Purchases() {
           gwPerCtn: item.gwPerCtn,
           tGw: item.tGw,
         })),
-      });
-      toast({ title: "Stock Updated", description: `Successfully logged ${stagedItems.length} items to inventory.` });
+      };
+      const { queued } = await queueMutation('POST', '/purchases', purchasePayload, 'purchase', 8);
       setStagedItems([]);
-      setHeader({
-        ...header,
-        invoiceRef: "",
-        notes: "",
-      });
-      // Force-refresh global product store so Products tab shows updated stock immediately
-      refreshGlobalProducts({ force: true }).catch(() => {});
-      setActiveView("HISTORY");
+      setHeader({ ...header, invoiceRef: "", notes: "" });
+      if (queued) {
+        toast({ title: "Saved Offline", description: `${stagedItems.length} items queued — will sync when connected.` });
+      } else {
+        toast({ title: "Stock Updated", description: `Successfully logged ${stagedItems.length} items.` });
+        refreshGlobalProducts({ force: true }).catch(() => {});
+        setActiveView("HISTORY");
+      }
     } catch (e: any) {
       toast({ title: "Submission Failed", description: e?.response?.data?.message || "Check your network connection", variant: "destructive" });
     } finally {
@@ -423,8 +426,8 @@ export function Purchases() {
       <div className="relative z-10 flex flex-col flex-1 p-6 animate-in fade-in duration-500">
         <div className="flex items-center justify-between mb-8">
           <div className="flex items-center gap-4">
-            <div className="bg-slate-900 p-3 rounded-2xl shadow-xl shadow-slate-200">
-              <Plus className="h-6 w-6 text-white" />
+            <div className="bg-slate-900 p-2.5 rounded-2xl shadow-xl shadow-slate-200">
+              <Plus className="h-5 w-5 text-white" />
             </div>
             <div>
               <h1 className="text-2xl font-black text-slate-900 tracking-tighter uppercase">Stock In / Arrivals</h1>
@@ -436,7 +439,7 @@ export function Purchases() {
              <button 
               onClick={() => setActiveView("HISTORY")}
               className={cn(
-                "px-6 h-9 rounded-lg font-black text-[10px] tracking-widest transition-all uppercase",
+                "px-5 h-8 rounded-lg font-black text-[10px] tracking-widest transition-all uppercase",
                 activeView === "HISTORY" ? "bg-white text-slate-900 shadow-sm" : "text-slate-400 hover:text-slate-600"
               )}
              >
@@ -445,7 +448,7 @@ export function Purchases() {
              <button 
               onClick={() => setActiveView("CREATE")}
               className={cn(
-                "px-6 h-9 rounded-lg font-black text-[10px] tracking-widest transition-all uppercase",
+                "px-5 h-8 rounded-lg font-black text-[10px] tracking-widest transition-all uppercase",
                 activeView === "CREATE" ? "bg-white text-slate-900 shadow-sm" : "text-slate-400 hover:text-slate-600"
               )}
              >
@@ -461,7 +464,7 @@ export function Purchases() {
               <div className="space-y-1.5">
                 <Label className="text-[9px] font-black uppercase text-slate-500 ml-1">Supplier Entity</Label>
                 <Select value={filters.supplierId} onValueChange={(v) => setFilters({...filters, supplierId: v === "all" ? "" : v})}>
-                  <SelectTrigger className="rounded-lg h-10 border-slate-200 font-bold bg-white text-xs">
+                  <SelectTrigger className="rounded-lg h-9 border-slate-200 font-bold bg-white text-xs">
                     <SelectValue placeholder="All Sources" />
                   </SelectTrigger>
                   <SelectContent>
@@ -472,17 +475,25 @@ export function Purchases() {
               </div>
               <div className="space-y-1.5">
                 <Label className="text-[9px] font-black uppercase text-slate-500 ml-1">Date Range Start</Label>
-                <Input type="date" value={filters.startDate} onChange={(e) => setFilters({...filters, startDate: e.target.value})} className="rounded-lg h-10 border-slate-200 bg-white font-bold text-xs" />
+                <DatePicker 
+                  date={filters.startDate ? parseISO(filters.startDate) : undefined}
+                  onDateChange={(date) => setFilters({...filters, startDate: date ? format(date, "yyyy-MM-dd") : ""})}
+                  placeholder="START DATE"
+                />
               </div>
               <div className="space-y-1.5">
                 <Label className="text-[9px] font-black uppercase text-slate-500 ml-1">Date Range End</Label>
-                <Input type="date" value={filters.endDate} onChange={(e) => setFilters({...filters, endDate: e.target.value})} className="rounded-lg h-10 border-slate-200 bg-white font-bold text-xs" />
+                <DatePicker 
+                  date={filters.endDate ? parseISO(filters.endDate) : undefined}
+                  onDateChange={(date) => setFilters({...filters, endDate: date ? format(date, "yyyy-MM-dd") : ""})}
+                  placeholder="END DATE"
+                />
               </div>
               <div className="flex items-end">
-                 <Button className="w-full bg-slate-900 text-white h-10 rounded-lg font-black text-[10px] tracking-widest uppercase" onClick={fetchHistory} disabled={loadingHistory}>
-                    {loadingHistory ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4 mr-2" />}
-                    REFRESH
-                 </Button>
+                  <Button className="w-full bg-slate-900 text-white h-9 rounded-lg font-black text-[10px] tracking-widest uppercase" onClick={fetchHistory} disabled={loadingHistory}>
+                     {loadingHistory ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4 mr-2" />}
+                     SEARCH
+                  </Button>
               </div>
             </div>
 
@@ -501,7 +512,13 @@ export function Purchases() {
                      </TableRow>
                    </TableHeader>
                    <TableBody>
-                     {purchases.length === 0 ? (
+                     {loadingHistory ? (
+                       <TableRow>
+                         <TableCell colSpan={6} className="p-0">
+                           <PageLoader message="Syncing Archive..." className="min-h-[300px]" />
+                         </TableCell>
+                       </TableRow>
+                     ) : purchases.length === 0 ? (
                        <TableRow>
                          <TableCell colSpan={6} className="h-64 text-center">
                             <div className="flex flex-col items-center gap-2 opacity-20">
@@ -606,7 +623,7 @@ export function Purchases() {
                        <div className="space-y-2 text-left">
                           <Label className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Supplier</Label>
                           <Select value={header.supplierId} onValueChange={(v) => setHeader({...header, supplierId: v})}>
-                             <SelectTrigger className="rounded-xl border-slate-200 h-11 bg-white text-xs font-black uppercase">
+                             <SelectTrigger className="rounded-xl border-slate-200 h-9 bg-white text-xs font-black uppercase">
                                 <SelectValue placeholder="SELECT ENTITY" />
                              </SelectTrigger>
                              <SelectContent>
@@ -616,11 +633,15 @@ export function Purchases() {
                        </div>
                        <div className="space-y-2 text-left">
                           <Label className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Arrival Date</Label>
-                          <Input type="date" value={header.purchaseDate} onChange={(e) => setHeader({...header, purchaseDate: e.target.value})} className="rounded-xl h-11 border-slate-200 bg-white text-xs font-black tabular-nums" />
+                          <DatePicker 
+                             date={header.purchaseDate ? parseISO(header.purchaseDate) : undefined}
+                             onDateChange={(date) => setHeader({...header, purchaseDate: date ? format(date, "yyyy-MM-dd") : ""})}
+                             placeholder="PICK DATE"
+                           />
                        </div>
                        <div className="space-y-2 text-left">
                           <Label className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Invoice Code</Label>
-                          <Input value={header.invoiceRef} onChange={(e) => setHeader({...header, invoiceRef: e.target.value})} placeholder="REF-0000" className="rounded-xl h-11 border-slate-200 bg-white text-xs font-black uppercase" />
+                          <Input value={header.invoiceRef} onChange={(e) => setHeader({...header, invoiceRef: e.target.value})} placeholder="REF-0000" className="rounded-xl h-9 border-slate-200 bg-white text-xs font-black uppercase" />
                        </div>
                     </div>
 
@@ -631,7 +652,7 @@ export function Purchases() {
                              <Label className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Asset Search</Label>
                              <Popover open={openProductCombo} onOpenChange={setOpenProductCombo}>
                                <PopoverTrigger asChild>
-                                 <Button variant="outline" className="w-full justify-between rounded-xl border-slate-200 h-11 font-black text-slate-900 bg-white text-xs uppercase shadow-sm">
+                                 <Button variant="outline" className="w-full justify-between rounded-xl border-slate-200 h-9 font-black text-slate-900 bg-white text-xs uppercase shadow-sm">
                                    <span className="truncate pr-4">{selectedProduct ? selectedProduct.name : "TYPE SKU OR NAME..."}</span>
                                    <Search className="h-4 w-4 opacity-30" />
                                  </Button>
@@ -659,16 +680,16 @@ export function Purchases() {
                           
                           <div className="md:col-span-2 space-y-2 text-left">
                              <Label className="text-[9px] font-black text-slate-500 uppercase tracking-widest text-center block">Arrival Qty</Label>
-                             <Input type="number" value={itemForm.quantity} onChange={(e) => setItemForm({...itemForm, quantity: e.target.value})} className="rounded-xl border-slate-200 bg-white font-black text-slate-900 h-11 text-sm text-center tabular-nums" placeholder="0" />
+                             <Input type="number" value={itemForm.quantity} onChange={(e) => setItemForm({...itemForm, quantity: e.target.value})} className="rounded-xl border-slate-200 bg-white font-black text-slate-900 h-9 text-sm text-center tabular-nums" placeholder="0" />
                           </div>
 
                           <div className="md:col-span-2 space-y-2 text-left">
                              <Label className="text-[9px] font-black text-slate-500 uppercase tracking-widest text-center block">Unit Cost</Label>
-                             <Input type="number" value={itemForm.costPrice} onChange={(e) => setItemForm({...itemForm, costPrice: e.target.value})} className="rounded-xl border-slate-200 bg-white font-black text-slate-900 h-11 text-sm text-center tabular-nums" placeholder="0.00" />
+                             <Input type="number" value={itemForm.costPrice} onChange={(e) => setItemForm({...itemForm, costPrice: e.target.value})} className="rounded-xl border-slate-200 bg-white font-black text-slate-900 h-9 text-sm text-center tabular-nums" placeholder="0.00" />
                           </div>
 
                           <div className="md:col-span-2">
-                             <Button className="w-full bg-slate-900 hover:bg-black text-white rounded-xl h-11 font-black text-[10px] uppercase tracking-widest shadow-lg shadow-slate-200 transition-all active:scale-95" onClick={handleAddStagedItem}>
+                             <Button className="w-full bg-slate-900 hover:bg-black text-white rounded-xl h-9 font-black text-[10px] uppercase tracking-widest shadow-lg shadow-slate-200 transition-all active:scale-95" onClick={handleAddStagedItem}>
                                ADD ITEM
                              </Button>
                           </div>
@@ -681,7 +702,11 @@ export function Purchases() {
                           </div>
                           <div className="space-y-2 text-left">
                              <Label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Expiry Date</Label>
-                             <Input type="date" value={itemForm.expiryDate} onChange={(e) => setItemForm({...itemForm, expiryDate: e.target.value})} className="rounded-xl border-slate-100 bg-white h-9 text-[10px] font-black tabular-nums" />
+                             <DatePicker 
+                                date={itemForm.expiryDate ? parseISO(itemForm.expiryDate) : undefined}
+                                onDateChange={(date) => setItemForm({...itemForm, expiryDate: date ? format(date, "yyyy-MM-dd") : ""})}
+                                placeholder="NO EXPIRY"
+                              />
                           </div>
                        </div>
                     </div>
@@ -689,7 +714,7 @@ export function Purchases() {
                     {/* Staged Items List */}
                     <div className="space-y-3">
                        <h4 className="text-[10px] font-black uppercase text-slate-900 tracking-[0.2em] px-1">Staging Grid</h4>
-                       <div className="border border-slate-200 rounded-2xl overflow-hidden bg-white shadow-sm">
+                       <div className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-sm">
                           <ScrollArea className="max-h-[400px]">
                           <Table>
                              <TableHeader className="bg-slate-50 border-b border-slate-100">
@@ -742,10 +767,10 @@ export function Purchases() {
 
             {/* Sidebar / Summary */}
             <div className="lg:col-span-4 space-y-6">
-               <Card className="rounded-2xl border border-slate-200 shadow-xl bg-white p-8 space-y-8 sticky top-4">
+               <Card className="rounded-xl border border-slate-200 shadow-xl bg-white p-6 space-y-6 sticky top-4">
                   <div className="flex items-center justify-between">
-                     <div className="bg-slate-900 p-3 rounded-2xl">
-                        <Calculator className="h-5 w-5 text-white" />
+                     <div className="bg-slate-900 p-2 rounded-xl">
+                        <Calculator className="h-4 w-4 text-white" />
                      </div>
                      <Badge variant="outline" className="text-[9px] font-black uppercase px-3 py-1 border-slate-200">AUDIT READY</Badge>
                   </div>
@@ -761,7 +786,7 @@ export function Purchases() {
                      </div>
                      <div className="pt-6 border-t border-slate-100">
                         <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-1">Total Net Valuation</span>
-                        <span className="text-4xl font-black text-slate-900 tracking-tighter tabular-nums truncate block">
+                        <span className="text-2xl font-black text-slate-900 tracking-tighter tabular-nums truncate block">
                           Rs {grandTotal.toLocaleString()}
                         </span>
                      </div>
@@ -773,27 +798,27 @@ export function Purchases() {
                       value={header.notes} 
                       onChange={(e) => setHeader({...header, notes: e.target.value})} 
                       placeholder="ENTER LOGISTICS OR INVENTORY NOTES..." 
-                      className="rounded-xl border-slate-200 bg-slate-50/50 resize-none h-28 focus:ring-slate-900 text-xs font-bold uppercase"
+                      className="rounded-xl border-slate-200 bg-slate-50/50 resize-none h-28 focus:ring-slate-900 text-[10px] font-medium uppercase placeholder:text-slate-300"
                      />
                   </div>
 
                   <Button 
-                   className="w-full bg-slate-900 text-white h-16 rounded-2xl font-black text-xs uppercase tracking-[0.2em] shadow-2xl shadow-slate-200 hover:bg-black transition-all active:scale-[0.98] disabled:opacity-30"
+                   className="w-full bg-slate-900 text-white h-11 rounded-xl font-black text-[10px] uppercase tracking-[0.2em] shadow-xl shadow-slate-200 hover:bg-black transition-all active:scale-[0.98] disabled:opacity-30"
                    disabled={submitting || stagedItems.length === 0}
                    onClick={handleSubmitPurchase}
                   >
                     {submitting ? (
-                       <div className="flex items-center gap-3">
-                          <RefreshCw className="h-5 w-5 animate-spin" />
+                       <div className="flex items-center gap-2">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
                           SYNCING...
                        </div>
                     ) : "COMMIT TO STOCK"}
                   </Button>
 
-                  <div className="p-4 bg-slate-900/5 rounded-2xl border border-slate-900/5 flex gap-3">
-                     <Info className="h-4 w-4 text-slate-400 shrink-0 mt-0.5" />
-                     <p className="text-[9px] text-slate-600 font-bold leading-relaxed uppercase tracking-tight">
-                        Transaction will update physical ledger levels and adjust cost basis for all staged assets. THIS ACTION IS PERMANENT.
+                  <div className="p-4 bg-slate-50 rounded-xl border border-slate-100 flex gap-3">
+                     <Info className="h-3.5 w-3.5 text-slate-400 shrink-0 mt-0.5" />
+                     <p className="text-[9px] text-slate-500 font-medium leading-relaxed uppercase tracking-tight">
+                        Transaction will update physical ledger levels and adjust cost basis for all staged assets. <span className="font-black text-slate-900">THIS ACTION IS PERMANENT.</span>
                      </p>
                   </div>
                </Card>

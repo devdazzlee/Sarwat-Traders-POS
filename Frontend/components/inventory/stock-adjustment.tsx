@@ -34,6 +34,7 @@ import {
   Clock
 } from "lucide-react";
 import apiClient from "@/lib/apiClient";
+import { cachedGet, queueMutation } from "@/lib/offline-helpers";
 import { API_BASE } from "@/config/constants";
 import { toast } from "sonner";
 import { usePosData } from "@/hooks/use-pos-data";
@@ -66,10 +67,8 @@ export function StockAdjustment() {
   const fetchAdjustments = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await apiClient.get('/stock-adjustments', {
-        params: { page: 1, limit: 100 },
-      });
-      setAdjustments(res.data?.data || []);
+      const data = await cachedGet<any[]>('/stock-adjustments', { page: 1, limit: 100 }, 'stock-adjustments');
+      setAdjustments(data || []);
     } catch (e: any) {
       toast.error(e?.response?.data?.message || "Failed to load adjustment history");
     } finally {
@@ -79,11 +78,9 @@ export function StockAdjustment() {
 
   const fetchStockLevels = useCallback(async () => {
     try {
-      const sRes = await apiClient.get('/stock', { params: { limit: 1000 } });
-      const stockList = sRes.data?.data || [];
+      const stockList = await cachedGet<any[]>('/stock', { limit: 1000 }, 'stock-levels');
       const map: Record<string, number> = {};
-      stockList.forEach((s: any) => {
-        // Map by product-branch or just product if branch is specific
+      (stockList || []).forEach((s: any) => {
         map[`${s.product_id}-${s.branch_id}`] = Number(s.current_quantity || 0);
       });
       setStocks(map);
@@ -161,19 +158,19 @@ export function StockAdjustment() {
 
     try {
       setSubmitting(true);
-      await apiClient.post('/stock-adjustments', payload);
-      toast.success("Inventory synchronized successfully");
+      const { queued } = await queueMutation('POST', '/stock-adjustments', payload, 'stock-adjustment', 6);
       setDialogOpen(false);
-      setForm({
-         ...form,
-         productId: "", physicalCount: "", changeQuantity: "", referenceNo: "", reason: ""
-      });
+      setForm({ ...form, productId: "", physicalCount: "", changeQuantity: "", referenceNo: "", reason: "" });
       setSearchTerm("");
-      fetchAdjustments();
-      fetchStockLevels();
+      if (queued) {
+        toast.success("Saved offline — adjustment will sync when connected");
+      } else {
+        toast.success("Inventory synchronized successfully");
+        fetchAdjustments();
+        fetchStockLevels();
+      }
     } catch (e: any) {
-      const backendMessage = e?.response?.data?.message || e?.message || "Failed to execute stock adjustment";
-      toast.error(backendMessage);
+      toast.error(e?.response?.data?.message || e?.message || "Failed to execute stock adjustment");
     } finally {
       setSubmitting(false);
     }
@@ -234,143 +231,141 @@ export function StockAdjustment() {
            <Button variant="outline" size="sm" onClick={exportCSV} className="h-9 border-slate-200 font-bold text-xs uppercase tracking-tight">
              <Download className="h-3.5 w-3.5 mr-2" /> Export CSV
            </Button>
-
            <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
               <DialogTrigger asChild>
-                <Button size="sm" className="h-9 px-4 bg-slate-900 text-white font-bold text-xs uppercase tracking-tight shadow-sm hover:ring-2 hover:ring-slate-900 transition-all">
+                <Button size="sm" className="h-9 px-4 bg-slate-900 text-white font-medium text-xs uppercase tracking-tight shadow-sm hover:ring-2 hover:ring-slate-900 transition-all">
                   <Plus className="h-4 w-4 mr-2" /> New Adjustment
                 </Button>
               </DialogTrigger>
-              <DialogContent className="sm:max-w-[500px] p-0 overflow-hidden border-none shadow-2xl rounded-2xl">
-                <div className="bg-slate-900 p-6 text-white text-center">
-                  <Package className="h-8 w-8 mx-auto mb-3 opacity-50" />
-                  <DialogTitle className="text-xl font-black uppercase tracking-tight">Inventory Correction</DialogTitle>
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Adjust stock levels for physical reconciliation</p>
-                </div>
+              <DialogContent className="sm:max-w-[450px]">
+                <DialogHeader>
+                  <DialogTitle>Stock Adjustment</DialogTitle>
+                  <DialogDescription>
+                    Adjust stock levels for physical reconciliation.
+                  </DialogDescription>
+                </DialogHeader>
                 
-                <div className="p-8 space-y-6 bg-white">
-                   <div className="grid grid-cols-1 gap-6">
-                      {/* PRODUCT SEARCH */}
-                      <div className="space-y-2 relative" ref={dropdownRef}>
-                         <Label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Asset Search</Label>
-                         <div className="relative">
-                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                            <Input 
-                              placeholder="SKU OR PRODUCT NAME..."
-                              className="h-11 pl-10 rounded-xl border-slate-200 bg-slate-50/50 font-bold text-xs uppercase"
-                              value={form.productId ? selectedProduct?.name : searchTerm}
-                              onFocus={() => {
-                                setProductDropdownOpen(true);
-                                if (form.productId) {
-                                  setSearchTerm("");
-                                  setForm(f => ({ ...f, productId: "" }));
-                                }
-                              }}
-                              onChange={(e) => {
-                                setSearchTerm(e.target.value);
-                                setProductDropdownOpen(true);
-                              }}
-                            />
-                            {form.productId && (
-                              <button onClick={() => { setForm(f => ({ ...f, productId: "" })); setSearchTerm(""); }} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-900">
-                                <X className="h-4 w-4" />
-                              </button>
-                            )}
-                         </div>
+                <div className="space-y-4 py-4">
+                  {/* PRODUCT SEARCH */}
+                  <div className="space-y-2 relative" ref={dropdownRef}>
+                    <Label>Search Product</Label>
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                      <Input 
+                        placeholder="Type SKU or Product Name..."
+                        className="pl-10"
+                        value={form.productId ? selectedProduct?.name : searchTerm}
+                        onFocus={() => {
+                          setProductDropdownOpen(true);
+                          if (form.productId) {
+                            setSearchTerm("");
+                            setForm(f => ({ ...f, productId: "" }));
+                          }
+                        }}
+                        onChange={(e) => {
+                          setSearchTerm(e.target.value);
+                          setProductDropdownOpen(true);
+                        }}
+                      />
+                      {form.productId && (
+                        <button onClick={() => { setForm(f => ({ ...f, productId: "" })); setSearchTerm(""); }} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-900">
+                          <X className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
 
-                         {productDropdownOpen && (
-                            <div className="absolute left-0 right-0 z-50 mt-1 max-h-56 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-2xl py-1">
-                               {filteredProducts.map(p => (
-                                  <button
-                                    key={p.id}
-                                    onClick={() => {
-                                      setForm(f => ({ ...f, productId: p.id }));
-                                      setProductDropdownOpen(false);
-                                      setSearchTerm(p.name);
-                                    }}
-                                    className="w-full px-5 py-3 text-left hover:bg-slate-50 border-b border-slate-50 last:border-none flex flex-col"
-                                  >
-                                     <span className="font-black text-slate-900 text-xs uppercase">{p.name}</span>
-                                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">SKU: {p.sku || "N/A"}</span>
-                                  </button>
-                               ))}
-                            </div>
-                         )}
-                      </div>
-                   </div>
-
-                   <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                         <Label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Correction Method</Label>
-                         <Select value={form.adjustmentType} onValueChange={(v) => setForm(f => ({...f, adjustmentType: v}))}>
-                            <SelectTrigger className="h-11 rounded-xl border-slate-200 font-bold text-xs">
-                               <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                               <SelectItem value="RECONCILIATION">OVERRIDE</SelectItem>
-                               <SelectItem value="ADDITION">ADD (+)</SelectItem>
-                               <SelectItem value="SUBTRACTION">SUB (-)</SelectItem>
-                            </SelectContent>
-                         </Select>
-                      </div>
-
-                      <div className="space-y-2">
-                         <Label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Category</Label>
-                         <Select value={form.adjustmentCategory} onValueChange={(v) => setForm(f => ({...f, adjustmentCategory: v}))}>
-                            <SelectTrigger className="h-11 rounded-xl border-slate-200 font-bold text-xs text-slate-900">
-                               <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                               <SelectItem value="CORRECTION">CORRECTION</SelectItem>
-                               <SelectItem value="DAMAGE">DAMAGE</SelectItem>
-                               <SelectItem value="EXPIRED">EXPIRED</SelectItem>
-                               <SelectItem value="THEFT">THEFT</SelectItem>
-                               <SelectItem value="RETURN_TO_SUPPLIER">RETURN</SelectItem>
-                               <SelectItem value="ADMINISTRATIVE">ADMIN</SelectItem>
-                            </SelectContent>
-                         </Select>
-                      </div>
-                   </div>
-
-                   <div className="p-5 rounded-2xl border border-slate-100 bg-slate-50 flex items-center justify-between">
-                       <div>
-                          <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">System Count</p>
-                          <h4 className="text-2xl font-black text-slate-900 tabular-nums">{form.productId && form.branchId !== "all" ? currentSystemQty : "—"}</h4>
-                       </div>
-                       <div className="w-1/2 space-y-2">
-                          <Label className="text-[10px] font-black uppercase text-blue-600 tracking-widest">
-                             {form.adjustmentType === 'RECONCILIATION' ? 'Final Count' : 'Qty Variance'}
-                          </Label>
-                          <Input 
-                            type="number"
-                            className="h-11 rounded-xl border-blue-200 bg-white text-center font-black text-lg text-blue-600 focus:ring-blue-500"
-                            placeholder="0"
-                            value={form.adjustmentType === 'RECONCILIATION' ? form.physicalCount : form.changeQuantity}
-                            onChange={(e) => {
-                               if (form.adjustmentType === 'RECONCILIATION') setForm(f => ({...f, physicalCount: e.target.value}));
-                               else setForm(f => ({...f, changeQuantity: e.target.value}));
+                    {productDropdownOpen && (
+                      <div className="absolute left-0 right-0 z-50 mt-1 max-h-56 overflow-y-auto rounded-md border border-slate-200 bg-white shadow-lg py-1">
+                        {filteredProducts.map(p => (
+                          <button
+                            key={p.id}
+                            onClick={() => {
+                              setForm(f => ({ ...f, productId: p.id }));
+                              setProductDropdownOpen(false);
+                              setSearchTerm(p.name);
                             }}
-                          />
-                       </div>
-                   </div>
+                            className="w-full px-4 py-2 text-left hover:bg-slate-50 border-b border-slate-50 last:border-none flex flex-col"
+                          >
+                            <span className="font-medium text-slate-900 text-sm">{p.name}</span>
+                            <span className="text-xs text-slate-500">SKU: {p.sku || "N/A"}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
 
-                   <div className="space-y-2">
-                       <Label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Reasoning</Label>
-                       <Textarea 
-                         className="rounded-xl border-slate-200 bg-slate-50 text-xs min-h-[80px] font-bold"
-                         placeholder="Explain the discrepancy..."
-                         value={form.reason}
-                         onChange={(e) => setForm(f => ({...f, reason: e.target.value}))}
-                       />
-                   </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Action</Label>
+                      <Select value={form.adjustmentType} onValueChange={(v) => setForm(f => ({...f, adjustmentType: v}))}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="RECONCILIATION">Set Fixed Qty</SelectItem>
+                          <SelectItem value="ADDITION">Add (+)</SelectItem>
+                          <SelectItem value="SUBTRACTION">Subtract (-)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
 
-                   <div className="flex gap-3">
-                      <Button variant="outline" className="flex-1 h-12 rounded-xl font-black text-[10px] uppercase tracking-widest" onClick={() => setDialogOpen(false)}>CANCEL</Button>
-                      <Button onClick={handleSubmit} disabled={submitting} className="flex-[2] h-12 rounded-xl bg-slate-900 text-white font-black text-[10px] uppercase tracking-widest shadow-lg shadow-slate-200 transition-all active:scale-95">
-                        {submitting ? <RefreshCw className="h-4 w-4 animate-spin" /> : "COMMIT ADJUSTMENT"}
-                      </Button>
-                   </div>
+                    <div className="space-y-2">
+                      <Label>Reason</Label>
+                      <Select value={form.adjustmentCategory} onValueChange={(v) => setForm(f => ({...f, adjustmentCategory: v}))}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="CORRECTION">Correction</SelectItem>
+                          <SelectItem value="DAMAGE">Damage</SelectItem>
+                          <SelectItem value="EXPIRED">Expired</SelectItem>
+                          <SelectItem value="THEFT">TheFT</SelectItem>
+                          <SelectItem value="RETURN_TO_SUPPLIER">Return</SelectItem>
+                          <SelectItem value="ADMINISTRATIVE">Admin</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+
+                  <div className="p-4 rounded-lg border border-slate-200 bg-white flex items-center justify-between gap-4">
+                    <div className="flex-1">
+                      <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Current Qty</p>
+                      <h4 className="text-2xl font-semibold text-slate-900">{form.productId ? currentSystemQty : "—"}</h4>
+                    </div>
+                    <div className="flex-1 space-y-2">
+                      <Label className="text-xs">
+                        {form.adjustmentType === 'RECONCILIATION' ? 'New Total Qty' : 'Change Amount'}
+                      </Label>
+                      <Input 
+                        type="number"
+                        className="text-lg font-semibold"
+                        placeholder="0"
+                        value={form.adjustmentType === 'RECONCILIATION' ? form.physicalCount : form.changeQuantity}
+                        onChange={(e) => {
+                          if (form.adjustmentType === 'RECONCILIATION') setForm(f => ({...f, physicalCount: e.target.value}));
+                          else setForm(f => ({...f, changeQuantity: e.target.value}));
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Remarks (Optional)</Label>
+                    <Textarea 
+                      className="min-h-[60px]"
+                      placeholder="Add any additional details..."
+                      value={form.reason}
+                      onChange={(e) => setForm(f => ({...f, reason: e.target.value}))}
+                    />
+                  </div>
                 </div>
+
+                <DialogFooter className="gap-2">
+                  <Button variant="outline" className="w-full sm:w-auto" onClick={() => setDialogOpen(false)}>Cancel</Button>
+                  <Button onClick={handleSubmit} disabled={submitting} className="w-full sm:w-auto bg-slate-900">
+                    {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save Adjustment"}
+                  </Button>
+                </DialogFooter>
               </DialogContent>
            </Dialog>
         </div>

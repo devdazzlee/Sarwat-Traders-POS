@@ -53,6 +53,11 @@ export class SizeService {
         });
     }
 
+    async deleteSize(id: string) {
+        await this.getSizeById(id);
+        return prisma.size.delete({ where: { id } });
+    }
+
     async listSizes({
         page = 1,
         limit = 10,

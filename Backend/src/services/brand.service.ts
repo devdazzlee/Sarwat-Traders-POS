@@ -48,6 +48,11 @@ export class BrandService {
         });
     }
 
+    async deleteBrand(id: string) {
+        await this.getBrandById(id);
+        return prisma.brand.delete({ where: { id } });
+    }
+
     async toggleBrandDisplay(id: string) {
         const brand = await this.getBrandById(id);
         return prisma.brand.update({

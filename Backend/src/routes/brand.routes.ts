@@ -5,6 +5,7 @@ import {
     updateBrand,
     toggleBrandDisplay,
     listBrands,
+    deleteBrand,
 } from '../controllers/brand.controller';
 import {
     createBrandSchema,
@@ -24,5 +25,6 @@ router.get('/', validate(listBrandsSchema), listBrands);
 router.get('/:id', validate(getBrandSchema), getBrand);
 router.patch('/:id', validate(updateBrandSchema), updateBrand);
 router.patch('/:id/toggle-display', validate(getBrandSchema), toggleBrandDisplay);
+router.delete('/:id', validate(getBrandSchema), deleteBrand);
 
 export default router;

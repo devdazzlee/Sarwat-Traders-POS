@@ -53,6 +53,11 @@ export class UnitService {
         });
     }
 
+    async deleteUnit(id: string) {
+        await this.getUnitById(id);
+        return prisma.unit.delete({ where: { id } });
+    }
+
     async listUnits({
         page = 1,
         limit = 10,
