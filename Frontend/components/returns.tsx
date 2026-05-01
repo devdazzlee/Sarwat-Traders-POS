@@ -27,7 +27,8 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import apiClient from "@/lib/apiClient"
 import { offlineDB } from "@/lib/offline-db"
-import { downloadReturnNote, printReturnNote, type ReturnNoteData } from "@/lib/pdf-generator"
+import { downloadReturnNote, printReturnNote, shareReturnNoteOnWhatsApp, shareReturnNoteOnEmail, type ReturnNoteData } from "@/lib/pdf-generator"
+import { Share2, Mail } from "lucide-react"
 
 interface Sale {
   id: string
@@ -35,6 +36,8 @@ interface Sale {
   customer?: {
     name: string
     email: string
+    phone_number?: string
+    whatsapp_number?: string
   }
   sale_date: string
   total_amount: number
@@ -57,6 +60,8 @@ interface ReturnItem {
   customer?: {
     name: string
     email: string
+    phone_number?: string
+    whatsapp_number?: string
   }
   sale_date: string
   total_amount: number
@@ -132,6 +137,8 @@ const normalizeSaleRecord = (sale: any): Sale => ({
     ? {
         name: String(sale.customer.name || ""),
         email: String(sale.customer.email || ""),
+        phone_number: sale.customer.phone_number ? String(sale.customer.phone_number) : undefined,
+        whatsapp_number: sale.customer.whatsapp_number ? String(sale.customer.whatsapp_number) : undefined,
       }
     : undefined,
   sale_date:
@@ -231,6 +238,10 @@ export function Returns() {
   const exchangeProductDropdownRef = useRef<HTMLDivElement | null>(null)
 
   const [returnSuccessData, setReturnSuccessData] = useState<null | ReturnNoteData>(null)
+  const [isAskingWhatsApp, setIsAskingWhatsApp] = useState(false)
+  const [isAskingEmail, setIsAskingEmail] = useState(false)
+  const [manualWhatsAppNumber, setManualWhatsAppNumber] = useState("")
+  const [manualEmail, setManualEmail] = useState("")
   const [isProcessOpen, setIsProcessOpen] = useState(false)
   const [saleDropdownOpen, setSaleDropdownOpen] = useState(false)
   const [selectedReturn, setSelectedReturn] = useState<ReturnItem | null>(null)
@@ -786,7 +797,9 @@ export function Returns() {
         saleNumber: response.data?.data?.sale_number || `SALE-${Date.now()}`,
         originalSaleNumber: selectedSale?.sale_number || newReturn.saleId,
         customerName: selectedSale?.customer?.name,
-        customerPhone: selectedSale?.customer?.email,
+        customerPhone: selectedSale?.customer?.phone_number || "",
+        customerWhatsApp: selectedSale?.customer?.whatsapp_number || selectedSale?.customer?.phone_number || "",
+        customerEmail: selectedSale?.customer?.email || "",
         date: new Date(),
         returnedItems: retItems,
         exchangedItems: exchItems,
@@ -1865,7 +1878,15 @@ export function Returns() {
       </Dialog>
 
       {/* Return Invoice Success Dialog */}
-      <Dialog open={!!returnSuccessData} onOpenChange={(open) => { if (!open) setReturnSuccessData(null) }}>
+      <Dialog open={!!returnSuccessData} onOpenChange={(open) => { 
+        if (!open) {
+          setReturnSuccessData(null)
+          setIsAskingWhatsApp(false)
+          setIsAskingEmail(false)
+          setManualWhatsAppNumber("")
+          setManualEmail("")
+        }
+      }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <div className="flex items-center justify-center mb-2">
@@ -1924,25 +1945,158 @@ export function Returns() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3 pt-1">
-                <Button
-                  variant="outline"
-                  className="flex items-center gap-2 border-blue-200 text-blue-700 hover:bg-blue-50"
-                  onClick={() => downloadReturnNote(returnSuccessData!)}
-                >
-                  <FileText className="h-4 w-4" />
-                  Download
-                </Button>
-                <Button
-                  variant="outline"
-                  className="flex items-center gap-2 border-gray-200 text-gray-700 hover:bg-gray-50"
-                  onClick={() => printReturnNote(returnSuccessData!)}
-                >
-                  <Printer className="h-4 w-4" />
-                  Print
-                </Button>
+              <div className="mt-4">
+                {isAskingWhatsApp ? (
+                  <div className="col-span-2 space-y-2 bg-green-50 p-3 rounded-lg border border-green-100 animate-in fade-in slide-in-from-top-2">
+                    <label className="text-xs font-bold text-green-700 uppercase tracking-wider">Enter WhatsApp Number</label>
+                    <div className="flex gap-2">
+                      <Input 
+                        placeholder="0300 1234567"
+                        value={manualWhatsAppNumber}
+                        onChange={(e) => setManualWhatsAppNumber(e.target.value)}
+                        className="bg-white border-green-200 focus-visible:ring-green-500"
+                        autoFocus
+                      />
+                      <Button
+                        size="sm"
+                        className="bg-[#25D366] hover:bg-[#128C7E] text-white px-4 font-bold"
+                        onClick={async () => {
+                          if (!manualWhatsAppNumber) return;
+                          const result = await shareReturnNoteOnWhatsApp({
+                            ...returnSuccessData!,
+                            customerWhatsApp: manualWhatsAppNumber
+                          });
+                          if (result.method === 'desktop') {
+                            toast({
+                              title: "PDF Downloaded",
+                              description: "Return Note saved to your Downloads. Attach it in the WhatsApp chat that just opened.",
+                              duration: 6000,
+                            });
+                          }
+                          setIsAskingWhatsApp(false);
+                        }}
+                      >
+                        Send
+                      </Button>
+                      <Button 
+                        size="sm"
+                        variant="ghost" 
+                        onClick={() => setIsAskingWhatsApp(false)}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : isAskingEmail ? (
+                  <div className="col-span-2 space-y-2 bg-amber-50 p-3 rounded-lg border border-amber-100 animate-in fade-in slide-in-from-top-2">
+                    <label className="text-xs font-bold text-amber-700 uppercase tracking-wider">Enter Email Address</label>
+                    <div className="flex gap-2">
+                      <Input 
+                        type="email"
+                        placeholder="customer@example.com"
+                        value={manualEmail}
+                        onChange={(e) => setManualEmail(e.target.value)}
+                        className="bg-white border-amber-200 focus-visible:ring-amber-500"
+                        autoFocus
+                      />
+                      <Button
+                        size="sm"
+                        className="bg-amber-600 hover:bg-amber-700 text-white px-4 font-bold"
+                        onClick={async () => {
+                          if (!manualEmail) return;
+                          const result = await shareReturnNoteOnEmail({
+                            ...returnSuccessData!,
+                            customerEmail: manualEmail
+                          });
+                          if (result.method === 'desktop') {
+                            toast({
+                              title: "PDF Downloaded",
+                              description: "Return Note saved to your Downloads. Attach it in the email draft that just opened.",
+                              duration: 6000,
+                            });
+                          }
+                          setIsAskingEmail(false);
+                        }}
+                      >
+                        Send
+                      </Button>
+                      <Button 
+                        size="sm"
+                        variant="ghost" 
+                        onClick={() => setIsAskingEmail(false)}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-3 pt-1">
+                    <Button
+                      variant="outline"
+                      className="flex items-center gap-2 border-blue-200 text-blue-700 hover:bg-blue-50 h-11"
+                      onClick={() => downloadReturnNote(returnSuccessData!)}
+                    >
+                      <FileText className="h-4 w-4" />
+                      Download
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="flex items-center gap-2 border-gray-200 text-gray-700 hover:bg-gray-50 h-11"
+                      onClick={() => printReturnNote(returnSuccessData!)}
+                    >
+                      <Printer className="h-4 w-4" />
+                      Print
+                    </Button>
+                    <Button
+                      className="flex items-center gap-2 bg-[#25D366] hover:bg-[#128C7E] text-white h-11"
+                      onClick={async () => {
+                        const number = returnSuccessData!.customerWhatsApp || returnSuccessData!.customerPhone;
+                        if (!number) {
+                          setIsAskingWhatsApp(true);
+                          setIsAskingEmail(false);
+                          return;
+                        }
+                        const result = await shareReturnNoteOnWhatsApp(returnSuccessData!);
+                        if (result.method === 'desktop') {
+                          toast({
+                            title: "PDF Downloaded",
+                            description: result.whatsappOpened
+                              ? "Return Note saved to Downloads. Attach it in the WhatsApp chat that just opened."
+                              : "Return Note saved to your Downloads folder.",
+                            duration: 6000,
+                          });
+                        }
+                      }}
+                    >
+                      <Share2 className="h-4 w-4" />
+                      WhatsApp
+                    </Button>
+                    <Button
+                      className="flex items-center gap-2 bg-amber-600 hover:bg-amber-700 text-white h-11"
+                      onClick={async () => {
+                        const email = returnSuccessData!.customerEmail;
+                        if (!email) {
+                          setIsAskingEmail(true);
+                          setIsAskingWhatsApp(false);
+                          return;
+                        }
+                        const result = await shareReturnNoteOnEmail(returnSuccessData!);
+                        if (result.method === 'desktop') {
+                          toast({
+                            title: "PDF Downloaded",
+                            description: "Return Note saved to your Downloads folder. Attach it in the email draft that just opened.",
+                            duration: 6000,
+                          });
+                        }
+                      }}
+                    >
+                      <Mail className="h-4 w-4" />
+                      Email
+                    </Button>
+                  </div>
+                )}
               </div>
-              <Button variant="ghost" className="w-full text-gray-500" onClick={() => setReturnSuccessData(null)}>
+              <Button variant="ghost" className="w-full text-gray-500 h-10 mt-2" onClick={() => setReturnSuccessData(null)}>
                 Close
               </Button>
             </div>
@@ -1963,30 +2117,95 @@ function buildReturnNoteHtml(d: {
   netAmount: number
   date: string
 }): string {
-  const rows = (items: typeof d.returnedItems, label: string, color: string) =>
-    items.map(it => `<tr><td>${label}</td><td>${it.name}</td><td>${it.qty}</td><td>Rs ${it.price.toLocaleString()}</td><td style="color:${color}">Rs ${(it.qty * it.price).toLocaleString()}</td></tr>`).join('')
-  return `<!DOCTYPE html><html><head><title>Return Note - ${d.saleNumber}</title>
-  <style>body{font-family:sans-serif;padding:30px;max-width:600px;margin:auto}h2{margin:0}table{width:100%;border-collapse:collapse;margin:16px 0}th,td{border:1px solid #e2e8f0;padding:8px 12px;text-align:left}th{background:#f8fafc;font-weight:600}.total{font-weight:700}.brand{color:#4f46e5;font-size:20px;font-weight:800}</style>
-  </head><body>
-  <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #e2e8f0;padding-bottom:12px;margin-bottom:16px">
-    <div>
-      <p class="brand">SARWAT TRADER</p>
-      <p style="margin:2px 0;color:#64748b;font-size:11px">Shop no 109, 1st floor city shopping mall, Marston road Karachi, Pakistan.</p>
-      <p style="margin:2px 0;color:#64748b;font-size:11px">Contact: 02132727444</p>
-      <p style="margin:2px 0;color:#64748b;font-size:13px">Return / Exchange Note</p>
-    </div>
-    <div style="text-align:right;font-size:13px;color:#64748b"><p>${d.saleNumber}</p><p>Ref: ${d.originalSaleNumber}</p><p>${d.date}</p></div>
-  </div>
-  <table><thead><tr><th>Type</th><th>Product</th><th>Qty</th><th>Unit Price</th><th>Amount</th></tr></thead><tbody>
-    ${rows(d.returnedItems, 'Return', '#dc2626')}
-    ${rows(d.exchangedItems, 'Exchange', '#2563eb')}
-  </tbody></table>
-  <div style="text-align:right;font-size:14px">
-    ${d.refundTotal > 0 ? `<p style="color:#dc2626">Refund: Rs ${d.refundTotal.toLocaleString()}</p>` : ''}
-    ${d.exchangeTotal > 0 ? `<p>Exchange: Rs ${d.exchangeTotal.toLocaleString()}</p>` : ''}
-    <p class="total" style="font-size:16px;border-top:2px solid #e2e8f0;padding-top:8px;margin-top:8px">
-      Net ${d.netAmount >= 0 ? 'Payable' : 'Refund'}: Rs ${Math.abs(d.netAmount).toLocaleString()}
-    </p>
-  </div>
-  </body></html>`
+  const rows = (items: typeof d.returnedItems, label: string) =>
+    items.map(it => `
+      <tr style="border-bottom: 1px solid #e2e8f0;">
+        <td style="padding: 10px 0; font-size: 13px;">${label}: ${it.name}</td>
+        <td style="padding: 10px 0; font-size: 13px; text-align: center;">${it.qty}</td>
+        <td style="padding: 10px 0; font-size: 13px; text-align: right;">${it.price.toFixed(2)}</td>
+        <td style="padding: 10px 0; font-size: 13px; text-align: right; font-weight: 600;">${(it.qty * it.price).toFixed(2)}</td>
+      </tr>
+    `).join('')
+
+  return `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="UTF-8">
+        <style>
+          body { font-family: 'Helvetica', Arial, sans-serif; color: #000; line-height: 1.4; padding: 40px; }
+          .header { display: flex; justify-content: space-between; margin-bottom: 40px; }
+          .logo-section { display: flex; flex-direction: column; align-items: flex-start; }
+          .logo { height: 40px; width: auto; max-width: 100%; object-fit: contain; margin-bottom: 10px; }
+          .store-name { font-size: 16px; font-weight: bold; margin-bottom: 4px; }
+          .store-info { font-size: 10px; color: #555; }
+          .invoice-info { text-align: right; }
+          .invoice-label { font-size: 20px; font-weight: bold; margin-bottom: 10px; }
+          .info-row { font-size: 12px; margin-bottom: 4px; }
+          .info-val { font-weight: bold; }
+          table { width: 100%; border-collapse: collapse; margin-bottom: 30px; }
+          th { text-align: left; border-bottom: 2px solid #000; padding: 10px 0; font-size: 12px; text-transform: uppercase; }
+          .summary { display: flex; flex-direction: column; align-items: flex-end; }
+          .summary-row { display: flex; width: 250px; justify-content: space-between; margin-bottom: 6px; font-size: 14px; }
+          .grand-total { border-top: 1px solid #000; padding-top: 10px; margin-top: 10px; font-size: 18px; font-weight: bold; }
+          .footer { margin-top: 100px; text-align: center; font-size: 10px; color: #999; border-top: 1px solid #eee; padding-top: 20px; }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div class="logo-section">
+            <img src="/logo.png" class="logo" onerror="this.style.display='none'"/>
+            <div class="store-name">SARWAT TRADER</div>
+            <div class="store-info">
+              Return / Exchange Note
+            </div>
+          </div>
+          <div class="invoice-info">
+            <div class="invoice-label">RETURN NOTE</div>
+            <div class="info-row">Date: <span class="info-val">${d.date}</span></div>
+            <div class="info-row">Note No: <span class="info-val">#${d.saleNumber}</span></div>
+            <div class="info-row">Original Sale: <span class="info-val">#${d.originalSaleNumber}</span></div>
+          </div>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 50%;">Description</th>
+              <th style="text-align: center;">Qty</th>
+              <th style="text-align: right;">Price</th>
+              <th style="text-align: right;">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows(d.returnedItems, 'Return')}
+            ${rows(d.exchangedItems, 'Exchange')}
+          </tbody>
+        </table>
+
+        <div class="summary">
+          ${d.refundTotal > 0 ? `
+            <div class="summary-row">
+              <span>Total Refund</span>
+              <span>- ${d.refundTotal.toFixed(2)}</span>
+            </div>
+          ` : ''}
+          ${d.exchangeTotal > 0 ? `
+            <div class="summary-row">
+              <span>Total Exchange</span>
+              <span>${d.exchangeTotal.toFixed(2)}</span>
+            </div>
+          ` : ''}
+          <div class="summary-row grand-total">
+            <span>Net ${d.netAmount >= 0 ? 'Payable' : 'Refund'}</span>
+            <span>PKR ${Math.abs(d.netAmount).toFixed(2)}</span>
+          </div>
+        </div>
+
+        <div class="footer">
+          Powered by ACE STUDIOS | Support: +92 336 2500357 | www.acestudios.pk
+        </div>
+      </body>
+    </html>
+  `
 }

@@ -4,6 +4,8 @@ import { useState, useRef, useEffect } from "react";
 import { Upload, X, CheckCircle2, AlertCircle, FileSpreadsheet, Loader2, Edit3, Save, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardHeader, CardContent } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
 import apiClient from "@/lib/apiClient";
@@ -22,6 +24,7 @@ export function BulkImporter({ open, onOpenChange }: BulkImporterProps) {
   const [results, setResults] = useState<any[] | null>(null);
   const [stagingData, setStagingData] = useState<any[] | null>(null);
   const [isParsing, setIsParsing] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ current: number, total: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { fetchProducts } = usePosData();
 
@@ -50,6 +53,8 @@ export function BulkImporter({ open, onOpenChange }: BulkImporterProps) {
         sales_rate_inc_dis_and_tax: row.sales_rate_inc_dis_and_tax || row["Selling Price"] || row["selling_price"] || 0,
         category_name: row.category_name || row.category || row.Category || "",
         unit_name: row.unit_name || row.unit || row.Unit || "",
+        stock: row.stock || row.Stock || row["Initial Stock Qty"] || row["Quantity"] || row.qty || 0,
+        min_qty: row.min_qty || row["Min Stock"] || row["Min Qty"] || row["min_qty"] || 0,
       }));
 
       setStagingData(normalized);
@@ -91,15 +96,28 @@ export function BulkImporter({ open, onOpenChange }: BulkImporterProps) {
     if (!stagingData) return;
 
     setIsUploading(true);
+    setUploadProgress({ current: 0, total: stagingData.length });
+    let allResults: any[] = [];
+    
     try {
-      const response = await apiClient.post("/products/bulk-upload", {
-        products: stagingData
-      });
+      // Process items individually to show real-time progress
+      // We send them in a loop to ensure UI stays in sync with backend processing
+      for (let i = 0; i < stagingData.length; i++) {
+        const response = await apiClient.post("/products/bulk-upload", {
+          products: [stagingData[i]]
+        });
 
-      const data = response.data.data || response.data;
-      setResults(data);
+        const data = response.data.data || response.data;
+        // The API returns an array of results, so we append them
+        allResults = [...allResults, ...data];
+        
+        // Update progress state
+        setUploadProgress({ current: i + 1, total: stagingData.length });
+      }
+
+      setResults(allResults);
       
-      const successCount = data.filter((item: any) => item.success).length;
+      const successCount = allResults.filter((item: any) => item.success).length;
       if (successCount > 0) {
         toast.success(`Successfully committed ${successCount} products.`);
         fetchProducts({ force: true });
@@ -109,6 +127,7 @@ export function BulkImporter({ open, onOpenChange }: BulkImporterProps) {
       toast.error(error.response?.data?.message || "Failed to commit changes.");
     } finally {
       setIsUploading(false);
+      setUploadProgress(null);
     }
   };
 
@@ -192,6 +211,8 @@ export function BulkImporter({ open, onOpenChange }: BulkImporterProps) {
                       <tr>
                         <th className="px-5 py-4 text-left font-black text-xs uppercase tracking-widest text-slate-400 border-b border-slate-800">S.No</th>
                         <th className="px-5 py-4 text-left font-black text-xs uppercase tracking-widest text-slate-400 border-b border-slate-800">Product Name</th>
+                        <th className="px-5 py-4 text-left font-black text-xs uppercase tracking-widest text-slate-400 border-b border-slate-800 w-24">Stock</th>
+                        <th className="px-5 py-4 text-left font-black text-xs uppercase tracking-widest text-slate-400 border-b border-slate-800 w-24">Min Stock</th>
                         <th className="px-5 py-4 text-left font-black text-xs uppercase tracking-widest text-slate-400 border-b border-slate-800 w-32">Unit Cost (Rs)</th>
                         <th className="px-5 py-4 text-left font-black text-xs uppercase tracking-widest text-slate-400 border-b border-slate-800 w-32">Sale Rate (Rs)</th>
                         <th className="px-5 py-4 text-left font-black text-xs uppercase tracking-widest text-slate-400 border-b border-slate-800">Category</th>
@@ -207,6 +228,22 @@ export function BulkImporter({ open, onOpenChange }: BulkImporterProps) {
                                 value={row.name} 
                                 onChange={(e) => updateStagingRow(idx, "name", e.target.value)}
                                 className="h-9 border-transparent hover:border-slate-200 focus:bg-slate-50 transition-all font-bold"
+                              />
+                           </td>
+                           <td className="px-5 py-4">
+                              <Input 
+                                type="number"
+                                value={row.stock} 
+                                onChange={(e) => updateStagingRow(idx, "stock", e.target.value)}
+                                className="h-9 border-transparent hover:border-slate-200 focus:bg-slate-50 transition-all font-black text-slate-900"
+                              />
+                           </td>
+                           <td className="px-5 py-4">
+                              <Input 
+                                type="number"
+                                value={row.min_qty} 
+                                onChange={(e) => updateStagingRow(idx, "min_qty", e.target.value)}
+                                className="h-9 border-transparent hover:border-slate-200 focus:bg-slate-50 transition-all font-black text-orange-600"
                               />
                            </td>
                            <td className="px-5 py-4">
@@ -324,7 +361,18 @@ export function BulkImporter({ open, onOpenChange }: BulkImporterProps) {
                       onClick={handleCommit}
                       disabled={isUploading}
                     >
-                      {isUploading ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Committing Items...</> : <><Check className="h-4 w-4 mr-2" /> Commit to Stock</>}
+                      {isUploading ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" /> 
+                          {uploadProgress ? (
+                            <span className="flex items-center">
+                              SYNCING {uploadProgress.current}/{uploadProgress.total}...
+                            </span>
+                          ) : "COMMITTING..."}
+                        </>
+                      ) : (
+                        <><Check className="h-4 w-4 mr-2" /> Commit to Stock</>
+                      )}
                     </Button>
                  </div>
               </div>

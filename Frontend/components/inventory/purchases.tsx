@@ -365,16 +365,29 @@ export function Purchases() {
       return;
     }
 
-    // Phase 2 — single request to server (creates product + sets stock per row on backend)
+    // Phase 2 — Sequential requests to server (creates product + sets stock per row on backend)
     setServerUploading(true);
-    setImportProgress({ current: validPayload.length, total: validPayload.length, label: `Sending ${validPayload.length} products to server…` });
-
+    let allResults: any[] = [];
+    
     try {
-      const res = await apiClient.post("/products/bulk-upload", { products: validPayload });
-      const results: any[] = res.data?.data || [];
+      for (let i = 0; i < validPayload.length; i++) {
+        // Update progress for current item being sent
+        setImportProgress({ 
+          current: i + 1, 
+          total: validPayload.length, 
+          label: `Uploading: ${validPayload[i].name || validPayload[i].sku}...` 
+        });
 
-      const succeeded = results.filter(r => r.success);
-      const failed    = results.filter(r => !r.success);
+        const res = await apiClient.post("/products/bulk-upload", { 
+          products: [validPayload[i]] 
+        });
+        
+        const rowResults: any[] = res.data?.data || [];
+        allResults = [...allResults, ...rowResults];
+      }
+
+      const succeeded = allResults.filter(r => r.success);
+      const failed    = allResults.filter(r => !r.success);
       const stocked   = succeeded.filter(r => (r.stock_set ?? 0) > 0).length;
 
       setImporting(false);
@@ -399,8 +412,8 @@ export function Purchases() {
 
       const partialWarn = failed.length > 0 ? ` (${failed.length} rows skipped: ${failed[0]?.error || "unknown error"})` : "";
       toast({
-        title: succeeded.length === results.length ? "Import Complete" : "Import Partially Complete",
-        description: `${succeeded.length} of ${results.length} products saved, ${stocked} with stock.${partialWarn}`,
+        title: succeeded.length === validPayload.length ? "Import Complete" : "Import Partially Complete",
+        description: `${succeeded.length} of ${validPayload.length} products saved, ${stocked} with stock.${partialWarn}`,
       });
     } catch (err: any) {
       setImporting(false);
@@ -571,26 +584,15 @@ export function Purchases() {
                          {importProgress.label}
                        </p>
                        {/* Progress bar */}
-                       <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden">
-                         {serverUploading ? (
-                           /* Indeterminate pulsing bar during server upload */
-                           <div className="h-2 bg-emerald-400 rounded-full animate-pulse w-full" />
-                         ) : (
-                           <div
-                             className="h-2 bg-emerald-400 rounded-full transition-all duration-300"
-                             style={{ width: importProgress.total > 0 ? `${(importProgress.current / importProgress.total) * 100}%` : "0%" }}
-                           />
-                         )}
-                       </div>
-                       {serverUploading ? (
-                         <p className="text-[10px] font-black text-emerald-400/80 tabular-nums">
-                           {importProgress.current} PRODUCTS — WAITING FOR SERVER…
-                         </p>
-                       ) : (
-                         <p className="text-[10px] font-black text-white/60 tabular-nums">
-                           {importProgress.current} / {importProgress.total} ROWS
-                         </p>
-                       )}
+                        <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden">
+                          <div
+                            className="h-2 bg-emerald-400 rounded-full transition-all duration-300"
+                            style={{ width: importProgress.total > 0 ? `${(importProgress.current / importProgress.total) * 100}%` : "0%" }}
+                          />
+                        </div>
+                        <p className="text-[10px] font-black text-emerald-400/80 tabular-nums uppercase">
+                          {serverUploading ? `SYNCING ${importProgress.current} / ${importProgress.total} PRODUCTS` : `${importProgress.current} / ${importProgress.total} ROWS PARSED`}
+                        </p>
                      </div>
                    </div>
                  )}

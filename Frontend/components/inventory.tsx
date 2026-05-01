@@ -16,9 +16,10 @@ import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
 import { useToast } from "@/hooks/use-toast"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
-import { Search, Plus, Edit, Package, AlertTriangle, Upload, X, ImageIcon, RefreshCw, Trash2, Loader2 } from "lucide-react"
+import { Search, Plus, Edit, Package, AlertTriangle, Upload, X, ImageIcon, RefreshCw, Trash2, Loader2, Mail } from "lucide-react"
 import apiClient from "@/lib/apiClient"
 import { usePosData } from "@/hooks/use-pos-data"
+import { shareInventoryReportOnEmail } from "@/lib/pdf-generator"
 
 // Image compression utility
 const compressImage = (file: File, quality = 0.7, maxWidth = 800, maxHeight = 600): Promise<File> => {
@@ -205,7 +206,7 @@ const ProductForm = ({
             />
           </div>
           <div>
-            <Label htmlFor="unit_id">Unit *</Label>
+            <Label htmlFor="unit_id">Unit</Label>
             <Select value={formData.unit_id} onValueChange={(value) => updateFormData("unit_id", value)}>
               <SelectTrigger>
                 <SelectValue placeholder="Select unit" />
@@ -220,7 +221,7 @@ const ProductForm = ({
             </Select>
           </div>
           <div>
-            <Label htmlFor="category_id">Category *</Label>
+            <Label htmlFor="category_id">Category</Label>
             <Select value={formData.category_id} onValueChange={(value) => updateFormData("category_id", value)}>
               <SelectTrigger>
                 <SelectValue placeholder="Select category" />
@@ -264,9 +265,19 @@ const ProductForm = ({
               placeholder="0.00"
             />
           </div>
+          <div>
+            <Label htmlFor="min_qty">Min Stock</Label>
+            <Input
+              id="min_qty"
+              type="number"
+              value={formData.min_qty || ""}
+              onChange={(e) => updateFormData("min_qty", e.target.value)}
+              placeholder="0"
+            />
+          </div>
           {!isEditing && (
             <div>
-              <Label htmlFor="initial_stock">Quantity</Label>
+              <Label htmlFor="initial_stock">Stock</Label>
               <Input
                 id="initial_stock"
                 type="number"
@@ -335,7 +346,7 @@ const ProductForm = ({
           onClick={onSubmit}
           size="lg"
           disabled={
-            loading || !formData.name || !formData.unit_id || !formData.category_id || hasErrors
+            loading || !formData.name || hasErrors
           }
         >
           {loading ? (
@@ -396,6 +407,7 @@ export default function Inventory() {
   const [productToDelete, setProductToDelete] = useState<Product | null>(null)
   const [deleteLoading, setDeleteLoading] = useState(false)
   const [formLoading, setFormLoading] = useState(false)
+  const [sharing, setSharing] = useState(false)
   const [formData, setFormData] = useState<ProductFormData>({
     name: "",
     unit_id: "",
@@ -921,7 +933,38 @@ export default function Inventory() {
               <p className="text-xs md:text-sm text-blue-600 mt-1">Loading data from cache...</p>
             )}
           </div>
-          <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={async () => {
+                setSharing(true);
+                try {
+                  await shareInventoryReportOnEmail({
+                    storeName: "SARWAT TRADER",
+                    date: new Date(),
+                    products: products.map(p => ({
+                      name: p.name,
+                      sku: p.sku || p.code || "-",
+                      category: p.category?.name || "-",
+                      stock: p.available_stock ?? p.current_stock ?? 0,
+                      unit: p.unit?.name || "pcs",
+                      purchaseRate: p.purchase_rate || 0,
+                      salesRate: p.sales_rate_inc_dis_and_tax || 0
+                    }))
+                  });
+                  toast({ title: "Inventory report shared successfully" });
+                } catch (e) {
+                  toast({ title: "Failed to share report", variant: "destructive" });
+                } finally {
+                  setSharing(false);
+                }
+              }}
+              disabled={sharing || products.length === 0}
+            >
+              {sharing ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Mail className="h-4 w-4 mr-2" />}
+              Email Stock List
+            </Button>
+            <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
             <DialogTrigger asChild>
               <Button>
                 <Plus className="h-4 w-4 mr-2" />
@@ -955,6 +998,7 @@ export default function Inventory() {
             </DialogContent>
           </Dialog>
         </div>
+      </div>
 
         {/* Stats Cards */}
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 md:gap-6">

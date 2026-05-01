@@ -383,7 +383,7 @@ export const bulkUploadProducts = asyncHandler(async (req: Request, res: Respons
     // Resolve the active branch once — used for stock records
     const activeBranch = await prisma.branch.findFirst({ where: { is_active: true } });
     const branchId = activeBranch?.id ?? null;
-    const createdBy = (req as any).user?.id || undefined;
+    const createdBy = (req as any).user?.id || null;
 
     const results = [];
     for (const prod of products) {
@@ -473,6 +473,7 @@ export const bulkUploadProducts = asyncHandler(async (req: Request, res: Respons
                 stock_set: stockQty,
             });
         } catch (err) {
+            console.error('❌ Bulk upload row failed:', err);
             results.push({ success: false, error: (err as Error).message, data: prod });
         }
     }

@@ -34,6 +34,7 @@ import {
   Loader2,
   ChevronLeft,
   ChevronRight,
+  Mail,
 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
@@ -52,7 +53,7 @@ import {
 } from "@/components/ui/dialog";
 import { printReceiptViaServer, type ReceiptData } from "@/lib/print-server";
 import { usePrinterSettings } from "@/hooks/use-printer-settings";
-import { downloadA4Invoice, generateA4InvoicePDF, type InvoiceData } from "@/lib/pdf-generator";
+import { downloadA4Invoice, generateA4InvoicePDF, shareOnEmail, shareOnWhatsApp, type InvoiceData } from "@/lib/pdf-generator";
 import { SaleEditor } from "./sale-editor";
 
 interface SaleItem {
@@ -72,7 +73,10 @@ interface SaleItem {
 
 interface Customer {
   id: string;
+  name?: string;
   email: string;
+  phone_number?: string;
+  whatsapp_number?: string;
 }
 
 interface Branch {
@@ -291,7 +295,7 @@ export function SalesHistory() {
         
         setBranchInfo((prev) => ({
           ...prev,
-          name: branchInfo.name, // Keep existing if error, though we use state here
+          name: prev.name, // Keep existing if error
         }));
         const branchRes = await apiClient.get(`/branches/${branchStr}`);
         setBranchInfo({
@@ -354,11 +358,7 @@ export function SalesHistory() {
         ? subtotalFromApi
         : sale.sale_items.reduce((sum, item) => sum + parseFloat(item.line_total || "0"), 0);
     const discount = sale.discount_amount ? parseFloat(sale.discount_amount) : 0;
-    const taxAmount = sale.tax_amount ? parseFloat(sale.tax_amount) : 0;
     const total = parseFloat(sale.total_amount);
-    const taxable = Math.max(0, subtotal - discount);
-    const taxPercent =
-      taxable > 0 && taxAmount > 0 ? (taxAmount / taxable) * 100 : undefined;
 
     const items = sale.sale_items.map((item) => {
       const lineTotal = parseFloat(item.line_total || "0");
@@ -384,8 +384,8 @@ export function SalesHistory() {
     });
 
     return {
-      storeName,
-      address: storeAddress,
+      storeName: branch.name || "SARWAT TRADER",
+      address: branch.address || "Shop no 109, 1st floor city shopping mall, Marston road Karachi, Pakistan.",
       transactionId: sale.sale_number,
       items,
       subtotal,
@@ -424,6 +424,7 @@ export function SalesHistory() {
       customerName: sale.customer?.name || "Walk-in Customer",
       customerPhone: sale.customer?.phone_number || "",
       customerWhatsApp: sale.customer?.whatsapp_number || sale.customer?.phone_number || "",
+      customerEmail: sale.customer?.email || "",
       saleNumber: sale.sale_number,
       date: parseISO(sale.sale_date),
       items,
@@ -448,12 +449,11 @@ export function SalesHistory() {
     
     const itemsHtml = (data.items || [])
       .map((item, idx) => `
-        <tr style="background-color: ${idx % 2 === 1 ? '#f8fafc' : '#ffffff'}; border-bottom: 1px solid #f1f5f9;">
-          <td style="padding: 12px; font-size: 11px; color: #64748b;">${String(idx + 1).padStart(2, '0')}</td>
-          <td style="padding: 12px; font-size: 11px; font-weight: 700; color: #0f172a;">${item.name}</td>
-          <td style="padding: 12px; font-size: 11px; text-align: center; color: #1e293b;">${item.quantity} ${item.unit || ''}</td>
-          <td style="padding: 12px; font-size: 11px; text-align: right; color: #475569;">${money(item.price)}</td>
-          <td style="padding: 12px; font-size: 11px; text-align: right; font-weight: 800; color: #0f172a;">${money(item.lineTotal)}</td>
+        <tr style="border-bottom: 1px solid #e2e8f0;">
+          <td style="padding: 10px 0; font-size: 13px;">${item.name}</td>
+          <td style="padding: 10px 0; font-size: 13px; text-align: center;">${item.quantity}</td>
+          <td style="padding: 10px 0; font-size: 13px; text-align: right;">${item.price.toFixed(2)}</td>
+          <td style="padding: 10px 0; font-size: 13px; text-align: right; font-weight: 600;">${item.lineTotal.toFixed(2)}</td>
         </tr>
       `).join("");
 
@@ -463,159 +463,85 @@ export function SalesHistory() {
         <head>
           <meta charset="UTF-8">
           <style>
-            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap');
-            * { margin: 0; padding: 0; box-sizing: border-box; }
-            body { 
-              font-family: 'Inter', -apple-system, sans-serif; 
-              background: #ffffff;
-              color: #0f172a;
-              line-height: 1.5;
-            }
-            .invoice-wrap { display: flex; min-height: 100vh; width: 100%; }
-            .sidebar { width: 12px; background: #0f172a; flex-shrink: 0; }
-            .content { flex: 1; display: flex; flex-direction: column; }
-            .header { background: #1e293b; color: #ffffff; padding: 40px; display: flex; justify-content: space-between; align-items: center; }
-            .header-left h1 { font-size: 28px; font-weight: 900; letter-spacing: -0.025em; text-transform: uppercase; margin-bottom: 4px; }
-            .header-left p { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: #94a6b8; }
-            .header-right { text-align: right; }
-            .header-right h2 { font-size: 36px; font-weight: 900; letter-spacing: -0.05em; color: #f8fafc; }
-            .header-right p { font-size: 10px; font-weight: 700; color: #38bdf8; }
-            .section { padding: 40px; }
-            .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin-bottom: 32px; }
-            .label-tiny { font-size: 10px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.05em; color: #64748b; margin-bottom: 4px; }
-            .text-bold { font-size: 13px; font-weight: 700; color: #0f172a; }
-            .text-muted { font-size: 11px; color: #64748b; margin-top: 2px; }
-            .customer-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; margin: 0 40px; display: grid; grid-template-columns: 1fr 1fr; }
-            .status-val { font-size: 20px; font-weight: 900; margin-top: 4px; }
-            .table-wrap { padding: 40px; flex: 1; }
-            table { width: 100%; border-collapse: collapse; }
-            th { background: #0f172a; color: #ffffff; padding: 12px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; text-align: left; }
-            .th-right { text-align: right; }
-            .th-center { text-align: center; }
-            .summary-section { padding: 0 40px 40px 40px; display: flex; justify-content: flex-end; }
-            .summary-box { width: 280px; }
-            .summary-row { display: flex; justify-content: space-between; margin-bottom: 8px; }
-            .summary-label { font-size: 11px; font-weight: 600; color: #64748b; text-transform: uppercase; }
-            .summary-val { font-size: 12px; font-weight: 700; }
-            .total-row { border-top: 2px solid #0f172a; margin-top: 16px; padding-top: 16px; align-items: baseline; }
-            .footer { background: #0f172a; color: #ffffff; padding: 24px 40px; display: flex; justify-content: space-between; align-items: flex-end; margin-top: auto; }
-            @media print { .sidebar { display: none; } .content { width: 100%; } }
+            body { font-family: 'Helvetica', Arial, sans-serif; color: #000; line-height: 1.4; padding: 40px; }
+            .header { display: flex; justify-content: space-between; margin-bottom: 40px; }
+            .logo-section { display: flex; flex-direction: column; align-items: flex-start; }
+            .logo { height: 50px; width: auto; max-width: 100%; object-fit: contain; margin-bottom: 10px; }
+            .store-name { font-size: 18px; font-weight: bold; margin-bottom: 4px; }
+            .store-info { font-size: 11px; color: #555; }
+            .invoice-info { text-align: right; }
+            .invoice-label { font-size: 24px; font-weight: bold; margin-bottom: 10px; }
+            .info-row { font-size: 13px; margin-bottom: 4px; }
+            .info-val { font-weight: bold; }
+            .bill-to { margin-bottom: 30px; }
+            .bill-label { font-size: 11px; color: #777; margin-bottom: 4px; text-transform: uppercase; }
+            .customer-name { font-size: 16px; font-weight: bold; }
+            table { width: 100%; border-collapse: collapse; margin-bottom: 30px; }
+            th { text-align: left; border-bottom: 2px solid #000; padding: 10px 0; font-size: 12px; text-transform: uppercase; }
+            .summary { display: flex; flex-direction: column; align-items: flex-end; }
+            .summary-row { display: flex; width: 250px; justify-content: space-between; margin-bottom: 6px; font-size: 14px; }
+            .grand-total { border-top: 1px solid #000; padding-top: 10px; margin-top: 10px; font-size: 18px; font-weight: bold; }
+            .footer { margin-top: 100px; text-align: center; font-size: 10px; color: #999; border-top: 1px solid #eee; padding-top: 20px; }
           </style>
         </head>
         <body>
-          <div class="invoice-wrap">
-            <div class="sidebar"></div>
-            <div class="content">
-              <div class="header">
-                <div class="header-left">
-                  <img src="/logo.png" style="height: 50px; margin-bottom: 12px; display: block;" />
-                  <h1>SARWAT TRADER</h1>
-                </div>
-                <div class="header-right">
-                  <h2>INVOICE</h2>
-                  <p>Official Transaction Record</p>
-                </div>
-              </div>
-              
-              <div class="section info-grid">
-                <div>
-                  <div class="label-tiny">From:</div>
-                  <div class="text-bold">SARWAT TRADER</div>
-                  <div class="text-muted">${data.storeAddress}</div>
-                  <div class="text-bold" style="margin-top: 4px; font-size: 11px;">Contact: ${data.storePhone}</div>
-                </div>
-                <div style="text-align: right;">
-                  <div class="label-tiny">Invoice Details:</div>
-                  <div class="text-bold">No: <span style="color: #2563eb;">#${data.saleNumber}</span></div>
-                  <div class="text-muted">Date: ${new Date(data.date).toLocaleDateString('en-GB', { dateStyle: 'full' })}</div>
-                  <div class="text-bold" style="font-size: 11px;">Time: ${new Date(data.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
-                </div>
-              </div>
-
-              <div class="customer-card" style="display: block;">
-                <div>
-                  <div class="label-tiny">Billed To:</div>
-                  <div style="font-size: 16px; font-weight: 900; color: #0f172a;">${data.customerName || 'Walk-in Customer'}</div>
-                  ${data.customerPhone ? `<div class="text-muted" style="margin-top: 8px; font-weight: 600;">Contact: ${data.customerPhone}</div>` : ''}
-                </div>
-              </div>
-
-              <div class="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th style="width: 60px;">SR.</th>
-                      <th>Product Description</th>
-                      <th class="th-center">Qty</th>
-                      <th class="th-right">Unit Price</th>
-                      <th class="th-right">Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    ${itemsHtml}
-                  </tbody>
-                </table>
-              </div>
-
-              <div class="summary-section">
-                <div class="summary-box">
-                  <div class="summary-row">
-                    <span class="summary-label">Gross Subtotal:</span>
-                    <span class="summary-val">Rs ${money(data.subtotal)}</span>
-                  </div>
-                  ${data.discount > 0 ? `
-                    <div class="summary-row" style="color: #dc2626;">
-                      <span class="summary-label" style="color: #dc2626; font-weight: 800;">Trade Discount:</span>
-                      <span class="summary-val" style="font-weight: 800;">-Rs ${money(data.discount)}</span>
-                    </div>
-                  ` : ''}
-                  ${data.paymentMethod === 'CREDIT' ? `
-                  <div class="summary-row total-row">
-                    <span style="font-size: 13px; font-weight: 900;">TOTAL AMOUNT:</span>
-                    <span style="font-size: 20px; font-weight: 900; line-height: 1;">Rs ${money(data.total)}</span>
-                  </div>
-                  ${(data.amountPaid ?? 0) > 0 ? `
-                  <div class="summary-row" style="margin-top: 8px;">
-                    <span class="summary-label" style="color: #16a34a; font-weight: 800;">AMOUNT PAID:</span>
-                    <span class="summary-val" style="color: #16a34a;">Rs ${money(data.amountPaid ?? 0)}</span>
-                  </div>` : ''}
-                  <div class="summary-row" style="margin-top: 8px; border-top: 2px solid #dc2626; padding-top: 12px;">
-                    <span style="font-size: 13px; font-weight: 900; color: #dc2626;">BALANCE DUE:</span>
-                    <span style="font-size: 24px; font-weight: 900; line-height: 1; color: #dc2626;">Rs ${money(data.balanceDue)}</span>
-                  </div>
-                  ` : `
-                  <div class="summary-row total-row">
-                    <span style="font-size: 13px; font-weight: 900;">TOTAL AMOUNT:</span>
-                    <span style="font-size: 20px; font-weight: 900; line-height: 1;">Rs ${money(data.total)}</span>
-                  </div>
-                  <div class="summary-row" style="margin-top: 8px;">
-                    <span class="summary-label" style="color: #16a34a; font-weight: 800;">AMOUNT PAID:</span>
-                    <span class="summary-val" style="color: #16a34a;">Rs ${money(data.total)}</span>
-                  </div>
-                  <div class="summary-row" style="margin-top: 8px; border-top: 2px solid #0f172a; padding-top: 12px;">
-                    <span style="font-size: 13px; font-weight: 900;">NET PAYABLE:</span>
-                    <span style="font-size: 24px; font-weight: 900; line-height: 1;">Rs 0.00</span>
-                  </div>
-                  ${(data.amountPaid ?? 0) > data.total ? `
-                  <div class="summary-row" style="margin-top: 8px;">
-                    <span class="summary-label" style="color: #16a34a; font-weight: 800;">CHANGE RETURNED:</span>
-                    <span class="summary-val" style="color: #16a34a;">Rs ${money((data.amountPaid ?? 0) - data.total)}</span>
-                  </div>` : ''}
-                  `}
-                </div>
-              </div>
-
-              <div class="footer">
-                <div>
-                  <div class="label-tiny" style="color: #94a3b8; margin-bottom: 2px;">Powered by</div>
-                  <div style="font-weight: 800; font-size: 14px;">ACE STUDIOS</div>
-                </div>
-                <div style="text-align: right;">
-                  <div style="font-weight: 800; font-size: 12px; color: #cbd5e1; margin-bottom: 2px;">Support: +92 336 2500357</div>
-                  <div style="font-size: 10px; color: #64748b; font-weight: 700;">www.acestudios.pk</div>
-                </div>
+          <div class="header">
+            <div class="logo-section">
+              <img src="/logo.png" class="logo" onerror="this.style.display='none'"/>
+              <div class="store-name">SARWAT TRADER</div>
+              <div class="store-info">
+                Shop no 109, 1st floor city shopping mall, Marston road<br>
+                Karachi, Pakistan.<br>
+                Contact: (021) 3272-7444
               </div>
             </div>
+            <div class="invoice-info">
+              <div class="invoice-label">INVOICE</div>
+              <div class="info-row">Date: <span class="info-val">${new Date(data.date).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' })}</span></div>
+              <div class="info-row">Invoice No: <span class="info-val">#${data.saleNumber}</span></div>
+              <div class="info-row">Payment: <span class="info-val">${data.paymentMethod}</span></div>
+            </div>
+          </div>
+
+          <div class="bill-to">
+            <div class="bill-label">Bill To:</div>
+            <div class="customer-name">${data.customerName || 'Walk-in Customer'}</div>
+            ${data.customerPhone ? `<div class="info-row">${data.customerPhone}</div>` : ''}
+          </div>
+
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 50%;">Description</th>
+                <th style="text-align: center;">Qty</th>
+                <th style="text-align: right;">Price</th>
+                <th style="text-align: right;">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${itemsHtml}
+            </tbody>
+          </table>
+
+          <div class="summary">
+            <div class="summary-row">
+              <span>Subtotal</span>
+              <span>${data.subtotal.toFixed(2)}</span>
+            </div>
+            ${data.discount > 0 ? `
+              <div class="summary-row">
+                <span>Discount</span>
+                <span>- ${data.discount.toFixed(2)}</span>
+              </div>
+            ` : ''}
+            <div class="summary-row grand-total">
+              <span>Grand Total</span>
+              <span>PKR ${data.total.toFixed(2)}</span>
+            </div>
+          </div>
+
+          <div class="footer">
+            Powered by ACE STUDIOS | Support: +92 336 2500357 | www.acestudios.pk
           </div>
         </body>
       </html>
@@ -1384,7 +1310,6 @@ export function SalesHistory() {
                         size="default"
                         onClick={async () => {
                           try {
-                            const { shareOnWhatsApp } = await import('@/lib/pdf-generator');
                             const invoiceData = mapSaleToInvoiceData(viewSale);
                             await shareOnWhatsApp(invoiceData);
                           } catch (e) {
@@ -1395,7 +1320,23 @@ export function SalesHistory() {
                         <svg className="w-4 h-4 mr-2" viewBox="0 0 24 24" fill="currentColor">
                           <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51a12.8 12.8 0 0 0-.57-.01c-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 0 1-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 0 1-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 0 1 2.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0 0 12.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 0 0 5.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 0 0-3.48-8.413Z"/>
                         </svg>
-                        Share
+                        WhatsApp
+                      </Button>
+                      <Button
+                        variant="outline"
+                        className="bg-amber-50 text-amber-700 hover:bg-amber-100 border-amber-200 whitespace-nowrap shadow-sm transition-all"
+                        size="default"
+                        onClick={async () => {
+                          try {
+                            const invoiceData = mapSaleToInvoiceData(viewSale);
+                            await shareOnEmail(invoiceData);
+                          } catch (e) {
+                            toast({ title: "Failed to share via Email", variant: "destructive" });
+                          }
+                        }}
+                      >
+                        <Mail className="w-4 h-4 mr-2" />
+                        Email
                       </Button>
                     </div>
                     <Button 

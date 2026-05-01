@@ -44,8 +44,9 @@ import {
   CheckCircle2,
   Users,
   Printer,
+  Mail,
 } from "lucide-react";
-import { downloadA4Invoice, shareOnWhatsApp, printA4Invoice, type InvoiceData } from "@/lib/pdf-generator";
+import { downloadA4Invoice, shareOnWhatsApp, shareOnEmail, printA4Invoice, type InvoiceData } from "@/lib/pdf-generator";
 import apiClient from "@/lib/apiClient";
 import { offlineAPIClient } from "@/lib/offline-api-client";
 import { offlineDB } from "@/lib/offline-db";
@@ -176,6 +177,8 @@ export function NewSale() {
   const [checkoutSuccessData, setCheckoutSuccessData] = useState<InvoiceData | null>(null);
   const [manualWhatsAppNumber, setManualWhatsAppNumber] = useState("");
   const [isAskingWhatsApp, setIsAskingWhatsApp] = useState(false);
+  const [manualEmail, setManualEmail] = useState("");
+  const [isAskingEmail, setIsAskingEmail] = useState(false);
   const [isHoldingSale, setIsHoldingSale] = useState(false);
   const [isViewingHeldSales, setIsViewingHeldSales] = useState(false);
   const [deleteTargetHoldSale, setDeleteTargetHoldSale] = useState<number | null>(null);
@@ -1173,6 +1176,7 @@ export function NewSale() {
           customerName: selectedCustomerObj?.name || "Walk-in Customer",
           customerPhone: selectedCustomerObj?.phone_number || "",
           customerWhatsApp: selectedCustomerObj?.whatsapp_number || selectedCustomerObj?.phone_number || "",
+          customerEmail: selectedCustomerObj?.email || "",
           saleNumber: transactionId,
           date: new Date(),
           items: cartSnapshot.map((item) => ({
@@ -2836,7 +2840,9 @@ export function NewSale() {
         if (!open) {
           setCheckoutSuccessData(null);
           setIsAskingWhatsApp(false);
+          setIsAskingEmail(false);
           setManualWhatsAppNumber("");
+          setManualEmail("");
         }
       }}>
         <DialogContent className="sm:max-w-md">
@@ -2916,8 +2922,50 @@ export function NewSale() {
                       </Button>
                     </div>
                   </div>
+                ) : isAskingEmail ? (
+                  <div className="col-span-2 space-y-2 bg-amber-50 p-3 rounded-lg border border-amber-100 animate-in fade-in slide-in-from-top-2">
+                    <label className="text-xs font-bold text-amber-700 uppercase tracking-wider">Enter Email Address</label>
+                    <div className="flex gap-2">
+                      <Input 
+                        type="email"
+                        placeholder="customer@example.com"
+                        value={manualEmail}
+                        onChange={(e) => setManualEmail(e.target.value)}
+                        className="bg-white border-amber-200 focus-visible:ring-amber-500"
+                        autoFocus
+                      />
+                      <Button
+                        size="sm"
+                        className="bg-amber-600 hover:bg-amber-700 text-white px-4 font-bold"
+                        onClick={async () => {
+                          if (!manualEmail) return;
+                          const result = await shareOnEmail({
+                            ...checkoutSuccessData!,
+                            customerEmail: manualEmail
+                          });
+                          if (result.method === 'desktop') {
+                            toast({
+                              title: "PDF Downloaded",
+                              description: "Invoice saved to your Downloads. Attach it in the email draft that just opened.",
+                              duration: 6000,
+                            });
+                          }
+                          setIsAskingEmail(false);
+                        }}
+                      >
+                        Send
+                      </Button>
+                      <Button 
+                        size="sm"
+                        variant="ghost" 
+                        onClick={() => setIsAskingEmail(false)}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
                 ) : (
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="grid grid-cols-2 gap-3">
                     <Button
                       variant="outline"
                       className="w-full flex items-center justify-center gap-2 h-12 border-blue-200 text-blue-700 hover:bg-blue-50"
@@ -2940,6 +2988,7 @@ export function NewSale() {
                         const number = checkoutSuccessData.customerWhatsApp || checkoutSuccessData.customerPhone;
                         if (!number) {
                           setIsAskingWhatsApp(true);
+                          setIsAskingEmail(false);
                           return;
                         }
                         const result = await shareOnWhatsApp(checkoutSuccessData);
@@ -2956,6 +3005,28 @@ export function NewSale() {
                     >
                       <Share2 className="h-5 w-5" />
                       WhatsApp
+                    </Button>
+                    <Button
+                      className="w-full flex items-center justify-center gap-2 h-12 bg-amber-600 hover:bg-amber-700 text-white"
+                      onClick={async () => {
+                        const email = checkoutSuccessData.customerEmail;
+                        if (!email) {
+                          setIsAskingEmail(true);
+                          setIsAskingWhatsApp(false);
+                          return;
+                        }
+                        const result = await shareOnEmail(checkoutSuccessData);
+                        if (result.method === 'desktop') {
+                          toast({
+                            title: "PDF Downloaded",
+                            description: "Invoice saved to your Downloads folder. Attach it in the email draft that just opened.",
+                            duration: 6000,
+                          });
+                        }
+                      }}
+                    >
+                      <Mail className="h-5 w-5" />
+                      Email
                     </Button>
                   </div>
                 )}

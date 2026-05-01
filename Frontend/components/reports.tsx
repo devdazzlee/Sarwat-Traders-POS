@@ -7,9 +7,10 @@ import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { PageLoader } from "@/components/ui/page-loader"
 import { StatCardSkeleton } from "@/components/ui/stat-card-skeleton"
-import { BarChart3, TrendingUp, DollarSign, ShoppingCart, Users, Package, Download, Calendar, Loader2 } from "lucide-react"
+import { BarChart3, TrendingUp, DollarSign, ShoppingCart, Users, Package, Download, Calendar, Loader2, Mail } from "lucide-react"
 import apiClient from "@/lib/apiClient"
 import { useToast } from "@/hooks/use-toast"
+import { shareAnalyticsReportOnEmail } from "@/lib/pdf-generator"
 
 interface DailySale {
   date: string
@@ -55,6 +56,7 @@ export function Reports() {
   const [topProducts, setTopProducts] = useState<TopProduct[]>([])
   const [categoryWiseSales, setCategoryWiseSales] = useState<CategorySale[]>([])
   const [employeePerformance, setEmployeePerformance] = useState<EmployeePerformance[]>([])
+  const [sharing, setSharing] = useState(false)
 
   useEffect(() => {
     fetchReportsData()
@@ -266,6 +268,37 @@ export function Reports() {
           <Button variant="outline">
             <Calendar className="h-4 w-4 mr-2" />
             Date Range
+          </Button>
+          <Button 
+            variant="outline" 
+            onClick={async () => {
+              setSharing(true);
+              try {
+                await shareAnalyticsReportOnEmail({
+                  storeName: "SARWAT TRADER",
+                  dateRange: "Last 7 Days",
+                  totalRevenue,
+                  totalOrders,
+                  avgOrderValue,
+                  uniqueCustomers,
+                  grossMargin,
+                  topProducts: topProducts.map(p => ({
+                    name: p.name,
+                    revenue: p.revenue,
+                    quantity: p.quantity
+                  }))
+                });
+                toast({ title: "Report shared successfully" });
+              } catch (e) {
+                toast({ title: "Failed to share report", variant: "destructive" });
+              } finally {
+                setSharing(false);
+              }
+            }}
+            disabled={sharing}
+          >
+            {sharing ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Mail className="h-4 w-4 mr-2" />}
+            Email Report
           </Button>
           <Button>
             <Download className="h-4 w-4 mr-2" />
