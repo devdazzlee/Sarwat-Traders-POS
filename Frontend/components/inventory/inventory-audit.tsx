@@ -193,7 +193,7 @@ export function InventoryAudit() {
   }
 
   return (
-    <div className="p-4 max-w-[1400px] mx-auto space-y-4">
+    <div className="p-4 space-y-4">
       {/* HEADER SECTION */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
         <div className="flex items-center gap-3">

@@ -6,6 +6,7 @@ import { parse as csvParse } from 'csv-parse/sync';
 import XLSX from 'xlsx';
 import fs from 'fs';
 import path from 'path';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { asNumber } from '../utils/helpers';
 
@@ -36,11 +37,16 @@ export const createProduct = asyncHandler(async (req: Request, res: Response) =>
         const createdBy = (req as any).user?.id || undefined;
 
         if (branchId) {
+            const minStock = new Prisma.Decimal(Number(product.min_qty ?? 0));
+            const maxStockRaw = Number(product.max_qty ?? 0);
             await prisma.stock.create({
                 data: {
                     product_id: product.id,
                     branch_id: branchId,
                     current_quantity: stockQty,
+                    minimum_quantity: minStock,
+                    maximum_quantity:
+                        maxStockRaw > 0 ? new Prisma.Decimal(maxStockRaw) : new Prisma.Decimal(1000),
                 }
             });
             await prisma.stockMovement.create({
@@ -472,9 +478,20 @@ export const bulkUploadProducts = asyncHandler(async (req: Request, res: Respons
                 category: created.category?.name || 'Unknown',
                 stock_set: stockQty,
             });
-        } catch (err) {
+        } catch (err: any) {
             console.error('❌ Bulk upload row failed:', err);
-            results.push({ success: false, error: (err as Error).message, data: prod });
+            let message = err?.message || 'Unknown error';
+            if (err instanceof Prisma.PrismaClientKnownRequestError) {
+                if (err.code === 'P2002') {
+                    const target = Array.isArray(err.meta?.target)
+                        ? err.meta?.target.join(', ')
+                        : String(err.meta?.target || 'unique field');
+                    message = `Duplicate value for ${target}. Check SKU/code and try again.`;
+                } else if (err.code === 'P2003') {
+                    message = 'Invalid relation reference (category/unit/etc).';
+                }
+            }
+            results.push({ success: false, error: message, data: prod });
         }
     }
 

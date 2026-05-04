@@ -1046,9 +1046,7 @@ export default function BarcodeGenerator() {
                 {productDropdownOpen && (
                   <div className="absolute left-0 right-0 z-20 mt-1 max-h-60 overflow-y-auto rounded-md border border-gray-200 bg-white shadow-lg">
                     {productsLoading ? (
-                      <div className="px-3 py-2 text-sm text-gray-500">
-                        Loading products...
-                      </div>
+                      <PageLoader message="Loading products..." size="sm" />
                     ) : filteredProducts.length === 0 ? (
                       <div className="px-3 py-2 text-sm text-gray-500">
                         {searchTerm ? "No matching products found" : "No products available"}

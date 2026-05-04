@@ -176,7 +176,7 @@ export function InventoryDashboard({ onNavigate }: { onNavigate?: (tab: string) 
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-gray-900">{stats?.totalSkus ?? 0}</div>
-            <p className="text-xs text-gray-500 mt-1">Active product SKUs</p>
+            <p className="text-xs text-gray-500 mt-1">Active products</p>
           </CardContent>
         </Card>
       </div>

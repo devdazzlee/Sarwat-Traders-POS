@@ -193,7 +193,7 @@ export const offlineDB = {
   },
 
   async getUnsyncedSales() {
-    return db.sales.where('synced').equals(0).toArray();
+    return db.sales.filter((s) => !s.synced).toArray();
   },
 
   async markSaleSynced(id: string) {
@@ -307,6 +307,21 @@ export const offlineDB = {
 
   async getFailedCount(): Promise<number> {
     return db.syncQueue.where('status').equals('failed').count();
+  },
+
+  /** After a queued image upload syncs, map operationId → real URL for product create/patch payloads. */
+  async saveResolvedUpload(operationId: string, url: string) {
+    await db.cachedData.put({
+      key: `resolved-upload:${operationId}`,
+      data: url,
+      timestamp: Date.now(),
+    });
+  },
+
+  async getResolvedUpload(operationId: string): Promise<string | null> {
+    const row = await db.cachedData.get(`resolved-upload:${operationId}`);
+    if (row?.data == null) return null;
+    return typeof row.data === 'string' ? row.data : null;
   },
 
   // ---- Cached Data ----

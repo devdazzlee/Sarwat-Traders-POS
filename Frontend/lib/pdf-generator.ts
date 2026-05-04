@@ -200,24 +200,32 @@ const buildInvoiceDoc = (data: InvoiceData, logoDataUrl: string | null): jsPDF =
   doc.setTextColor(0, 0, 0);
   doc.setFont('helvetica', 'bold');
   doc.text(formatAmount(data.subtotal), sValueX, summaryY, { align: 'right' });
-  
+
+  let lastRowY = summaryY;
   if (data.discount > 0) {
+    lastRowY = summaryY + 8;
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(100, 100, 100);
-    doc.text('Discount', sLabelX, summaryY + 8);
+    doc.text('Discount', sLabelX, lastRowY);
     doc.setTextColor(200, 0, 0);
     doc.setFont('helvetica', 'bold');
-    doc.text(`- ${formatAmount(data.discount)}`, sValueX, summaryY + 8, { align: 'right' });
+    doc.text(`- ${formatAmount(data.discount)}`, sValueX, lastRowY, { align: 'right' });
   }
 
+  // Divider sits BELOW the last summary row, not on top of it
+  const dividerY = lastRowY + 4;
   doc.setDrawColor(0, 0, 0);
-  doc.setLineWidth(0.5); // Thinner line for cleaner look
-  doc.line(sLabelX, summaryY + 8, sValueX, summaryY + 8);
-  
+  doc.setLineWidth(0.5);
+  doc.line(sLabelX, dividerY, sValueX, dividerY);
+
+  const grandTotalY = dividerY + 7;
   doc.setFontSize(11);
   doc.setFont('helvetica', 'bold');
-  doc.text('Grand Total', sLabelX, summaryY + 15);
-  doc.text(`PKR ${formatAmount(data.total)}`, sValueX, summaryY + 15, { align: 'right' });
+  doc.setTextColor(0, 0, 0);
+  doc.text('Grand Total', sLabelX, grandTotalY);
+  doc.setTextColor(200, 0, 0);
+  doc.text(`PKR ${formatAmount(data.total)}`, sValueX, grandTotalY, { align: 'right' });
+  doc.setTextColor(0, 0, 0);
 
   // Branding Footer
   doc.setFontSize(8);

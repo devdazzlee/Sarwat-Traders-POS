@@ -18,9 +18,6 @@ export function DataProvider({ children }: DataProviderProps) {
     const token = localStorage.getItem('token')
     if (!token) return
 
-    // Evict any stale server data that was previously persisted to localStorage.
-    localStorage.removeItem('pos-store')
-
     const initializeData = async () => {
       try {
         await initializeOfflineMode()

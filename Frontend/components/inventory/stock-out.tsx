@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -39,6 +39,14 @@ import { PageLoader } from "@/components/ui/page-loader";
 import { DatePicker } from "@/components/ui/date-picker";
 import { parseISO } from "date-fns";
 import * as XLSX from "xlsx";
+import { ExcelSheetUploadModal, type SheetColumnSpec } from "@/components/inventory/excel-sheet-upload-modal";
+
+const STOCK_OUT_EXCEL_COLUMNS: SheetColumnSpec[] = [
+  { col: "Product Name", req: true, hint: "Must match the product name in your catalog exactly." },
+  { col: "Quantity", req: true, hint: "Must be > 0 (Qty, T Pieces, etc. also work)." },
+  { col: "Sell Price (Rs)", req: false, hint: "Optional — for line value in the draft; defaults from product." },
+  { col: "Notes", req: false, hint: "Optional per line." },
+];
 
 interface Product {
   id: string;
@@ -60,6 +68,8 @@ interface StockItem {
   salePrice: number;
   total: number;
   notes?: string;
+  /** Set when the line came from Bulk Load (Excel) — not the live stock list screen */
+  lineSource?: "sheet" | "manual";
 }
 
 interface Customer {
@@ -75,6 +85,7 @@ interface HistoryItem {
   quantity_change: number;
   notes: string;
   product: { name: string; sku: string };
+  branch?: { name: string };
   user?: { name?: string; email?: string };
 }
 
@@ -117,6 +128,14 @@ export function StockOut() {
   // Bulk Import State
   const [importing, setImporting] = useState(false);
   const [importProgress, setImportProgress] = useState({ current: 0, total: 0, label: "" });
+  /** Explains last Excel load vs main "stock management" list — nothing is dispatched until you authorize */
+  const [sheetLoadSummary, setSheetLoadSummary] = useState<{
+    fileLabel: string;
+    sheetRows: number;
+    added: number;
+    skipped: number;
+  } | null>(null);
+  const [excelUploadModalOpen, setExcelUploadModalOpen] = useState(false);
 
   // ── Fetch Metadata ────────────────────────────────────────────────────────
   const fetchMeta = useCallback(async () => {
@@ -169,6 +188,15 @@ export function StockOut() {
 
   const grandTotal = stagedItems.reduce((sum, i) => sum + i.total, 0);
 
+  const productQuery = productSearch.trim().toLowerCase();
+  const filteredProducts = useMemo(() => {
+    if (!productQuery) return allProducts;
+    return allProducts.filter((p) => {
+      const hay = `${p.name ?? ""} ${p.sku ?? ""} ${p.barcode ?? ""}`.toLowerCase();
+      return hay.includes(productQuery);
+    });
+  }, [allProducts, productQuery]);
+
   // ── Manual Add Item ───────────────────────────────────────────────────────
   const handleAddStagedItem = () => {
     if (!selectedProduct || !itemForm.quantity) {
@@ -192,6 +220,7 @@ export function StockOut() {
       salePrice: price,
       total: qty * price,
       notes: itemForm.notes,
+      lineSource: "manual",
     }]);
     setSelectedProduct(null);
     setItemForm({ quantity: "", price: "", notes: "" });
@@ -200,11 +229,24 @@ export function StockOut() {
 
   const handleRemoveItem = (id: string) => setStagedItems(prev => prev.filter(i => i.id !== id));
 
+  const downloadStockOutTemplate = useCallback(() => {
+    const sample = [
+      {
+        "Product Name": "Example product (use exact catalog name)",
+        Quantity: 6,
+        "Sell Price (Rs)": 120,
+        Notes: "Optional note",
+      },
+    ];
+    const ws = XLSX.utils.json_to_sheet(sample);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Dispatch");
+    XLSX.writeFile(wb, "stock-out-dispatch-template.xlsx");
+  }, []);
+
   // ── Bulk Import from Sheet ────────────────────────────────────────────────
-  const handleBulkImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = "";
+  const processStockOutExcelFromFile = async (file: File) => {
+    const fileLabel = file.name;
 
     const data = await file.arrayBuffer();
     const workbook = XLSX.read(data);
@@ -287,6 +329,7 @@ export function StockOut() {
         salePrice: finalPrice,
         total: qty * finalPrice,
         notes: notes || undefined,
+        lineSource: "sheet",
       });
     }
 
@@ -295,9 +338,23 @@ export function StockOut() {
 
     if (newItems.length > 0) {
       setStagedItems(prev => [...prev, ...newItems]);
-      toast.success(`Import Successful — ${newItems.length} items staged${skipped > 0 ? `, ${skipped} rows skipped (product not found or qty=0)` : ""}`);
+      setSheetLoadSummary({
+        fileLabel,
+        sheetRows: validRows.length,
+        added: newItems.length,
+        skipped,
+      });
+      toast.success(
+        `Sheet loaded — ${newItems.length} line(s) added to this draft${skipped > 0 ? `, ${skipped} row(s) skipped` : ""}. Review step 2, then click Save dispatch.`
+      );
     } else {
-      toast.error(`Import Failed — all ${skipped} rows skipped. Check SKUs match your product list.`);
+      setSheetLoadSummary({
+        fileLabel,
+        sheetRows: validRows.length,
+        added: 0,
+        skipped,
+      });
+      toast.error(`No lines added from "${fileLabel}". ${skipped} row(s) skipped — check product names match your catalog (exact name) and quantity > 0.`);
     }
   };
 
@@ -306,15 +363,26 @@ export function StockOut() {
     if (stagedItems.length === 0) { toast.error("Please add at least one item"); return; }
     setSubmitting(true);
     try {
+      const dispatchCount = stagedItems.length;
+      const datePart = header.date?.trim() ? `Date: ${header.date.trim()}` : "";
+      const refPart = header.reference?.trim() ? `Ref: ${header.reference.trim()}` : "";
+      const notesPart = header.notes?.trim() ?? "";
+      const mergedNotes = [datePart, refPart, notesPart].filter(Boolean).join(" · ") || undefined;
       const dispatchPayload = {
-        ...header,
+        reason: header.reason,
+        notes: mergedNotes,
         customerId: header.customerId === "none" ? undefined : header.customerId,
-        items: stagedItems.map(i => ({ productId: i.productId, quantity: i.quantity, notes: i.notes })),
+        items: stagedItems.map((i) => ({
+          productId: i.productId,
+          quantity: i.quantity,
+          notes: i.notes?.trim() || undefined,
+        })),
       };
       const { queued } = await queueMutation('POST', '/stock-out/bulk', dispatchPayload, 'stock-out', 7);
       setStagedItems([]);
+      setSheetLoadSummary(null);
       if (queued) {
-        toast.success(`${stagedItems.length} items queued offline — will sync when connected`);
+        toast.success(`${dispatchCount} item(s) queued offline — will sync when connected`);
       } else {
         toast.success("Inventory dispatched successfully");
         refreshGlobalProducts({ force: true }).catch(() => {});
@@ -344,25 +412,36 @@ export function StockOut() {
         {/* ── PAGE HEADER ── */}
         <div className="flex items-center justify-between mb-8">
           <div className="flex items-center gap-4">
-            <div className="bg-slate-900 p-3 rounded-2xl shadow-xl shadow-slate-200">
-              <TrendingDown className="h-6 w-6 text-white" />
+            <div className="bg-slate-900 p-2.5 rounded-2xl shadow-xl shadow-slate-200">
+              <TrendingDown className="h-5 w-5 text-white" />
             </div>
             <div>
-              <h1 className="text-2xl font-black text-slate-900 tracking-tighter uppercase">Dispatched Stock</h1>
-              <p className="text-[10px] font-bold text-slate-400 tracking-widest uppercase mt-0.5">Manage inventory removals and outbound logs</p>
+              <h1 className="text-2xl font-semibold text-slate-900 tracking-tight">Stock out</h1>
+              <p className="text-sm text-slate-500 mt-1 max-w-xl">
+                <strong>Excel</strong> can pre-fill a dispatch list. <strong>Save dispatch</strong> records the removal and
+                updates on-hand stock (same idea as Stock in, but outbound).
+              </p>
             </div>
           </div>
           <div className="flex p-1 bg-slate-50 rounded-xl border border-slate-200">
             <button
               onClick={() => setActiveView("HISTORY")}
-              className={cn("px-6 h-9 rounded-lg font-black text-[10px] tracking-widest transition-all uppercase",
-                activeView === "HISTORY" ? "bg-white text-slate-900 shadow-sm" : "text-slate-400 hover:text-slate-600")}
-            >History Logs</button>
+              className={cn(
+                "px-5 h-8 rounded-lg font-black text-[10px] tracking-widest transition-all uppercase",
+                activeView === "HISTORY" ? "bg-white text-slate-900 shadow-sm" : "text-slate-400 hover:text-slate-600"
+              )}
+            >
+              History logs
+            </button>
             <button
               onClick={() => setActiveView("CREATE")}
-              className={cn("px-6 h-9 rounded-lg font-black text-[10px] tracking-widest transition-all uppercase",
-                activeView === "CREATE" ? "bg-white text-slate-900 shadow-sm" : "text-slate-400 hover:text-slate-600")}
-            >New Dispatch</button>
+              className={cn(
+                "px-5 h-8 rounded-lg font-black text-[10px] tracking-widest transition-all uppercase",
+                activeView === "CREATE" ? "bg-white text-slate-900 shadow-sm" : "text-slate-400 hover:text-slate-600"
+              )}
+            >
+              New dispatch
+            </button>
           </div>
         </div>
 
@@ -370,6 +449,23 @@ export function StockOut() {
         {activeView === "HISTORY" ? (
 
           <div className="space-y-4">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 flex gap-3">
+              <Info className="h-5 w-5 text-slate-500 shrink-0 mt-0.5" />
+              <div className="text-sm text-slate-700 leading-relaxed">
+                <p className="font-medium text-slate-900">What this list shows</p>
+                <p className="mt-1">
+                  Rows are <strong>stock movements</strong> with a negative quantity (stock removed). Saving a dispatch from{" "}
+                  <strong>New dispatch</strong> creates one movement per line via{" "}
+                  <code className="rounded bg-white px-1 text-xs">POST /stock-out/bulk</code>.
+                </p>
+                <p className="mt-2">
+                  Sales rung through the main <strong>POS / New sale</strong> screen are logged separately. Anything you do in{" "}
+                  <strong>Stock Management</strong> (adjustments, transfers) appears in{" "}
+                  <strong>Movement Log</strong> there — use that tab if you need the full audit trail.
+                </p>
+              </div>
+            </div>
+
             {/* FILTER BAR */}
             <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-wrap items-end gap-4">
               <div className="flex-1 min-w-[160px]">
@@ -383,6 +479,7 @@ export function StockOut() {
                     <SelectItem value="SALE">Sale</SelectItem>
                     <SelectItem value="DAMAGE">Damage</SelectItem>
                     <SelectItem value="LOSS">Loss</SelectItem>
+                    <SelectItem value="RETURN">Return</SelectItem>
                     <SelectItem value="EXPIRED">Expired</SelectItem>
                   </SelectContent>
                 </Select>
@@ -422,6 +519,7 @@ export function StockOut() {
                   <TableRow className="border-slate-100">
                     <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-10 px-6">Date</TableHead>
                     <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-10 px-4">Product</TableHead>
+                    <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-10 px-4">Branch</TableHead>
                     <TableHead className="text-right text-[10px] font-bold uppercase text-slate-500 h-10 px-4">Qty</TableHead>
                     <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-10 px-4">Type</TableHead>
                     <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-10 px-4">Notes</TableHead>
@@ -431,7 +529,7 @@ export function StockOut() {
                 <TableBody>
                   {loadingHistory && (
                     <TableRow>
-                      <TableCell colSpan={6} className="p-0">
+                      <TableCell colSpan={7} className="p-0">
                         <PageLoader message="Syncing Logs..." className="min-h-[300px]" />
                       </TableCell>
                     </TableRow>
@@ -444,7 +542,9 @@ export function StockOut() {
                       </TableCell>
                       <TableCell className="px-4 py-3">
                         <p className="font-bold text-slate-800 text-xs">{h.product?.name}</p>
-                        <p className="text-[10px] text-slate-400 uppercase tracking-tighter">{h.product?.sku}</p>
+                      </TableCell>
+                      <TableCell className="px-4 py-3">
+                        <p className="text-[10px] font-semibold text-slate-600">{h.branch?.name ?? "—"}</p>
                       </TableCell>
                       <TableCell className="px-4 py-3 text-right">
                         <span className="font-bold text-xs text-rose-600">-{Math.abs(h.quantity_change)}</span>
@@ -465,9 +565,19 @@ export function StockOut() {
                   ))}
                   {!loadingHistory && history.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={6} className="py-20 text-center">
-                        <History className="h-10 w-10 text-slate-200 mx-auto mb-2" />
-                        <p className="text-xs font-bold text-slate-400 uppercase">No log history found</p>
+                      <TableCell colSpan={7} className="py-12 px-6">
+                        <div className="max-w-lg mx-auto text-center space-y-3">
+                          <History className="h-10 w-10 text-slate-300 mx-auto" />
+                          <p className="text-base font-semibold text-slate-800">No outbound movements in this range</p>
+                          <p className="text-sm text-slate-600 leading-relaxed text-left">
+                            Either nothing was saved from <strong>New dispatch</strong> yet, or your filters exclude the rows.
+                            Clear dates and reason, then click <strong>Search</strong> again.
+                          </p>
+                          <p className="text-sm text-slate-600 text-left">
+                            For every stock change in the warehouse (including POS sales and adjustments), open{" "}
+                            <strong>Stock Management → Movement Log</strong>.
+                          </p>
+                        </div>
                       </TableCell>
                     </TableRow>
                   )}
@@ -477,117 +587,197 @@ export function StockOut() {
           </div>
 
         ) : (
-          /* ═══════════════════════════════════════════════════════════════ */
-          /* CREATE DISPATCH VIEW                                           */
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-
-            {/* LEFT — Manifest */}
-            <div className="lg:col-span-8 space-y-4">
-              <Card className="rounded-xl border border-slate-200 shadow-sm bg-white relative">
-
-                {/* Import progress overlay */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1 overflow-y-auto pb-6">
+            <div className="lg:col-span-8 space-y-6">
+              <Card className="rounded-xl border border-violet-200 bg-violet-50/20 shadow-sm relative overflow-hidden">
                 {importing && (
                   <div className="absolute inset-0 z-20 bg-slate-900/95 flex flex-col items-center justify-center rounded-xl gap-5">
                     <Loader2 className="h-10 w-10 text-white animate-spin" />
                     <div className="w-80 space-y-3 text-center">
-                      <p className="text-[11px] font-black text-white/70 tracking-widest uppercase">Processing Dispatch Sheet</p>
+                      <p className="text-[11px] font-black text-white/70 tracking-widest uppercase">Reading Excel — building draft</p>
                       <p className="text-sm font-black text-white truncate px-4">{importProgress.label}</p>
                       <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden">
-                        <div className="h-2 bg-rose-400 rounded-full transition-all duration-300"
-                          style={{ width: importProgress.total > 0 ? `${(importProgress.current / importProgress.total) * 100}%` : "0%" }} />
+                        <div
+                          className="h-2 bg-violet-400 rounded-full transition-all duration-300"
+                          style={{ width: importProgress.total > 0 ? `${(importProgress.current / importProgress.total) * 100}%` : "0%" }}
+                        />
                       </div>
                       <p className="text-[10px] font-black text-white/60 tabular-nums">
-                        {importProgress.current} / {importProgress.total} ROWS
+                        {importProgress.current} / {importProgress.total} rows
                       </p>
                     </div>
                   </div>
                 )}
-
-                {/* Card Header */}
-                <div className="p-5 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
-                  <div>
-                    <h2 className="text-sm font-black text-slate-800 uppercase tracking-wider">Dispatch Manifest</h2>
-                    <p className="text-[9px] font-bold text-slate-400 uppercase">Prepare stock for removal</p>
-                  </div>
-                  <div className="flex gap-2">
-                    <input type="file" id="stock-out-bulk-import" className="hidden"
-                      accept=".xlsx,.xls,.csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                      onChange={handleBulkImport} />
-                    <Button variant="secondary" disabled={importing}
-                      className="bg-white text-slate-900 hover:bg-slate-100 font-black rounded-lg h-8 text-[10px] uppercase border-none disabled:opacity-50"
-                      onClick={() => !importing && document.getElementById("stock-out-bulk-import")?.click()}>
+                <CardHeader className="pb-2 border-b border-violet-100/80 bg-white/70">
+                  <CardTitle className="text-base font-semibold text-slate-900">Step 1 — Load from Excel (optional)</CardTitle>
+                  <CardDescription className="text-sm text-slate-600">
+                    Adds lines to the draft below. Stock is <strong>not</strong> reduced until you save in step 2.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="pt-4 space-y-4">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      disabled={importing}
+                      className="bg-white text-slate-900 hover:bg-slate-100 font-semibold rounded-lg h-9 text-xs border border-slate-200 disabled:opacity-50"
+                      onClick={() => !importing && setExcelUploadModalOpen(true)}
+                    >
                       {importing ? (
-                        <><Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />Importing…</>
+                        <>
+                          <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />
+                          Importing…
+                        </>
                       ) : (
-                        <><FileSpreadsheet className="h-3.5 w-3.5 mr-2" />Bulk Load</>
+                        <>
+                          <FileSpreadsheet className="h-3.5 w-3.5 mr-2" />
+                          Choose Excel file
+                        </>
                       )}
                     </Button>
                   </div>
-                </div>
 
-                <div className="p-6 space-y-6">
-                  {/* Dispatch Header Fields */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {sheetLoadSummary && (
+                    <div className="rounded-lg border border-violet-200 bg-violet-50/90 p-4 space-y-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="text-xs font-semibold text-violet-950">Last sheet load (draft only)</p>
+                          <p className="text-xs text-violet-900 mt-1 leading-snug">
+                            Lines are staged until you click <strong>Save dispatch</strong> in the summary panel.
+                          </p>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="shrink-0 h-7 text-xs text-violet-800"
+                          onClick={() => setSheetLoadSummary(null)}
+                        >
+                          Dismiss
+                        </Button>
+                      </div>
+                      <ul className="text-xs text-violet-900/90 space-y-0.5 list-disc pl-4">
+                        <li>
+                          File: <span className="font-semibold">{sheetLoadSummary.fileLabel}</span>
+                        </li>
+                        <li>
+                          Sheet rows: <strong>{sheetLoadSummary.sheetRows}</strong> — added: <strong>{sheetLoadSummary.added}</strong>{" "}
+                          — skipped: <strong>{sheetLoadSummary.skipped}</strong> (unknown product name or qty ≤ 0)
+                        </li>
+                      </ul>
+                    </div>
+                  )}
+
+                  <p className="text-xs text-slate-600">
+                    Use <strong>Choose Excel file</strong> to open the column guide and template (no item code column required —
+                    match products by <strong>name</strong> only).
+                  </p>
+                </CardContent>
+              </Card>
+
+              <Card className="rounded-xl border border-slate-200 shadow-sm bg-white">
+                <CardHeader className="pb-2 border-b border-slate-100">
+                  <CardTitle className="text-base font-semibold text-slate-900">Step 2 — Record dispatch</CardTitle>
+                  <CardDescription className="text-sm text-slate-600">
+                    Set who/why, add lines, then save. For <strong>Sale</strong>, quantities cannot exceed available stock.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="pt-6 space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                     <div className="space-y-1.5">
-                      <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Dispatch Type</Label>
-                      <Select value={header.reason} onValueChange={v => setHeader(h => ({ ...h, reason: v }))}>
-                        <SelectTrigger className="rounded-lg h-10 border-slate-200 text-xs"><SelectValue /></SelectTrigger>
+                      <Label className="text-xs font-medium text-slate-600">Reason</Label>
+                      <Select value={header.reason} onValueChange={(v) => setHeader((h) => ({ ...h, reason: v }))}>
+                        <SelectTrigger className="rounded-lg h-10 border-slate-200 text-sm">
+                          <SelectValue />
+                        </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="SALE">Sale Delivery</SelectItem>
-                          <SelectItem value="DAMAGE">Damage / Scrap</SelectItem>
+                          <SelectItem value="SALE">Sale</SelectItem>
+                          <SelectItem value="DAMAGE">Damage / scrap</SelectItem>
                           <SelectItem value="LOSS">Loss</SelectItem>
-                          <SelectItem value="EXPIRED">Expiry</SelectItem>
+                          <SelectItem value="EXPIRED">Expired</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
                     <div className="space-y-1.5">
-                      <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Customer</Label>
-                      <Select value={header.customerId} onValueChange={v => setHeader(h => ({ ...h, customerId: v }))}>
-                        <SelectTrigger className="rounded-lg h-10 border-slate-200 text-xs"><SelectValue /></SelectTrigger>
+                      <Label className="text-xs font-medium text-slate-600">Customer (optional)</Label>
+                      <Select value={header.customerId} onValueChange={(v) => setHeader((h) => ({ ...h, customerId: v }))}>
+                        <SelectTrigger className="rounded-lg h-10 border-slate-200 text-sm">
+                          <SelectValue />
+                        </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="none">General Walk-in</SelectItem>
-                          {customers.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                          <SelectItem value="none">Walk-in / not linked</SelectItem>
+                          {customers.map((c) => (
+                            <SelectItem key={c.id} value={c.id}>
+                              {c.name}
+                            </SelectItem>
+                          ))}
                         </SelectContent>
                       </Select>
                     </div>
                     <div className="space-y-1.5">
-                      <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Ref / Invoice</Label>
-                      <Input value={header.reference} onChange={e => setHeader(h => ({ ...h, reference: e.target.value }))}
-                        placeholder="REF-000" className="rounded-lg h-10 border-slate-200 text-xs" />
+                      <Label className="text-xs font-medium text-slate-600">Document ref</Label>
+                      <Input
+                        value={header.reference}
+                        onChange={(e) => setHeader((h) => ({ ...h, reference: e.target.value }))}
+                        placeholder="Invoice or gate pass"
+                        className="rounded-lg h-10 border-slate-200 text-sm"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-medium text-slate-600">Dispatch date</Label>
+                      <DatePicker
+                        date={header.date ? parseISO(header.date) : undefined}
+                        onDateChange={(date) => setHeader((h) => ({ ...h, date: date ? format(date, "yyyy-MM-dd") : "" }))}
+                        placeholder="Pick date"
+                      />
                     </div>
                   </div>
 
-                  {/* Manual Item Add */}
-                  <div className="pt-4 border-t border-slate-100">
-                    <Label className="text-[10px] font-bold text-slate-900 uppercase tracking-widest mb-3 block">Add Item Manually</Label>
+                  <div className="pt-2 border-t border-slate-100">
+                    <Label className="text-sm font-medium text-slate-800 mb-3 block">Add a line</Label>
                     <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end p-4 bg-slate-50 rounded-xl border border-slate-100">
                       <div className="md:col-span-12 lg:col-span-5 space-y-1.5 relative">
-                        <Label className="text-[10px] font-bold text-slate-500 uppercase ml-1">Product Search</Label>
+                        <Label className="text-xs font-medium text-slate-600">Product</Label>
                         <Popover open={openProductCombo} onOpenChange={setOpenProductCombo}>
                           <PopoverTrigger asChild>
-                            <Button variant="outline" className="w-full justify-between rounded-lg h-10 text-xs border-slate-200 bg-white">
-                              {selectedProduct ? selectedProduct.name : "Search product or SKU..."}
-                              <Search className="h-3.5 w-3.5 opacity-40" />
+                            <Button
+                              variant="outline"
+                              className="w-full justify-between rounded-lg h-10 text-sm border-slate-200 bg-white font-normal"
+                            >
+                              <span className="truncate text-left">
+                                {selectedProduct ? selectedProduct.name : "Search product…"}
+                              </span>
+                              <Search className="h-3.5 w-3.5 opacity-40 shrink-0" />
                             </Button>
                           </PopoverTrigger>
-                          <PopoverContent className="p-0 rounded-lg shadow-xl border-slate-200 w-[400px]" align="start">
-                            <Command className="rounded-lg">
-                              <CommandInput placeholder="Type SKU or Name..." className="h-9 text-xs"
-                                value={productSearch} onValueChange={setProductSearch} />
+                          <PopoverContent className="p-0 rounded-lg shadow-xl border-slate-200 w-[min(100vw-2rem,400px)]" align="start">
+                            <Command className="rounded-lg" shouldFilter={false}>
+                              <CommandInput
+                                placeholder="Type to filter…"
+                                className="h-9 text-sm"
+                                value={productSearch}
+                                onValueChange={setProductSearch}
+                              />
                               <CommandList className="max-h-[300px]">
-                                <CommandEmpty className="text-xs py-4">No results.</CommandEmpty>
+                                <CommandEmpty className="text-sm py-4">No matching products.</CommandEmpty>
                                 <CommandGroup>
-                                  {allProducts.map(p => (
-                                    <CommandItem key={p.id} value={`${p.sku} ${p.name}`}
+                                  {filteredProducts.map((p) => (
+                                    <CommandItem
+                                      key={p.id}
+                                      value={`${p.sku} ${p.name}`}
                                       onSelect={() => selectProduct(p as Product)}
-                                      className="px-4 py-2 border-b border-slate-50 last:border-none cursor-pointer">
-                                      <div className="flex flex-col flex-1">
-                                        <span className="font-bold text-xs">{p.name}</span>
-                                        <span className="text-[10px] text-slate-400">SKU: {p.sku}</span>
+                                      className="px-4 py-2 border-b border-slate-50 last:border-none cursor-pointer"
+                                    >
+                                      <div className="flex flex-col flex-1 min-w-0">
+                                        <span className="font-medium text-sm truncate">{p.name}</span>
                                       </div>
-                                      <span className={cn("text-[9px] font-bold ml-2",
-                                        (p.available_stock ?? p.stock ?? 0) > 0 ? "text-emerald-600" : "text-rose-500")}>
-                                        {p.available_stock ?? p.stock ?? 0} units
+                                      <span
+                                        className={cn(
+                                          "text-xs font-semibold ml-2 shrink-0",
+                                          (p.available_stock ?? p.stock ?? 0) > 0 ? "text-emerald-600" : "text-rose-500"
+                                        )}
+                                      >
+                                        {p.available_stock ?? p.stock ?? 0} in stock
                                       </span>
                                     </CommandItem>
                                   ))}
@@ -597,87 +787,123 @@ export function StockOut() {
                           </PopoverContent>
                         </Popover>
                         {selectedProduct && (
-                          <p className={cn("text-[9px] font-bold absolute -bottom-5 right-1 uppercase",
-                            availableStock > 0 ? "text-emerald-600" : "text-rose-500")}>
-                            Available: {Math.max(0, availableStock)} Units
+                          <p
+                            className={cn(
+                              "text-xs font-medium absolute -bottom-5 right-1",
+                              availableStock > 0 ? "text-emerald-600" : "text-rose-500"
+                            )}
+                          >
+                            Available: {Math.max(0, availableStock)}
                           </p>
                         )}
                       </div>
 
                       <div className="md:col-span-6 lg:col-span-2 space-y-1.5">
-                        <Label className="text-[10px] font-bold text-slate-500 uppercase ml-1">Qty</Label>
-                        <Input type="number" value={itemForm.quantity}
-                          onChange={e => setItemForm(f => ({ ...f, quantity: e.target.value }))}
-                          className="rounded-lg h-10 border-slate-200 text-center font-bold text-xs" placeholder="0" />
+                        <Label className="text-xs font-medium text-slate-600">Quantity</Label>
+                        <Input
+                          type="number"
+                          value={itemForm.quantity}
+                          onChange={(e) => setItemForm((f) => ({ ...f, quantity: e.target.value }))}
+                          className="rounded-lg h-10 border-slate-200 text-center font-semibold text-sm"
+                          placeholder="0"
+                        />
                       </div>
                       <div className="md:col-span-6 lg:col-span-2 space-y-1.5">
-                        <Label className="text-[10px] font-bold text-slate-500 uppercase ml-1">Rate</Label>
-                        <Input type="number" value={itemForm.price}
-                          onChange={e => setItemForm(f => ({ ...f, price: e.target.value }))}
-                          className="rounded-lg h-10 border-slate-200 text-center font-bold text-xs" placeholder="0.00" />
+                        <Label className="text-xs font-medium text-slate-600">Rate (Rs)</Label>
+                        <Input
+                          type="number"
+                          value={itemForm.price}
+                          onChange={(e) => setItemForm((f) => ({ ...f, price: e.target.value }))}
+                          className="rounded-lg h-10 border-slate-200 text-center font-semibold text-sm"
+                          placeholder="0"
+                        />
                       </div>
                       <div className="md:col-span-12 lg:col-span-3">
-                        <Button className="w-full bg-slate-900 rounded-lg h-10 font-bold text-xs gap-2" onClick={handleAddStagedItem}>
-                          <Plus className="h-3.5 w-3.5" /> STAGE ITEM
+                        <Button className="w-full bg-slate-900 rounded-lg h-10 font-semibold text-sm gap-2" onClick={handleAddStagedItem}>
+                          <Plus className="h-4 w-4" />
+                          Add to draft
                         </Button>
                       </div>
                     </div>
                   </div>
 
-                  {/* Staged Items Table */}
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
-                      <h3 className="text-[10px] font-bold text-slate-900 uppercase tracking-widest">
-                        Staged Items ({stagedItems.length})
-                      </h3>
+                      <h3 className="text-sm font-semibold text-slate-900">Draft lines ({stagedItems.length})</h3>
                       {stagedItems.length > 0 && (
-                        <Button variant="ghost" size="sm" className="text-[10px] font-bold text-rose-500 h-auto p-0"
-                          onClick={() => setStagedItems([])}>CLEAR ALL</Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-xs font-medium text-rose-600 h-auto p-0"
+                          onClick={() => {
+                            setStagedItems([]);
+                            setSheetLoadSummary(null);
+                          }}
+                        >
+                          Clear all
+                        </Button>
                       )}
                     </div>
                     <div className="border border-slate-100 rounded-lg overflow-hidden bg-slate-50/30">
                       <ScrollArea className="h-[260px]">
                         <Table>
                           <TableHeader className="bg-slate-100/50">
-                            <TableRow className="h-8">
-                              <TableHead className="text-[9px] font-bold uppercase h-8 px-4">Item</TableHead>
-                              <TableHead className="text-[9px] font-bold uppercase h-8 text-right px-4">Avail</TableHead>
-                              <TableHead className="text-[9px] font-bold uppercase h-8 text-right px-4">Qty</TableHead>
-                              <TableHead className="text-[9px] font-bold uppercase h-8 text-right px-4">Total</TableHead>
-                              <TableHead className="w-10"></TableHead>
+                            <TableRow className="h-9">
+                              <TableHead className="text-xs font-semibold h-9 px-4">Item</TableHead>
+                              <TableHead className="text-xs font-semibold h-9 text-right px-4">Available</TableHead>
+                              <TableHead className="text-xs font-semibold h-9 text-right px-4">Qty</TableHead>
+                              <TableHead className="text-xs font-semibold h-9 text-right px-4">Value</TableHead>
+                              <TableHead className="w-10" />
                             </TableRow>
                           </TableHeader>
                           <TableBody>
-                            {stagedItems.map(item => (
+                            {stagedItems.map((item) => (
                               <TableRow key={item.id} className="hover:bg-white h-10">
                                 <TableCell className="px-4">
-                                  <div className="flex flex-col">
-                                    <span className="font-bold text-slate-800 text-xs">{item.productName}</span>
-                                    <span className="text-[9px] text-slate-400">{item.sku}</span>
+                                  <div className="flex flex-col gap-0.5">
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <span className="font-medium text-slate-800 text-sm">{item.productName}</span>
+                                      {item.lineSource === "sheet" && (
+                                        <Badge
+                                          variant="secondary"
+                                          className="text-[10px] h-5 px-1.5 font-medium bg-violet-100 text-violet-800 border-0"
+                                        >
+                                          From Excel
+                                        </Badge>
+                                      )}
+                                    </div>
                                   </div>
                                 </TableCell>
                                 <TableCell className="text-right px-4">
-                                  <span className={cn("text-[10px] font-bold",
-                                    item.availableStock > 0 ? "text-emerald-600" : "text-rose-500")}>
+                                  <span
+                                    className={cn(
+                                      "text-xs font-semibold",
+                                      item.availableStock > 0 ? "text-emerald-600" : "text-rose-500"
+                                    )}
+                                  >
                                     {item.availableStock}
                                   </span>
                                 </TableCell>
-                                <TableCell className="text-right font-bold text-slate-900 text-xs px-4">{item.quantity}</TableCell>
-                                <TableCell className="text-right font-bold text-rose-600 text-xs px-4">{formatCurrency(item.total)}</TableCell>
+                                <TableCell className="text-right font-semibold text-slate-900 text-sm px-4">{item.quantity}</TableCell>
+                                <TableCell className="text-right font-semibold text-rose-600 text-sm px-4">
+                                  {formatCurrency(item.total)}
+                                </TableCell>
                                 <TableCell className="pr-4">
-                                  <Button size="icon" variant="ghost" className="h-7 w-7 text-slate-300 hover:text-rose-500"
-                                    onClick={() => handleRemoveItem(item.id)}>
-                                    <X className="h-3.5 w-3.5" />
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    className="h-8 w-8 text-slate-300 hover:text-rose-500"
+                                    onClick={() => handleRemoveItem(item.id)}
+                                  >
+                                    <X className="h-4 w-4" />
                                   </Button>
                                 </TableCell>
                               </TableRow>
                             ))}
                             {stagedItems.length === 0 && (
                               <TableRow>
-                                <TableCell colSpan={5} className="h-24 text-center">
-                                  <p className="text-slate-300 text-[10px] font-bold uppercase">
-                                    Add items manually or use Bulk Load
-                                  </p>
+                                <TableCell colSpan={5} className="h-28 text-center">
+                                  <p className="text-sm text-slate-500">Add lines manually or load an Excel file in step 1.</p>
                                 </TableCell>
                               </TableRow>
                             )}
@@ -686,77 +912,82 @@ export function StockOut() {
                       </ScrollArea>
                     </div>
                   </div>
-                </div>
+                </CardContent>
               </Card>
             </div>
 
-            {/* RIGHT — Summary Panel */}
-            <div className="lg:col-span-4 space-y-4">
-              <Card className="rounded-xl border border-slate-200 shadow-sm bg-white p-6 sticky top-4">
-                <div className="flex items-center gap-3 mb-6 pb-4 border-b border-slate-100">
-                  <div className="bg-slate-100 p-2 rounded-lg">
-                    <Calculator className="h-4 w-4 text-slate-600" />
+            <div className="lg:col-span-4">
+              <Card className="rounded-xl border border-slate-200 shadow-sm bg-white p-6 lg:sticky lg:top-4">
+                <CardHeader className="p-0 pb-4 mb-4 border-b border-slate-100">
+                  <div className="flex items-center gap-3">
+                    <div className="bg-slate-100 p-2 rounded-lg">
+                      <Calculator className="h-4 w-4 text-slate-600" />
+                    </div>
+                    <div>
+                      <CardTitle className="text-base font-semibold">Summary</CardTitle>
+                      <CardDescription className="text-sm">Review totals, then save.</CardDescription>
+                    </div>
                   </div>
-                  <h2 className="text-sm font-bold uppercase tracking-wider text-slate-800">Dispatch Summary</h2>
+                </CardHeader>
+
+                <div className="space-y-3">
+                  <div className="flex justify-between items-center pb-3 border-b border-slate-100 border-dashed text-sm">
+                    <span className="text-slate-600">Lines</span>
+                    <span className="font-semibold text-slate-900">{stagedItems.length}</span>
+                  </div>
+                  <div className="flex justify-between items-center pb-3 border-b border-slate-100 border-dashed text-sm">
+                    <span className="text-slate-600">Total units</span>
+                    <span className="font-semibold text-slate-900">{stagedItems.reduce((s, i) => s + i.quantity, 0)}</span>
+                  </div>
+                  <div className="flex justify-between items-center pb-1 text-sm">
+                    <span className="text-slate-600">Total value (at rates above)</span>
+                    <span className="text-xl font-semibold text-rose-600">{formatCurrency(grandTotal)}</span>
+                  </div>
                 </div>
 
-                <div className="space-y-3.5">
-                  <div className="flex justify-between items-center pb-3 border-b border-slate-100 border-dashed">
-                    <span className="text-xs font-bold text-slate-500 uppercase">SKUs</span>
-                    <span className="font-bold text-slate-900">{stagedItems.length}</span>
-                  </div>
-                  <div className="flex justify-between items-center pb-3 border-b border-slate-100 border-dashed">
-                    <span className="text-xs font-bold text-slate-500 uppercase">Total Units</span>
-                    <span className="font-bold text-slate-900">{stagedItems.reduce((s, i) => s + i.quantity, 0)}</span>
-                  </div>
-                  <div className="flex justify-between items-center pb-1">
-                    <span className="text-xs font-bold text-slate-500 uppercase">Total Value</span>
-                    <span className="text-2xl font-bold text-rose-600">{formatCurrency(grandTotal)}</span>
-                  </div>
-                </div>
-
-                <div className="mt-8 space-y-2">
-                  <Label className="text-[10px] font-bold text-slate-400 ml-1 uppercase">Dispatch Remarks</Label>
-                  <textarea
+                <div className="mt-6 space-y-2">
+                  <Label className="text-xs font-medium text-slate-600">Notes for this dispatch</Label>
+                  <Textarea
                     value={header.notes}
-                    onChange={e => setHeader(h => ({ ...h, notes: e.target.value }))}
-                    placeholder="Special handling instructions..."
-                    className="w-full rounded-lg border border-slate-200 bg-slate-50/30 h-24 text-xs p-3 resize-none focus:outline-none focus:ring-2 focus:ring-slate-200"
+                    onChange={(e) => setHeader((h) => ({ ...h, notes: e.target.value }))}
+                    placeholder="Driver, vehicle, approval, etc."
+                    className="min-h-[96px] text-sm resize-none rounded-lg border-slate-200"
                   />
                 </div>
 
                 <Button
-                  className="w-full bg-slate-900 hover:bg-black text-white h-12 rounded-xl font-bold text-xs uppercase tracking-wider mt-6 shadow-lg shadow-slate-900/10"
+                  className="w-full bg-slate-900 hover:bg-slate-800 text-white h-11 rounded-xl font-semibold text-sm mt-6"
                   disabled={submitting || stagedItems.length === 0}
                   onClick={handleSubmitDispatch}
                 >
                   {submitting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <CheckCircle2 className="h-4 w-4 mr-2" />}
-                  {submitting ? "PROCESSING..." : "AUTHORIZE DISPATCH"}
+                  {submitting ? "Saving…" : "Save dispatch"}
                 </Button>
 
-                <div className="mt-6 p-3 bg-blue-50 rounded-lg border border-blue-100 flex gap-2">
-                  <Info className="h-3.5 w-3.5 text-blue-500 shrink-0 mt-0.5" />
-                  <p className="text-[10px] text-blue-700 font-semibold leading-relaxed">
-                    Stock quantities will be deducted immediately upon authorization. This action cannot be undone.
+                <div className="mt-4 p-3 bg-slate-50 rounded-lg border border-slate-200 flex gap-2">
+                  <Info className="h-4 w-4 text-slate-500 shrink-0 mt-0.5" />
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    Saving deducts stock immediately (per line). Reference and dispatch date are copied into the movement notes for
+                    auditing.
                   </p>
-                </div>
-
-                {/* Bulk upload sheet format hint */}
-                <div className="mt-4 p-3 bg-amber-50 rounded-lg border border-amber-100 flex gap-2">
-                  <FileSpreadsheet className="h-3.5 w-3.5 text-amber-500 shrink-0 mt-0.5" />
-                  <div>
-                    <p className="text-[10px] text-amber-700 font-black uppercase mb-1">Bulk Load Sheet Format</p>
-                    <p className="text-[10px] text-amber-600 font-semibold leading-relaxed">
-                      Columns: <strong>Item No (SKU)</strong>, <strong>Product Name</strong>, <strong>Quantity</strong>, Sell Price (Rs), Notes
-                    </p>
-                  </div>
                 </div>
               </Card>
             </div>
-
           </div>
         )}
       </div>
+
+      <ExcelSheetUploadModal
+        open={excelUploadModalOpen}
+        onOpenChange={setExcelUploadModalOpen}
+        title="Stock Out — dispatch draft (Excel)"
+        description="Adds lines to your draft only. Stock is not reduced until you click Save dispatch. Products must already exist — match by exact product name."
+        columns={STOCK_OUT_EXCEL_COLUMNS}
+        onDownloadTemplate={downloadStockOutTemplate}
+        onFileSelected={(file) => {
+          void processStockOutExcelFromFile(file);
+        }}
+      />
     </div>
   );
 }

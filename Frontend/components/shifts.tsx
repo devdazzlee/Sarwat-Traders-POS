@@ -688,9 +688,7 @@ export function Shifts() {
             </CardHeader>
             <CardContent>
               {loading ? (
-                <div className="flex justify-center items-center h-32">
-                  <p>Loading shifts...</p>
-                </div>
+                <PageLoader message="Loading shifts..." size="sm" />
               ) : (
                 <ShiftTable shiftData={filterShifts("today")} />
               )}
@@ -706,9 +704,7 @@ export function Shifts() {
             </CardHeader>
             <CardContent>
               {loading ? (
-                <div className="flex justify-center items-center h-32">
-                  <p>Loading shifts...</p>
-                </div>
+                <PageLoader message="Loading shifts..." size="sm" />
               ) : (
                 <ShiftTable shiftData={filterShifts("week")} />
               )}
@@ -724,9 +720,7 @@ export function Shifts() {
             </CardHeader>
             <CardContent>
               {loading ? (
-                <div className="flex justify-center items-center h-32">
-                  <p>Loading shifts...</p>
-                </div>
+                <PageLoader message="Loading shifts..." size="sm" />
               ) : (
                 <ShiftTable shiftData={filterShifts("scheduled")} />
               )}
@@ -742,9 +736,7 @@ export function Shifts() {
             </CardHeader>
             <CardContent>
               {loading ? (
-                <div className="flex justify-center items-center h-32">
-                  <p>Loading shifts...</p>
-                </div>
+                <PageLoader message="Loading shifts..." size="sm" />
               ) : (
                 <ShiftTable shiftData={filterShifts("completed")} />
               )}

@@ -18,6 +18,7 @@ import { useToast } from "@/hooks/use-toast"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { Search, Plus, Edit, Package, AlertTriangle, Upload, X, ImageIcon, RefreshCw, Trash2, Loader2, Mail } from "lucide-react"
 import apiClient from "@/lib/apiClient"
+import { isPendingImageUrl } from "@/lib/offline-queue-payload"
 import { usePosData } from "@/hooks/use-pos-data"
 import { shareInventoryReportOnEmail } from "@/lib/pdf-generator"
 
@@ -118,6 +119,17 @@ interface Product {
   maximum_stock?: number
 }
 
+/** Table-filter value; must never be sent as product.category_id / unit_id. */
+const RELATION_SENTINEL_ALL = "all"
+
+function pickRealRelationId(
+  id: string | undefined,
+  fallback?: string
+): string {
+  if (id && id !== RELATION_SENTINEL_ALL) return id
+  return fallback ?? ""
+}
+
 interface ProductFormData {
   name: string
   unit_id: string
@@ -195,6 +207,10 @@ const ProductForm = ({
       <div className="space-y-6">
       <div className="space-y-4">
         <h3 className="text-lg font-semibold">Required Information</h3>
+        <p className="text-sm text-muted-foreground">
+          Bulk Excel import (Stock Management → New products, or Stock In → Step 1) uses the same columns: product name, unit,
+          category, purchase rate, sales rate, min stock, and stock — see the upload guide when you import a file.
+        </p>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           <div>
             <Label htmlFor="name">Product Name *</Label>
@@ -212,11 +228,18 @@ const ProductForm = ({
                 <SelectValue placeholder="Select unit" />
               </SelectTrigger>
               <SelectContent>
-                {units.map((unit) => (
-                  <SelectItem key={unit.id} value={unit.id}>
-                    {unit.name}
-                  </SelectItem>
-                ))}
+                {units
+                  .filter(
+                    (u) =>
+                      u?.id &&
+                      u.id !== RELATION_SENTINEL_ALL &&
+                      String(u.name || "").toLowerCase() !== "all"
+                  )
+                  .map((unit) => (
+                    <SelectItem key={unit.id} value={unit.id}>
+                      {unit.name}
+                    </SelectItem>
+                  ))}
               </SelectContent>
             </Select>
           </div>
@@ -227,11 +250,18 @@ const ProductForm = ({
                 <SelectValue placeholder="Select category" />
               </SelectTrigger>
               <SelectContent>
-                {categories.map((category) => (
-                  <SelectItem key={category.id} value={category.id}>
-                    {category.name}
-                  </SelectItem>
-                ))}
+                {categories
+                  .filter(
+                    (c) =>
+                      c?.id &&
+                      c.id !== RELATION_SENTINEL_ALL &&
+                      String(c.name || "").toLowerCase() !== "all"
+                  )
+                  .map((category) => (
+                    <SelectItem key={category.id} value={category.id}>
+                      {category.name}
+                    </SelectItem>
+                  ))}
               </SelectContent>
             </Select>
           </div>
@@ -270,23 +300,37 @@ const ProductForm = ({
             <Input
               id="min_qty"
               type="number"
-              value={formData.min_qty || ""}
+              value={formData.min_qty === "" || formData.min_qty === undefined ? "" : formData.min_qty}
               onChange={(e) => updateFormData("min_qty", e.target.value)}
               placeholder="0"
             />
           </div>
-          {!isEditing && (
-            <div>
-              <Label htmlFor="initial_stock">Stock</Label>
-              <Input
-                id="initial_stock"
-                type="number"
-                value={formData.initial_stock || ""}
-                onChange={(e) => updateFormData("initial_stock", e.target.value)}
-                placeholder="0"
-              />
-            </div>
-          )}
+          <div>
+            <Label htmlFor="initial_stock">{isEditing ? "Current stock" : "Stock"}</Label>
+            <Input
+              id="initial_stock"
+              type="number"
+              value={
+                formData.initial_stock === "" || formData.initial_stock === undefined
+                  ? ""
+                  : formData.initial_stock
+              }
+              onChange={(e) => updateFormData("initial_stock", e.target.value)}
+              placeholder="0"
+              readOnly={isEditing}
+              title={
+                isEditing
+                  ? "On hand quantity for this branch. Use stock adjustment to change quantity."
+                  : undefined
+              }
+              className={isEditing ? "bg-muted/80 cursor-not-allowed" : undefined}
+            />
+            {isEditing && (
+              <p className="text-xs text-muted-foreground mt-1">
+                Read-only here. To change quantity, use stock adjustment or receiving.
+              </p>
+            )}
+          </div>
         </div>
       </div>
 
@@ -351,7 +395,7 @@ const ProductForm = ({
         >
           {loading ? (
             <>
-              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
               {submitText}...
             </>
           ) : (
@@ -685,6 +729,9 @@ export default function Inventory() {
     try {
       const dataToSubmit = {
         ...formData,
+        unit_id: pickRealRelationId(formData.unit_id),
+        category_id: pickRealRelationId(formData.category_id),
+        subcategory_id: pickRealRelationId(formData.subcategory_id) || undefined,
         sku: String(formData.sku),
         pct_or_hs_code: formData.pct_or_hs_code ? String(formData.pct_or_hs_code) : undefined,
         purchase_rate: Number(formData.purchase_rate) || 0,
@@ -723,8 +770,15 @@ export default function Inventory() {
 
     setFormLoading(true)
     try {
+      const { initial_stock: _omitStock, images: _omitImages, ...formRest } = formData
       const dataToSubmit = {
-        ...formData,
+        ...formRest,
+        unit_id: pickRealRelationId(formData.unit_id, editingProduct.unit?.id),
+        category_id: pickRealRelationId(formData.category_id, editingProduct.category?.id),
+        subcategory_id: pickRealRelationId(
+          formData.subcategory_id,
+          editingProduct.subcategory?.id
+        ),
         sku: String(formData.sku),
         pct_or_hs_code: formData.pct_or_hs_code ? String(formData.pct_or_hs_code) : undefined,
         purchase_rate: Number(formData.purchase_rate) || 0,
@@ -807,6 +861,17 @@ export default function Inventory() {
       sales_rate_exc_dis_and_tax: "",
       sales_rate_inc_dis_and_tax: "",
       category_id: "",
+      subcategory_id: "",
+      pct_or_hs_code: "",
+      description: "",
+      discount_amount: 0,
+      tax_id: "",
+      min_qty: "",
+      max_qty: "",
+      supplier_id: "",
+      brand_id: "",
+      color_id: "",
+      size_id: "",
       is_active: true,
       display_on_pos: true,
       is_batch: false,
@@ -819,11 +884,53 @@ export default function Inventory() {
     })
     setImagePreviews([])
     setExistingImageUrls([])
+    setFormErrors({})
+  }
+
+  /** Add dialog shares form state with Edit — always clear when opening Add. */
+  const handleAddDialogOpenChange = (open: boolean) => {
+    if (open) {
+      setEditingProduct(null)
+      setIsEditDialogOpen(false)
+      resetForm()
+    }
+    setIsAddDialogOpen(open)
   }
 
   const openEditDialog = (product: Product) => {
+    setIsAddDialogOpen(false)
     setEditingProduct(product)
     const existingUrls = product.images?.map((img) => img.image) || []
+    const minFromProduct = product.min_qty != null ? Number(product.min_qty) : NaN
+    const minFromStock = product.minimum_stock != null ? Number(product.minimum_stock) : NaN
+    const effectiveMinQty =
+      Number.isFinite(minFromProduct) && minFromProduct > 0
+        ? minFromProduct
+        : Number.isFinite(minFromStock) && minFromStock > 0
+          ? minFromStock
+          : Number.isFinite(minFromProduct)
+            ? minFromProduct
+            : Number.isFinite(minFromStock)
+              ? minFromStock
+              : 0
+    const maxFromProduct = product.max_qty != null ? Number(product.max_qty) : NaN
+    const maxFromStock = product.maximum_stock != null ? Number(product.maximum_stock) : NaN
+    const effectiveMaxQty =
+      Number.isFinite(maxFromProduct) && maxFromProduct > 0
+        ? maxFromProduct
+        : Number.isFinite(maxFromStock) && maxFromStock > 0
+          ? maxFromStock
+          : Number.isFinite(maxFromProduct)
+            ? maxFromProduct
+            : Number.isFinite(maxFromStock)
+              ? maxFromStock
+              : 0
+    const currentQty =
+      product.current_stock != null
+        ? Number(product.current_stock)
+        : product.available_stock != null
+          ? Number(product.available_stock)
+          : 0
     setFormData({
       name: product.name,
       unit_id: product.unit?.id || "",
@@ -837,8 +944,8 @@ export default function Inventory() {
       tax_id: product.tax?.id || "",
       category_id: product.category?.id || "",
       subcategory_id: product.subcategory?.id || "",
-      min_qty: product.min_qty || 0,
-      max_qty: product.max_qty || 0,
+      min_qty: effectiveMinQty,
+      max_qty: effectiveMaxQty,
       supplier_id: product.supplier?.id || "",
       brand_id: product.brand?.id || "",
       color_id: product.color?.id || "",
@@ -851,6 +958,7 @@ export default function Inventory() {
       is_deal: product.is_deal,
       is_featured: product.is_featured,
       images: existingUrls,
+      initial_stock: Number.isFinite(currentQty) ? currentQty : 0,
     })
     setImagePreviews(existingUrls)
     setExistingImageUrls(existingUrls)
@@ -893,11 +1001,14 @@ export default function Inventory() {
         // Compress the image
         const compressed = await compressImage(file)
 
-        // Upload immediately to Cloudinary via backend - returns a URL
+        // Upload immediately to Cloudinary via backend - returns a URL (or offline placeholder)
         const url = await apiService.uploadImage(compressed)
 
-        // Store the Cloudinary URL (not base64)
-        setImagePreviews((prev) => [...prev, url])
+        if (isPendingImageUrl(url)) {
+          setImagePreviews((prev) => [...prev, URL.createObjectURL(compressed)])
+        } else {
+          setImagePreviews((prev) => [...prev, url])
+        }
         setExistingImageUrls((prev) => [...prev, url])
       }
     } catch (error) {
@@ -911,8 +1022,12 @@ export default function Inventory() {
   }
 
   const handleRemoveImage = (index: number) => {
-    const removedUrl = imagePreviews[index]
-    setExistingImageUrls((prev) => prev.filter((url) => url !== removedUrl))
+    const removedPreview = imagePreviews[index]
+    if (removedPreview?.startsWith("blob:")) {
+      URL.revokeObjectURL(removedPreview)
+    }
+    const removedSubmit = existingImageUrls[index]
+    setExistingImageUrls((prev) => prev.filter((url) => url !== removedSubmit))
     setImagePreviews((prev) => prev.filter((_, i) => i !== index))
   }
 
@@ -964,7 +1079,7 @@ export default function Inventory() {
               {sharing ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Mail className="h-4 w-4 mr-2" />}
               Email Stock List
             </Button>
-            <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
+            <Dialog open={isAddDialogOpen} onOpenChange={handleAddDialogOpenChange}>
             <DialogTrigger asChild>
               <Button>
                 <Plus className="h-4 w-4 mr-2" />

@@ -88,19 +88,24 @@ class AuthService {
       // No expiresIn — token is valid until the user explicitly logs out
     );
 
-    // One active session per user — replace any existing session
-    await prisma.session.deleteMany({ where: { user_id: user.id } });
+    // Allow multiple concurrent sessions (different devices/tabs).
+    // Each login creates its own session row; other devices stay logged in.
     await prisma.session.create({
       data: { user_id: user.id, token },
-      // expires_at is omitted → null → persistent session
+      // expires_at omitted → null → persistent session
     });
 
     const { password: _, ...userWithoutPassword } = user;
     return { user: userWithoutPassword, token };
   }
 
-  async logout(userId: string) {
-    await prisma.session.deleteMany({ where: { user_id: userId } });
+  async logout(userId: string, token?: string) {
+    // Only revoke the current device's session, not every device this user owns.
+    if (token) {
+      await prisma.session.deleteMany({ where: { user_id: userId, token } });
+    } else {
+      await prisma.session.deleteMany({ where: { user_id: userId } });
+    }
   }
 
   async changePassword(userId: string, data: { currentPassword: string; newPassword: string }) {

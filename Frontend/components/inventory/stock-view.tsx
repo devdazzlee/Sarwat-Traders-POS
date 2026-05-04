@@ -140,7 +140,7 @@ export default function StockView() {
             <div className="relative md:col-span-2">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
               <Input
-                placeholder="SEARCH BY PRODUCT NAME OR SKU..."
+                placeholder="SEARCH BY PRODUCT NAME…"
                 className="pl-10 h-11 border-slate-200 rounded-xl bg-slate-50/50 focus:bg-white transition-colors font-bold text-xs uppercase tracking-tight"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
@@ -167,7 +167,7 @@ export default function StockView() {
               <TableHeader className="bg-slate-50 border-b border-slate-200">
                 <TableRow className="hover:bg-transparent">
                   <TableHead className="font-black text-slate-900 text-[10px] uppercase tracking-widest pl-6">Product Details</TableHead>
-                  <TableHead className="font-black text-slate-900 text-[10px] uppercase tracking-widest text-center">Batch/SKU</TableHead>
+                  <TableHead className="font-black text-slate-900 text-[10px] uppercase tracking-widest text-center">Item code</TableHead>
                   <TableHead className="font-black text-slate-900 text-[10px] uppercase tracking-widest">Location</TableHead>
                   <TableHead className="font-black text-slate-900 text-[10px] uppercase tracking-widest text-right">Available</TableHead>
                   <TableHead className="font-black text-slate-900 text-[10px] uppercase tracking-widest text-center">Status</TableHead>
@@ -243,7 +243,9 @@ export default function StockView() {
                   <Badge className="bg-emerald-500 text-slate-900 font-black text-[9px] border-none px-2 rounded">LIVE DATA</Badge>
                </div>
                <h4 className="font-black text-lg uppercase leading-tight mb-1">{selectedStock.product?.name}</h4>
-               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-6">{selectedStock.product?.sku}</p>
+               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-6">
+                 Item code: {selectedStock.product?.sku || "—"}
+               </p>
                <div className="grid grid-cols-2 gap-4 pt-4 border-t border-white/10">
                   <div>
                      <p className="text-[9px] font-bold text-slate-400 uppercase">Current Qty</p>
@@ -264,10 +266,7 @@ export default function StockView() {
                <ScrollArea className="flex-1 bg-slate-50 rounded-2xl border border-slate-100">
                   <div className="p-4 space-y-4">
                     {loadingMovements ? (
-                      <div className="flex flex-col items-center justify-center py-20 gap-3">
-                        <RefreshCw className="h-6 w-6 text-slate-300 animate-spin" />
-                        <p className="text-[10px] font-bold text-slate-400 uppercase">Crunching trace logs...</p>
-                      </div>
+                      <PageLoader message="Loading movements..." size="sm" />
                     ) : movements.length === 0 ? (
                       <div className="flex flex-col items-center justify-center py-20 gap-3">
                         <Database className="h-6 w-6 text-slate-300" />

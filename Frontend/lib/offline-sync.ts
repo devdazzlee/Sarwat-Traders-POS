@@ -1,6 +1,35 @@
 import { offlineDB, SyncQueueItem } from './offline-db';
 import apiClient from './apiClient';
 import { API_BASE } from '../config/constants';
+import {
+  buildFormDataFromQueuePayload,
+  isMultipartQueuePayload,
+  PENDING_IMG_RE,
+} from './offline-queue-payload';
+
+async function resolvePendingImageUrlsInPayload(payload: unknown): Promise<unknown> {
+  if (payload == null) return payload;
+  if (typeof payload === 'string') {
+    const m = payload.match(PENDING_IMG_RE);
+    if (m) {
+      const resolved = await offlineDB.getResolvedUpload(m[1]);
+      return resolved ?? payload;
+    }
+    return payload;
+  }
+  if (Array.isArray(payload)) {
+    return Promise.all(payload.map((x) => resolvePendingImageUrlsInPayload(x)));
+  }
+  if (typeof payload === 'object') {
+    const o = payload as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const k of Object.keys(o)) {
+      out[k] = await resolvePendingImageUrlsInPayload(o[k]);
+    }
+    return out;
+  }
+  return payload;
+}
 
 export interface SyncStatus {
   isOnline: boolean;
@@ -95,18 +124,52 @@ class OfflineSyncManager {
     const url = item.url.startsWith('http') ? item.url : `${API_BASE}${item.url}`;
 
     try {
+      const isMultipart = item.payload != null && isMultipartQueuePayload(item.payload);
+      const headers: Record<string, string> = {
+        Authorization: `Bearer ${token}`,
+        'X-Operation-Id': item.operationId,
+      };
+
+      let body: BodyInit | undefined;
+      if (isMultipart) {
+        body = buildFormDataFromQueuePayload(item.payload);
+      } else if (item.payload !== undefined && item.payload !== null) {
+        headers['Content-Type'] = 'application/json';
+        const resolved = await resolvePendingImageUrlsInPayload(item.payload);
+        body = JSON.stringify(resolved);
+      }
+
+      if (item.headers) {
+        Object.assign(headers, item.headers);
+      }
+      if (isMultipart) {
+        delete headers['Content-Type'];
+      }
+
       const response = await fetch(url, {
         method: item.method,
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-          'X-Operation-Id': item.operationId,
-          ...item.headers,
-        },
-        body: item.payload ? JSON.stringify(item.payload) : undefined,
+        headers,
+        body:
+          item.method === 'GET' || item.method === 'HEAD'
+            ? undefined
+            : body,
       });
 
       if (response.ok) {
+        if (item.url.includes('/products/upload-image')) {
+          try {
+            const ct = response.headers.get('content-type');
+            if (ct?.includes('application/json')) {
+              const j = await response.json();
+              const cloudUrl = j?.data?.url ?? j?.data?.data?.url ?? j?.url;
+              if (cloudUrl && item.operationId) {
+                await offlineDB.saveResolvedUpload(item.operationId, cloudUrl);
+              }
+            }
+          } catch {
+            /* ignore parse errors */
+          }
+        }
         await offlineDB.markSynced(item.id);
         console.log(`Synced: ${item.method} ${item.url}`);
       } else {
@@ -118,10 +181,27 @@ class OfflineSyncManager {
   }
 
   private async pullFreshData() {
-    const [productsResult, customersResult] = await Promise.allSettled([
+    const results = await Promise.allSettled([
       apiClient.get('/products', { params: { fetch_all: true } }),
       apiClient.get('/customer'),
+      apiClient.get('/branches', { params: { fetch_all: true } }),
+      apiClient.get('/categories'),
+      apiClient.get('/suppliers'),
+      apiClient.get('/taxes'),
+      apiClient.get('/units'),
+      apiClient.get('/subcategories'),
+      apiClient.get('/dashboard/stats'),
+      apiClient.get('/sale/recent'),
+      apiClient.get('/products/best-selling'),
+      apiClient.get('/employee'),
+      apiClient.get('/employee/types'),
+      apiClient.get('/inventory/dashboard'),
+      apiClient.get('/sizes', { params: { search: '' } }),
+      apiClient.get('/colors', { params: { search: '' } }),
+      apiClient.get('/brands', { params: { search: '' } }),
     ]);
+
+    const [productsResult, customersResult, , categoriesResult] = results;
 
     if (productsResult.status === 'fulfilled') {
       const raw = productsResult.value?.data?.data;
@@ -135,6 +215,14 @@ class OfflineSyncManager {
       if (Array.isArray(raw) && raw.length > 0) {
         await offlineDB.saveCustomers(raw);
         await offlineDB.setCachedData('customers', raw);
+      }
+    }
+
+    if (categoriesResult.status === 'fulfilled') {
+      const list = categoriesResult.value?.data?.data;
+      if (Array.isArray(list) && list.length > 0) {
+        const categories = [{ id: 'all', name: 'All' }, ...list];
+        await offlineDB.setCachedData('categories', categories);
       }
     }
   }

@@ -8,6 +8,7 @@
 import { offlineDB } from './offline-db';
 import { syncManager } from './offline-sync';
 import { offlineAPIClient } from './offline-api-client';
+import apiClient from './apiClient';
 
 export async function initializeOfflineMode() {
   try {
@@ -24,8 +25,8 @@ export async function initializeOfflineMode() {
     const stats = await offlineDB.getStats();
     console.log('📊 Offline storage stats:', stats);
 
-    // If no data and we're online, fetch initial data
-    if (stats.products === 0 && navigator.onLine) {
+    // Seed IndexedDB + GET cache when online (also refreshes empty product store)
+    if (navigator.onLine) {
       console.log('📥 Fetching initial data for offline use...');
       await fetchInitialData();
     }
@@ -47,47 +48,55 @@ export async function initializeOfflineMode() {
   }
 }
 
-import { API_BASE } from '../config/constants';
+async function warmApiGetCache() {
+  const paths: { url: string; params?: Record<string, unknown> }[] = [
+    { url: '/branches', params: { fetch_all: true } },
+    { url: '/suppliers' },
+    { url: '/taxes' },
+    { url: '/units' },
+    { url: '/subcategories' },
+    { url: '/dashboard/stats' },
+    { url: '/sale/recent' },
+    { url: '/products/best-selling' },
+    { url: '/employee' },
+    { url: '/employee/types' },
+    { url: '/inventory/dashboard' },
+    { url: '/sizes', params: { search: '' } },
+    { url: '/colors', params: { search: '' } },
+    { url: '/brands', params: { search: '' } },
+  ];
+  await Promise.allSettled(
+    paths.map((p) => apiClient.get(p.url, p.params ? { params: p.params } : undefined))
+  );
+}
 
 async function fetchInitialData() {
   try {
-    const token = localStorage.getItem('token');
-
-    // Fetch products
-    try {
-      const productsRes = await fetch(`${API_BASE}/products`, {
-        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
-      });
-      if (productsRes.ok) {
-        const productsData = await productsRes.json();
-        if (productsData.data) {
-          await offlineDB.saveProducts(productsData.data);
-          console.log(`✅ Cached ${productsData.data.length} products`);
+    await Promise.allSettled([
+      apiClient.get('/products', { params: { fetch_all: true } }).then(async (res) => {
+        const raw = res.data?.data;
+        if (Array.isArray(raw) && raw.length > 0) {
+          await offlineDB.saveProducts(raw);
+          console.log(`✅ Cached ${raw.length} products`);
         }
-      }
-    } catch (error) {
-      console.warn('⚠️ Could not fetch products:', error);
+      }),
+      apiClient.get('/customer').then(async (res) => {
+        const raw = res.data?.data;
+        if (Array.isArray(raw) && raw.length > 0) {
+          await offlineDB.saveCustomers(raw);
+          await offlineDB.setCachedData('customers', raw);
+          console.log(`✅ Cached ${raw.length} customers`);
+        }
+      }),
+    ]);
+
+    const catRes = await apiClient.get('/categories').catch(() => null);
+    if (catRes?.data?.data && Array.isArray(catRes.data.data)) {
+      const categories = [{ id: 'all', name: 'All' }, ...catRes.data.data];
+      await offlineDB.setCachedData('categories', categories);
     }
 
-    // Fetch customers
-    try {
-      const customersRes = await fetch(`${API_BASE}/customer`, {
-        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
-      });
-      if (customersRes.ok) {
-        const customersData = await customersRes.json();
-        if (customersData.data) {
-          await offlineDB.saveCustomers(customersData.data);
-          console.log(`✅ Cached ${customersData.data.length} customers`);
-        }
-      }
-    } catch (error) {
-      console.warn('⚠️ Could not fetch customers:', error);
-    }
-
-    // Fetch other critical data as needed
-    // Add more fetch calls here for categories, branches, etc.
-
+    await warmApiGetCache();
   } catch (error) {
     console.error('❌ Failed to fetch initial data:', error);
   }

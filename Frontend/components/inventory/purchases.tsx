@@ -30,7 +30,7 @@ import {
   Info,
   RefreshCw
 } from "lucide-react";
-import apiClient from "@/lib/apiClient";
+import apiClient, { BULK_UPLOAD_AXIOS_TIMEOUT_MS } from "@/lib/apiClient";
 import { cachedGet, queueMutation } from "@/lib/offline-helpers";
 import { API_BASE } from "@/config/constants";
 import { useToast } from "@/hooks/use-toast";
@@ -44,6 +44,11 @@ import { DatePicker } from "@/components/ui/date-picker";
 import { parseISO } from "date-fns";
 import * as XLSX from "xlsx";
 import { useStore } from "@/lib/store";
+import { ExcelSheetUploadModal } from "@/components/inventory/excel-sheet-upload-modal";
+import {
+  CATALOG_IMPORT_SHEET_COLUMNS,
+  CATALOG_IMPORT_OPTIONAL_COLUMNS_NOTE,
+} from "@/components/inventory/catalog-import-sheet-spec";
 
 interface Product {
   id: string;
@@ -97,6 +102,30 @@ interface PurchaseResponse {
   items?: any[];
 }
 
+/** Each GET /purchases row is one line: valuation = qty × cost (API may use camelCase or snake_case). */
+function formatPurchaseLineValuation(p: PurchaseResponse): string | null {
+  const raw = p as unknown as Record<string, unknown>;
+  const q = Number(raw.quantity ?? p.quantity);
+  const c = Number(raw.cost_price ?? p.cost_price);
+  if (Number.isFinite(q) && Number.isFinite(c)) {
+    const val = q * c;
+    return `Rs ${val.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+  }
+  const items = Array.isArray(p.items) ? p.items : [];
+  if (items.length > 0) {
+    const sum = items.reduce((acc: number, it: Record<string, unknown>) => {
+      const iq = Number(it.quantity ?? it.qty);
+      const ic = Number(it.cost_price ?? it.costPrice);
+      if (Number.isFinite(iq) && Number.isFinite(ic)) return acc + iq * ic;
+      return acc;
+    }, 0);
+    if (Number.isFinite(sum)) {
+      return `Rs ${sum.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+    }
+  }
+  return null;
+}
+
 export function Purchases() {
   const { toast } = useToast();
   const { fetchProducts: refreshGlobalProducts } = useStore();
@@ -132,6 +161,16 @@ export function Purchases() {
   const [importing, setImporting] = useState(false);
   const [serverUploading, setServerUploading] = useState(false);
   const [importProgress, setImportProgress] = useState({ current: 0, total: 0, label: "" });
+  /** Excel path hits /products/bulk-upload — distinct from manual purchase lines below */
+  const [sheetImportReport, setSheetImportReport] = useState<{
+    at: number;
+    totalRows: number;
+    succeeded: number;
+    failed: number;
+    withStockCount: number;
+    firstError?: string;
+  } | null>(null);
+  const [excelUploadModalOpen, setExcelUploadModalOpen] = useState(false);
 
   // Selector States
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
@@ -277,12 +316,26 @@ export function Purchases() {
     setOpenProductCombo(false);
   };
 
-  // Bulk Import — parses sheet, creates missing products, then directly submits stock-in
-  const handleBulkImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = "";
+  const downloadStockInTemplate = useCallback(() => {
+    const sample = [
+      {
+        "Product Name": "Example product",
+        "Buy Price (Rs)": 100,
+        "Sell Price (Rs)": 150,
+        "Initial Stock Qty": 50,
+        Category: "General",
+        Unit: "PCS",
+        "Min Stock (Reorder)": 10,
+      },
+    ];
+    const ws = XLSX.utils.json_to_sheet(sample);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Products");
+    XLSX.writeFile(wb, "stock-in-catalog-import-template.xlsx");
+  }, []);
 
+  // Bulk Import — parses sheet, creates missing products, then directly submits stock-in
+  const processStockInExcelFromFile = async (file: File) => {
     const data = await file.arrayBuffer();
     const workbook = XLSX.read(data);
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
@@ -326,6 +379,8 @@ export function Purchases() {
     console.log("📋 Sheet columns:", Object.keys(validRows[0]));
     console.log("📋 First row:", validRows[0]);
 
+    setSheetImportReport(null);
+
     // Phase 1 — build payload in a for-loop so progress bar animates while parsing rows
     setImporting(true);
     setImportProgress({ current: 0, total: validRows.length, label: "Reading rows…" });
@@ -342,8 +397,28 @@ export function Purchases() {
         stock_qty:                  colNum(row, "Initial Stock Qty", "Initial Stock", "InitialStockQty",
                                       "Opening Stock", "Opening Qty", "Stock Qty", "T Pieces", "Quantity", "Qty", "Stock"),
         purchase_rate:              colNum(row, "Buy Price (Rs)", "Buy Price", "BuyPrice", "Purchase Rate", "purchase_rate"),
-        sales_rate_inc_dis_and_tax: colNum(row, "Sell Price (Rs)", "Sell Price", "SellPrice", "Selling Price", "sale_price"),
-        sales_rate_exc_dis_and_tax: colNum(row, "Sell Price (Rs)", "Sell Price", "SellPrice", "Selling Price", "sale_price"),
+        sales_rate_inc_dis_and_tax: colNum(
+          row,
+          "Sales Rate",
+          "SalesRate",
+          "Sell Price (Rs)",
+          "Sell Price",
+          "SellPrice",
+          "Selling Price",
+          "sale_price",
+          "sales_rate_inc_dis_and_tax"
+        ),
+        sales_rate_exc_dis_and_tax: colNum(
+          row,
+          "Sales Rate",
+          "SalesRate",
+          "Sell Price (Rs)",
+          "Sell Price",
+          "SellPrice",
+          "Selling Price",
+          "sale_price",
+          "sales_rate_inc_dis_and_tax"
+        ),
         min_qty:       colNum(row, "Min Stock (Reorder)", "Low Stock Alert", "Min Stock", "MinStock") || 10,
         category_name: col(row, "Category", "category_name", "category", "Cat") || undefined,
         unit_name:     col(row, "Unit", "unit_name", "unit", "UOM") || undefined,
@@ -365,6 +440,24 @@ export function Purchases() {
       return;
     }
 
+    const badRates = validPayload.find(
+      (p) =>
+        !Number(p.purchase_rate) ||
+        Number(p.purchase_rate) <= 0 ||
+        !Number(p.sales_rate_inc_dis_and_tax) ||
+        Number(p.sales_rate_inc_dis_and_tax) <= 0
+    );
+    if (badRates) {
+      setImporting(false);
+      setImportProgress({ current: 0, total: 0, label: "" });
+      toast({
+        title: "Missing rates",
+        description: `Each row needs Purchase Rate and Sales Rate greater than 0 (same as Add Product). Check row: "${badRates.name || badRates.sku || "unknown"}".`,
+        variant: "destructive",
+      });
+      return;
+    }
+
     // Phase 2 — Sequential requests to server (creates product + sets stock per row on backend)
     setServerUploading(true);
     let allResults: any[] = [];
@@ -378,9 +471,11 @@ export function Purchases() {
           label: `Uploading: ${validPayload[i].name || validPayload[i].sku}...` 
         });
 
-        const res = await apiClient.post("/products/bulk-upload", { 
-          products: [validPayload[i]] 
-        });
+        const res = await apiClient.post(
+          "/products/bulk-upload",
+          { products: [validPayload[i]] },
+          { timeout: BULK_UPLOAD_AXIOS_TIMEOUT_MS }
+        );
         
         const rowResults: any[] = res.data?.data || [];
         allResults = [...allResults, ...rowResults];
@@ -397,8 +492,15 @@ export function Purchases() {
       if (failed.length > 0) console.warn("Import failures:", failed);
 
       if (succeeded.length === 0) {
-        // All rows failed — surface the first error so the user knows why
         const firstError = failed[0]?.error || "Unknown error";
+        setSheetImportReport({
+          at: Date.now(),
+          totalRows: validPayload.length,
+          succeeded: 0,
+          failed: failed.length,
+          withStockCount: 0,
+          firstError,
+        });
         toast({
           title: "Import Failed",
           description: `All ${failed.length} rows failed. Reason: ${firstError}`,
@@ -410,18 +512,36 @@ export function Purchases() {
       refreshGlobalProducts({ force: true }).catch(() => {});
       fetchHistory();
 
+      setSheetImportReport({
+        at: Date.now(),
+        totalRows: validPayload.length,
+        succeeded: succeeded.length,
+        failed: failed.length,
+        withStockCount: stocked,
+        firstError: failed[0]?.error,
+      });
+
       const partialWarn = failed.length > 0 ? ` (${failed.length} rows skipped: ${failed[0]?.error || "unknown error"})` : "";
       toast({
-        title: succeeded.length === validPayload.length ? "Import Complete" : "Import Partially Complete",
-        description: `${succeeded.length} of ${validPayload.length} products saved, ${stocked} with stock.${partialWarn}`,
+        title: succeeded.length === validPayload.length ? "Sheet import finished" : "Sheet import partially finished",
+        description: `${succeeded.length} of ${validPayload.length} products saved in catalog, ${stocked} with opening stock. See Step 1 summary.${partialWarn}`,
       });
     } catch (err: any) {
       setImporting(false);
       setServerUploading(false);
       setImportProgress({ current: 0, total: 0, label: "" });
+      const msg = err?.response?.data?.message || err?.message || "Server error during import.";
+      setSheetImportReport({
+        at: Date.now(),
+        totalRows: 0,
+        succeeded: 0,
+        failed: 0,
+        withStockCount: 0,
+        firstError: msg,
+      });
       toast({
         title: "Import Failed",
-        description: err?.response?.data?.message || "Server error during import.",
+        description: msg,
         variant: "destructive",
       });
     }
@@ -443,8 +563,11 @@ export function Purchases() {
               <Plus className="h-5 w-5 text-white" />
             </div>
             <div>
-              <h1 className="text-2xl font-black text-slate-900 tracking-tighter uppercase">Stock In / Arrivals</h1>
-              <p className="text-[10px] font-bold text-slate-400 tracking-widest uppercase mt-0.5">Wholesale inventory management portal</p>
+              <h1 className="text-2xl font-semibold text-slate-900 tracking-tight">Stock in</h1>
+              <p className="text-sm text-slate-500 mt-1 max-w-xl">
+                <strong>Excel</strong> adds many new products and opening stock. <strong>Supplier form</strong> records one
+                delivery (invoice) and the lines you add below.
+              </p>
             </div>
           </div>
           
@@ -472,6 +595,25 @@ export function Purchases() {
 
         {activeView === "HISTORY" ? (
           <div className="flex-1 flex flex-col min-h-0 space-y-4">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 flex gap-3">
+              <Info className="h-5 w-5 text-slate-500 shrink-0 mt-0.5" />
+              <div className="text-sm text-slate-700 leading-relaxed">
+                <p className="font-medium text-slate-900">What this list shows</p>
+                <p className="mt-1">
+                  Only <strong>supplier deliveries</strong> you save from <strong>New Entry → Save purchase</strong> (server{" "}
+                  <code className="rounded bg-white px-1 text-xs">POST /purchases</code>). Each line becomes a purchase record
+                  with supplier, invoice, and cost.
+                </p>
+                <p className="mt-2">
+                  Stock added via <strong>Stock Management → New products (Excel)</strong> or <strong>Stock In → Step 1 Excel</strong>{" "}
+                  updates inventory through <strong>bulk product import</strong> — it writes{" "}
+                  <strong>stock movements</strong>, not purchase rows, so it will <strong>not</strong> appear here. To review that
+                  activity use <strong>Inventory → Stock Management → Movement Log</strong> tab (or{" "}
+                  <strong>Stock Operations → Movement Log</strong>).
+                </p>
+              </div>
+            </div>
+
             {/* History Filters */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
               <div className="space-y-1.5">
@@ -533,10 +675,24 @@ export function Purchases() {
                        </TableRow>
                      ) : purchases.length === 0 ? (
                        <TableRow>
-                         <TableCell colSpan={6} className="h-64 text-center">
-                            <div className="flex flex-col items-center gap-2 opacity-20">
-                               <FileText className="h-10 w-10 text-slate-900" />
-                               <p className="text-[10px] text-slate-900 font-black uppercase tracking-widest">No matching records</p>
+                         <TableCell colSpan={6} className="py-12 px-6">
+                            <div className="max-w-lg mx-auto text-center space-y-3">
+                               <FileText className="h-10 w-10 text-slate-300 mx-auto" />
+                               <p className="text-base font-semibold text-slate-800">No supplier purchases in this list</p>
+                               <p className="text-sm text-slate-600 leading-relaxed text-left">
+                                 That is expected if all your stock came from <strong>catalog / Excel bulk import</strong> (opening
+                                 stock) rather than from <strong>Save purchase</strong> on this screen. Those imports still increased
+                                 on-hand qty — they are stored as stock movements, not as rows in this purchase history.
+                               </p>
+                               <p className="text-sm text-slate-600 text-left">
+                                 To see them: open <strong>Stock Management</strong> and check the <strong>Movement Log</strong> tab
+                                 (movements tagged as bulk/catalog import).
+                               </p>
+                               <p className="text-xs text-slate-500 pt-2">
+                                 Filters above only search saved purchase records. Clear dates/supplier and click Search if you
+                                 expect rows but still see none — then no <code className="rounded bg-slate-100 px-1">POST /purchases</code>{" "}
+                                 data exists yet.
+                               </p>
                             </div>
                          </TableCell>
                        </TableRow>
@@ -551,8 +707,7 @@ export function Purchases() {
                           <TableCell className="font-black text-slate-900 text-xs uppercase">{p.supplier?.name}</TableCell>
                           <TableCell className="font-bold text-slate-500 text-[10px] uppercase">{p.warehouse_branch?.name}</TableCell>
                           <TableCell className="text-right font-black text-slate-900 text-xs tabular-nums">
-                            {/* Assuming purchases list might show total or first item if items aren't nested, but backend returns expanded items usually */}
-                            {p.items ? `Rs ${p.items.reduce((sum: number, it: any) => sum + (Number(it.quantity) * Number(it.cost_price)), 0).toLocaleString()}` : "---"}
+                            {formatPurchaseLineValuation(p) ?? "—"}
                           </TableCell>
                           <TableCell className="text-right px-6">
                              <Badge className={cn("px-2 py-0 h-5 rounded-md text-[8px] font-black uppercase border-none", p.delivery_status === "COMPLETE" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700")}>
@@ -569,265 +724,360 @@ export function Purchases() {
           </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1 overflow-y-auto pb-6">
-            {/* Main Entry Panel */}
-            <div className="lg:col-span-8 space-y-4">
-              <Card className="rounded-xl border border-slate-200 shadow-sm bg-white relative">
-                 {/* Import progress overlay */}
-                 {importing && (
-                   <div className="absolute inset-0 z-20 bg-slate-900/95 flex flex-col items-center justify-center rounded-xl gap-5">
-                     <Loader2 className="h-10 w-10 text-white animate-spin" />
-                     <div className="w-80 space-y-3 text-center">
-                       <p className="text-[9px] font-black uppercase tracking-widest text-white/50">
-                         {serverUploading ? "Uploading to Server" : "Reading Sheet"}
-                       </p>
-                       <p className="text-sm font-black text-white truncate px-4">
-                         {importProgress.label}
-                       </p>
-                       {/* Progress bar */}
-                        <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden">
-                          <div
-                            className="h-2 bg-emerald-400 rounded-full transition-all duration-300"
-                            style={{ width: importProgress.total > 0 ? `${(importProgress.current / importProgress.total) * 100}%` : "0%" }}
-                          />
+            <div className="lg:col-span-8 space-y-6">
+              {/* —— A: Excel = catalog only —— */}
+              <Card className="rounded-xl border border-emerald-200 bg-emerald-50/30 shadow-sm relative overflow-hidden">
+                {importing && (
+                  <div className="absolute inset-0 z-20 bg-slate-900/95 flex flex-col items-center justify-center rounded-xl gap-5">
+                    <Loader2 className="h-10 w-10 text-white animate-spin" />
+                    <div className="w-80 space-y-3 text-center px-4">
+                      <p className="text-xs font-medium text-white/80">
+                        {serverUploading ? "Saving each row to the product catalog…" : "Reading your Excel file…"}
+                      </p>
+                      <p className="text-sm font-semibold text-white truncate">{importProgress.label}</p>
+                      <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden">
+                        <div
+                          className="h-2 bg-emerald-400 rounded-full transition-all duration-300"
+                          style={{ width: importProgress.total > 0 ? `${(importProgress.current / importProgress.total) * 100}%` : "0%" }}
+                        />
+                      </div>
+                      <p className="text-xs text-emerald-300/90 tabular-nums">
+                        {importProgress.current} / {importProgress.total}{" "}
+                        {serverUploading ? "rows sent to server" : "rows read"}
+                      </p>
+                    </div>
+                  </div>
+                )}
+                <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between border-b border-emerald-100/80 bg-white/60">
+                  <div className="space-y-2 max-w-xl">
+                    <CardTitle className="text-lg font-semibold text-slate-900">Step 1 — New products from Excel (optional)</CardTitle>
+                    <CardDescription className="text-sm text-slate-600 leading-relaxed">
+                      For a list of <strong>new products</strong> with prices and opening stock. When you pick a file, each row is
+                      saved to the <strong>product catalog</strong> — it does <strong>not</strong> fill the supplier receipt in Step 2.
+                    </CardDescription>
+                  </div>
+                  <div className="shrink-0 flex flex-col items-stretch sm:items-end gap-2">
+                    <Button
+                      type="button"
+                      variant="default"
+                      disabled={importing}
+                      className="bg-emerald-700 hover:bg-emerald-800 text-white h-10 px-4"
+                      onClick={() => !importing && setExcelUploadModalOpen(true)}
+                    >
+                      {importing ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" /> Working…
+                        </>
+                      ) : (
+                        <>
+                          <FileSpreadsheet className="h-4 w-4 mr-2" /> Choose Excel file
+                        </>
+                      )}
+                    </Button>
+                    <span className="text-[11px] text-slate-500 text-right max-w-[200px]">.xlsx / .xls / .csv</span>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4 pt-4">
+                  <p className="text-xs text-slate-600">
+                    Click <strong>Choose Excel file</strong> for the same column layout as <strong>Add Product</strong> (name, unit,
+                    category, purchase rate, sales rate, min stock, opening stock). Item codes are generated when omitted. Skip this
+                    step if you only need a supplier bill — use Step 2.
+                  </p>
+                  {sheetImportReport && (
+                    <div
+                      className={`rounded-lg border p-4 space-y-2 ${
+                        sheetImportReport.succeeded > 0
+                          ? "border-emerald-200 bg-white"
+                          : "border-amber-200 bg-amber-50/90"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">Last file result</p>
+                          <p className="text-xs text-slate-600 mt-1">
+                            Catalog rows saved: <strong>{sheetImportReport.succeeded}</strong> of{" "}
+                            <strong>{sheetImportReport.totalRows}</strong> — failed:{" "}
+                            <strong>{sheetImportReport.failed}</strong> — rows with stock set:{" "}
+                            <strong>{sheetImportReport.withStockCount}</strong>
+                          </p>
                         </div>
-                        <p className="text-[10px] font-black text-emerald-400/80 tabular-nums uppercase">
-                          {serverUploading ? `SYNCING ${importProgress.current} / ${importProgress.total} PRODUCTS` : `${importProgress.current} / ${importProgress.total} ROWS PARSED`}
-                        </p>
-                     </div>
-                   </div>
-                 )}
-
-                 <div className="p-4 border-b border-slate-100 bg-slate-900 flex items-center justify-between text-white">
-                    <div>
-                       <h3 className="text-xs !font-white !text-white uppercase tracking-widest">Entry Manifest</h3>
-                       <p className="text-[9px] font-bold text-white/50 uppercase">Current Inventory In-flow</p>
+                        <Button type="button" variant="ghost" size="sm" className="h-8 shrink-0" onClick={() => setSheetImportReport(null)}>
+                          <X className="h-4 w-4" />
+                        </Button>
+                      </div>
+                      {sheetImportReport.firstError && sheetImportReport.failed > 0 && (
+                        <p className="text-xs text-rose-700">First error: {sheetImportReport.firstError}</p>
+                      )}
                     </div>
-                    <div className="flex gap-2">
-                       <input type="file" id="bulk-import" className="hidden" accept=".xlsx,.xls,.csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={handleBulkImport} />
-                       <Button
-                          variant="secondary"
-                          disabled={importing}
-                          className="bg-white text-slate-900 hover:bg-slate-100 font-black rounded-lg h-8 text-[10px] uppercase border-none disabled:opacity-50"
-                          onClick={() => !importing && document.getElementById('bulk-import')?.click()}
-                       >
-                         {importing ? (
-                           <><Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" /> Importing…</>
-                         ) : (
-                           <><FileSpreadsheet className="h-3.5 w-3.5 mr-2" /> Bulk Load</>
-                         )}
-                       </Button>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* —— B: Supplier receipt —— */}
+              <Card className="rounded-xl border border-slate-200 shadow-sm bg-white">
+                <CardHeader className="border-b border-slate-100">
+                  <CardTitle className="text-lg font-semibold text-slate-900">Step 2 — Supplier delivery (GRN)</CardTitle>
+                  <CardDescription className="text-sm text-slate-600 leading-relaxed">
+                    Use this for a real purchase: choose supplier and date, add each product and quantity, then{" "}
+                    <strong>Save purchase</strong> on the right. Only lines you add here appear on the invoice.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="p-6 space-y-8">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="space-y-2 text-left">
+                      <Label className="text-xs font-medium text-slate-700">Supplier</Label>
+                      <Select value={header.supplierId} onValueChange={(v) => setHeader({ ...header, supplierId: v })}>
+                        <SelectTrigger className="rounded-lg border-slate-200 h-10 bg-white text-sm">
+                          <SelectValue placeholder="Choose supplier" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {suppliers.map((s) => (
+                            <SelectItem key={s.id} value={s.id} className="text-sm">
+                              {s.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
-                 </div>
-
-                 <CardContent className="p-6 space-y-8">
-                    {/* Header Form */}
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                       <div className="space-y-2 text-left">
-                          <Label className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Supplier</Label>
-                          <Select value={header.supplierId} onValueChange={(v) => setHeader({...header, supplierId: v})}>
-                             <SelectTrigger className="rounded-xl border-slate-200 h-9 bg-white text-xs font-black uppercase">
-                                <SelectValue placeholder="SELECT ENTITY" />
-                             </SelectTrigger>
-                             <SelectContent>
-                                {suppliers.map(s => <SelectItem key={s.id} value={s.id} className="text-xs font-black uppercase">{s.name}</SelectItem>)}
-                             </SelectContent>
-                          </Select>
-                       </div>
-                       <div className="space-y-2 text-left">
-                          <Label className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Arrival Date</Label>
-                          <DatePicker 
-                             date={header.purchaseDate ? parseISO(header.purchaseDate) : undefined}
-                             onDateChange={(date) => setHeader({...header, purchaseDate: date ? format(date, "yyyy-MM-dd") : ""})}
-                             placeholder="PICK DATE"
-                           />
-                       </div>
-                       <div className="space-y-2 text-left">
-                          <Label className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Invoice Code</Label>
-                          <Input value={header.invoiceRef} onChange={(e) => setHeader({...header, invoiceRef: e.target.value})} placeholder="REF-0000" className="rounded-xl h-9 border-slate-200 bg-white text-xs font-black uppercase" />
-                       </div>
+                    <div className="space-y-2 text-left">
+                      <Label className="text-xs font-medium text-slate-700">Delivery date</Label>
+                      <DatePicker
+                        date={header.purchaseDate ? parseISO(header.purchaseDate) : undefined}
+                        onDateChange={(date) => setHeader({ ...header, purchaseDate: date ? format(date, "yyyy-MM-dd") : "" })}
+                        placeholder="Pick date"
+                      />
                     </div>
-
-                    {/* Item Entry Section */}
-                    <div className="p-6 rounded-2xl border border-slate-200 bg-slate-50/50 space-y-6">
-                       <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-end">
-                          <div className="md:col-span-6 space-y-2 text-left">
-                             <Label className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Asset Search</Label>
-                             <Popover open={openProductCombo} onOpenChange={setOpenProductCombo}>
-                               <PopoverTrigger asChild>
-                                 <Button variant="outline" className="w-full justify-between rounded-xl border-slate-200 h-9 font-black text-slate-900 bg-white text-xs uppercase shadow-sm">
-                                   <span className="truncate pr-4">{selectedProduct ? selectedProduct.name : "TYPE SKU OR NAME..."}</span>
-                                   <Search className="h-4 w-4 opacity-30" />
-                                 </Button>
-                               </PopoverTrigger>
-                               <PopoverContent className="w-[500px] p-0 rounded-2xl shadow-2xl border-none overflow-hidden" align="start">
-                                 <Command>
-                                   <CommandInput placeholder="SEARCH CATALOG..." className="text-xs font-black h-12 uppercase" />
-                                   <CommandList className="max-h-[350px]">
-                                     <CommandEmpty className="text-xs font-black py-8 text-center text-slate-400">No assets found</CommandEmpty>
-                                     <CommandGroup>
-                                       {products.map((p) => (
-                                         <CommandItem key={p.id} value={`${p.sku} ${p.name}`} onSelect={() => selectProduct(p)} className="px-5 py-4 font-black cursor-pointer hover:bg-slate-50 border-b border-slate-50 last:border-none">
-                                           <div className="flex flex-col gap-1">
-                                              <span className="text-xs uppercase">{p.name}</span>
-                                              <span className="text-[9px] text-slate-400 tracking-tighter">SKU: {p.sku}</span>
-                                           </div>
-                                         </CommandItem>
-                                       ))}
-                                     </CommandGroup>
-                                   </CommandList>
-                                 </Command>
-                               </PopoverContent>
-                             </Popover>
-                          </div>
-                          
-                          <div className="md:col-span-2 space-y-2 text-left">
-                             <Label className="text-[9px] font-black text-slate-500 uppercase tracking-widest text-center block">Arrival Qty</Label>
-                             <Input type="number" value={itemForm.quantity} onChange={(e) => setItemForm({...itemForm, quantity: e.target.value})} className="rounded-xl border-slate-200 bg-white font-black text-slate-900 h-9 text-sm text-center tabular-nums" placeholder="0" />
-                          </div>
-
-                          <div className="md:col-span-2 space-y-2 text-left">
-                             <Label className="text-[9px] font-black text-slate-500 uppercase tracking-widest text-center block">Unit Cost</Label>
-                             <Input type="number" value={itemForm.costPrice} onChange={(e) => setItemForm({...itemForm, costPrice: e.target.value})} className="rounded-xl border-slate-200 bg-white font-black text-slate-900 h-9 text-sm text-center tabular-nums" placeholder="0.00" />
-                          </div>
-
-                          <div className="md:col-span-2">
-                             <Button className="w-full bg-slate-900 hover:bg-black text-white rounded-xl h-9 font-black text-[10px] uppercase tracking-widest shadow-lg shadow-slate-200 transition-all active:scale-95" onClick={handleAddStagedItem}>
-                               ADD ITEM
-                             </Button>
-                          </div>
-                       </div>
-                       
-                       <div className="grid grid-cols-2 gap-6 pt-6 border-t border-slate-200/50">
-                          <div className="space-y-2 text-left">
-                             <Label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Batch / Lot Identifier</Label>
-                             <Input value={itemForm.batchNo} onChange={(e) => setItemForm({...itemForm, batchNo: e.target.value})} className="rounded-xl border-slate-100 bg-white h-9 text-[10px] font-black uppercase" placeholder="BATCH-ID-00" />
-                          </div>
-                          <div className="space-y-2 text-left">
-                             <Label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Expiry Date</Label>
-                             <DatePicker 
-                                date={itemForm.expiryDate ? parseISO(itemForm.expiryDate) : undefined}
-                                onDateChange={(date) => setItemForm({...itemForm, expiryDate: date ? format(date, "yyyy-MM-dd") : ""})}
-                                placeholder="NO EXPIRY"
-                              />
-                          </div>
-                       </div>
+                    <div className="space-y-2 text-left">
+                      <Label className="text-xs font-medium text-slate-700">Invoice / GRN reference</Label>
+                      <Input
+                        value={header.invoiceRef}
+                        onChange={(e) => setHeader({ ...header, invoiceRef: e.target.value })}
+                        placeholder="e.g. INV-1024"
+                        className="rounded-lg h-10 border-slate-200 bg-white text-sm"
+                      />
                     </div>
+                  </div>
 
-                    {/* Staged Items List */}
-                    <div className="space-y-3">
-                       <h4 className="text-[10px] font-black uppercase text-slate-900 tracking-[0.2em] px-1">Staging Grid</h4>
-                       <div className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-sm">
-                          <ScrollArea className="max-h-[400px]">
-                          <Table>
-                             <TableHeader className="bg-slate-50 border-b border-slate-100">
-                                <TableRow className="hover:bg-transparent h-10">
-                                   <TableHead className="text-[9px] font-black uppercase text-slate-400 px-6">Asset Desc</TableHead>
-                                   <TableHead className="text-[9px] font-black uppercase text-slate-400 text-center">Unit Qty</TableHead>
-                                   <TableHead className="text-[9px] font-black uppercase text-slate-400 text-right">Acquisition cost</TableHead>
-                                   <TableHead className="text-[9px] font-black uppercase text-slate-400 text-right">Sum total</TableHead>
-                                   <TableHead className="w-[40px] px-6"></TableHead>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4 md:p-5 space-y-5">
+                    <p className="text-xs font-medium text-slate-700">Add one line at a time</p>
+                    <div className="grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-4 items-end">
+                      <div className="md:col-span-5 space-y-2 text-left">
+                        <Label className="text-xs font-medium text-slate-600">Product</Label>
+                        <Popover open={openProductCombo} onOpenChange={setOpenProductCombo}>
+                          <PopoverTrigger asChild>
+                            <Button variant="outline" className="w-full justify-between rounded-lg border-slate-200 h-10 text-sm font-normal bg-white">
+                              <span className="truncate pr-2 text-left">{selectedProduct ? selectedProduct.name : "Search product…"}</span>
+                              <Search className="h-4 w-4 shrink-0 opacity-40" />
+                            </Button>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-[min(100vw-2rem,480px)] p-0 rounded-lg shadow-lg border border-slate-200" align="start">
+                            <Command>
+                              <CommandInput placeholder="Search…" className="text-sm h-10" />
+                              <CommandList className="max-h-[280px]">
+                                <CommandEmpty className="text-sm py-6 text-center text-slate-500">No products found</CommandEmpty>
+                                <CommandGroup>
+                                  {products.map((p) => (
+                                    <CommandItem
+                                      key={p.id}
+                                      value={`${p.sku} ${p.name}`}
+                                      onSelect={() => selectProduct(p)}
+                                      className="px-3 py-2.5 cursor-pointer text-sm"
+                                    >
+                                      <div className="flex flex-col gap-0.5">
+                                        <span>{p.name}</span>
+                                      </div>
+                                    </CommandItem>
+                                  ))}
+                                </CommandGroup>
+                              </CommandList>
+                            </Command>
+                          </PopoverContent>
+                        </Popover>
+                      </div>
+                      <div className="md:col-span-2 space-y-2">
+                        <Label className="text-xs font-medium text-slate-600 block">Qty</Label>
+                        <Input
+                          type="number"
+                          value={itemForm.quantity}
+                          onChange={(e) => setItemForm({ ...itemForm, quantity: e.target.value })}
+                          className="rounded-lg border-slate-200 bg-white h-10 text-sm text-center tabular-nums"
+                          placeholder="0"
+                        />
+                      </div>
+                      <div className="md:col-span-2 space-y-2">
+                        <Label className="text-xs font-medium text-slate-600 block">Cost / unit (Rs)</Label>
+                        <Input
+                          type="number"
+                          value={itemForm.costPrice}
+                          onChange={(e) => setItemForm({ ...itemForm, costPrice: e.target.value })}
+                          className="rounded-lg border-slate-200 bg-white h-10 text-sm text-center tabular-nums"
+                          placeholder="0"
+                        />
+                      </div>
+                      <div className="md:col-span-3">
+                        <Button className="w-full bg-slate-900 hover:bg-slate-800 text-white rounded-lg h-10 text-sm" onClick={handleAddStagedItem}>
+                          Add to this bill
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-slate-200/80">
+                      <div className="space-y-2">
+                        <Label className="text-xs text-slate-600">Batch / lot (optional)</Label>
+                        <Input
+                          value={itemForm.batchNo}
+                          onChange={(e) => setItemForm({ ...itemForm, batchNo: e.target.value })}
+                          className="rounded-lg h-9 text-sm bg-white"
+                          placeholder="Lot number"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label className="text-xs text-slate-600">Expiry (optional)</Label>
+                        <DatePicker
+                          date={itemForm.expiryDate ? parseISO(itemForm.expiryDate) : undefined}
+                          onDateChange={(date) => setItemForm({ ...itemForm, expiryDate: date ? format(date, "yyyy-MM-dd") : "" })}
+                          placeholder="None"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <h4 className="text-sm font-semibold text-slate-900">Lines on this bill</h4>
+                    <p className="text-xs text-slate-500">These lines are what will be saved with the supplier invoice — not the Excel import above.</p>
+                    <div className="border border-slate-200 rounded-lg overflow-hidden bg-white">
+                      <ScrollArea className="max-h-[360px]">
+                        <Table>
+                          <TableHeader className="bg-slate-50 border-b border-slate-100">
+                            <TableRow className="h-10">
+                              <TableHead className="text-xs font-medium text-slate-600 px-4">Product</TableHead>
+                              <TableHead className="text-xs font-medium text-slate-600 text-center w-20">Qty</TableHead>
+                              <TableHead className="text-xs font-medium text-slate-600 text-right">Unit cost</TableHead>
+                              <TableHead className="text-xs font-medium text-slate-600 text-right">Line total</TableHead>
+                              <TableHead className="w-10 px-2" />
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {stagedItems.length === 0 ? (
+                              <TableRow>
+                                <TableCell colSpan={5} className="py-14 text-center">
+                                  <Package className="h-8 w-8 mx-auto text-slate-200 mb-2" />
+                                  <p className="text-sm text-slate-600 font-medium">No lines yet</p>
+                                  <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                                    Pick a product, enter quantity and cost, then click &quot;Add to this bill&quot;.
+                                  </p>
+                                </TableCell>
+                              </TableRow>
+                            ) : (
+                              stagedItems.map((item) => (
+                                <TableRow key={item.id} className="hover:bg-slate-50/80 border-b border-slate-50 last:border-0">
+                                  <TableCell className="px-4 py-3">
+                                    <div className="flex flex-col">
+                                      <span className="text-sm font-medium text-slate-900">{item.productName}</span>
+                                      {item.batchNo ? (
+                                        <span className="text-xs text-slate-500">Lot {item.batchNo}</span>
+                                      ) : null}
+                                    </div>
+                                  </TableCell>
+                                  <TableCell className="text-center text-sm tabular-nums">{item.quantity}</TableCell>
+                                  <TableCell className="text-right text-sm text-slate-600 tabular-nums">Rs {item.costPrice.toLocaleString()}</TableCell>
+                                  <TableCell className="text-right text-sm font-medium tabular-nums">Rs {item.total.toLocaleString()}</TableCell>
+                                  <TableCell className="px-2">
+                                    <button
+                                      type="button"
+                                      className="text-slate-300 hover:text-rose-600 p-2 rounded-md hover:bg-rose-50"
+                                      onClick={() => handleRemoveStagedItem(item.id)}
+                                    >
+                                      <X className="h-4 w-4" />
+                                    </button>
+                                  </TableCell>
                                 </TableRow>
-                             </TableHeader>
-                             <TableBody>
-                                {stagedItems.length === 0 ? (
-                                  <TableRow>
-                                     <TableCell colSpan={5} className="py-20 text-center">
-                                       <div className="opacity-10 scale-75">
-                                          <Package className="h-10 w-10 mx-auto mb-2" />
-                                          <p className="text-[10px] font-black uppercase tracking-widest">No Items Staged</p>
-                                       </div>
-                                     </TableCell>
-                                  </TableRow>
-                                ) : (
-                                  stagedItems.map((item) => (
-                                    <TableRow key={item.id} className="hover:bg-slate-50/50 h-14 group transition-all border-b border-slate-50 last:border-none italic-none">
-                                       <TableCell className="px-6">
-                                          <div className="flex flex-col">
-                                             <span className="font-black text-slate-900 text-xs uppercase">{item.productName}</span>
-                                             <span className="text-[9px] font-bold text-slate-400 uppercase">{item.sku} {item.batchNo && `| LOT: ${item.batchNo}`}</span>
-                                          </div>
-                                       </TableCell>
-                                       <TableCell className="font-black text-slate-900 text-center text-xs tabular-nums">{item.quantity}</TableCell>
-                                       <TableCell className="font-black text-slate-600 text-right text-xs tabular-nums">Rs {item.costPrice.toLocaleString()}</TableCell>
-                                       <TableCell className="font-black text-slate-900 text-right text-xs tabular-nums">Rs {item.total.toLocaleString()}</TableCell>
-                                       <TableCell className="px-6">
-                                          <button className="text-slate-200 hover:text-rose-500 transition-colors p-2 hover:bg-rose-50 rounded-lg" onClick={() => handleRemoveStagedItem(item.id)}>
-                                             <X className="h-4 w-4" />
-                                          </button>
-                                       </TableCell>
-                                    </TableRow>
-                                  ))
-                                )}
-                             </TableBody>
-                          </Table>
-                          </ScrollArea>
-                       </div>
+                              ))
+                            )}
+                          </TableBody>
+                        </Table>
+                      </ScrollArea>
                     </div>
-                 </CardContent>
+                  </div>
+                </CardContent>
               </Card>
             </div>
 
-            {/* Sidebar / Summary */}
             <div className="lg:col-span-4 space-y-6">
-               <Card className="rounded-xl border border-slate-200 shadow-xl bg-white p-6 space-y-6 sticky top-4">
-                  <div className="flex items-center justify-between">
-                     <div className="bg-slate-900 p-2 rounded-xl">
-                        <Calculator className="h-4 w-4 text-white" />
-                     </div>
-                     <Badge variant="outline" className="text-[9px] font-black uppercase px-3 py-1 border-slate-200">AUDIT READY</Badge>
+              <Card className="rounded-xl border border-slate-200 shadow-sm bg-white p-5 space-y-5 sticky top-4">
+                <div className="flex items-center gap-3">
+                  <div className="bg-slate-900 p-2 rounded-lg">
+                    <Calculator className="h-4 w-4 text-white" />
                   </div>
-
-                  <div className="space-y-5">
-                     <div className="flex justify-between items-center">
-                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Active SKUs</span>
-                        <span className="font-black text-slate-900 text-xs">{stagedItems.length}</span>
-                     </div>
-                     <div className="flex justify-between items-center">
-                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Gross Volume</span>
-                        <span className="font-black text-slate-900 text-xs">{stagedItems.reduce((s, i) => s + i.quantity, 0)} Units</span>
-                     </div>
-                     <div className="pt-6 border-t border-slate-100">
-                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-1">Total Net Valuation</span>
-                        <span className="text-2xl font-black text-slate-900 tracking-tighter tabular-nums truncate block">
-                          Rs {grandTotal.toLocaleString()}
-                        </span>
-                     </div>
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-900">Receipt summary</h3>
+                    <p className="text-xs text-slate-500">Step 2 only — Excel lines are not counted here.</p>
                   </div>
+                </div>
 
-                  <div className="space-y-2 text-left pt-2">
-                     <Label className="text-[9px] font-black uppercase text-slate-400 tracking-widest ml-1">Internal Remarks</Label>
-                     <Textarea 
-                      value={header.notes} 
-                      onChange={(e) => setHeader({...header, notes: e.target.value})} 
-                      placeholder="ENTER LOGISTICS OR INVENTORY NOTES..." 
-                      className="rounded-xl border-slate-200 bg-slate-50/50 resize-none h-28 focus:ring-slate-900 text-[10px] font-medium uppercase placeholder:text-slate-300"
-                     />
+                <div className="space-y-3 text-sm">
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-600">Line count</span>
+                    <span className="font-semibold text-slate-900 tabular-nums">{stagedItems.length}</span>
                   </div>
-
-                  <Button 
-                   className="w-full bg-slate-900 text-white h-11 rounded-xl font-black text-[10px] uppercase tracking-[0.2em] shadow-xl shadow-slate-200 hover:bg-black transition-all active:scale-[0.98] disabled:opacity-30"
-                   disabled={submitting || stagedItems.length === 0}
-                   onClick={handleSubmitPurchase}
-                  >
-                    {submitting ? (
-                       <div className="flex items-center gap-2">
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          SYNCING...
-                       </div>
-                    ) : "COMMIT TO STOCK"}
-                  </Button>
-
-                  <div className="p-4 bg-slate-50 rounded-xl border border-slate-100 flex gap-3">
-                     <Info className="h-3.5 w-3.5 text-slate-400 shrink-0 mt-0.5" />
-                     <p className="text-[9px] text-slate-500 font-medium leading-relaxed uppercase tracking-tight">
-                        Transaction will update physical ledger levels and adjust cost basis for all staged assets. <span className="font-black text-slate-900">THIS ACTION IS PERMANENT.</span>
-                     </p>
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-600">Total quantity</span>
+                    <span className="font-semibold text-slate-900 tabular-nums">{stagedItems.reduce((s, i) => s + i.quantity, 0)}</span>
                   </div>
-               </Card>
+                  <div className="pt-3 border-t border-slate-100">
+                    <span className="text-slate-600 text-sm block mb-1">Bill total</span>
+                    <span className="text-2xl font-semibold text-slate-900 tabular-nums">Rs {grandTotal.toLocaleString()}</span>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-xs font-medium text-slate-700">Notes (optional)</Label>
+                  <Textarea
+                    value={header.notes}
+                    onChange={(e) => setHeader({ ...header, notes: e.target.value })}
+                    placeholder="Delivery notes, vehicle, etc."
+                    className="rounded-lg border-slate-200 bg-slate-50 resize-none min-h-[88px] text-sm placeholder:text-slate-400"
+                  />
+                </div>
+
+                <Button
+                  className="w-full bg-slate-900 text-white h-11 rounded-lg text-sm font-medium hover:bg-slate-800 disabled:opacity-40"
+                  disabled={submitting || stagedItems.length === 0}
+                  onClick={handleSubmitPurchase}
+                >
+                  {submitting ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Saving…
+                    </span>
+                  ) : (
+                    "Save purchase"
+                  )}
+                </Button>
+
+                <div className="p-3 bg-amber-50 rounded-lg border border-amber-100 flex gap-2">
+                  <Info className="h-4 w-4 text-amber-700 shrink-0 mt-0.5" />
+                  <p className="text-xs text-amber-900 leading-relaxed">
+                    Saving records this supplier bill and updates stock for the lines above. Add all products before saving.
+                  </p>
+                </div>
+              </Card>
             </div>
           </div>
         )}
       </div>
+
+      <ExcelSheetUploadModal
+        open={excelUploadModalOpen}
+        onOpenChange={setExcelUploadModalOpen}
+        title="Stock In — catalog & opening stock (Excel)"
+        description="Each row creates or updates a product and can set opening stock. Same fields as Add Product in Stock Management → Inventory. This is not the supplier invoice in Step 2."
+        columns={CATALOG_IMPORT_SHEET_COLUMNS}
+        extraHelp={CATALOG_IMPORT_OPTIONAL_COLUMNS_NOTE}
+        onDownloadTemplate={downloadStockInTemplate}
+        onFileSelected={(file) => {
+          void processStockInExcelFromFile(file);
+        }}
+      />
     </div>
   );
 }

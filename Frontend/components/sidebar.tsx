@@ -135,7 +135,7 @@ const menuSections: SidebarMenuSection[] = [
   },
   {
     id: "inventory",
-    label: "Inventory Management",
+    label: "Inventory",
     expandable: true,
     items: [
       {
@@ -156,12 +156,13 @@ const menuSections: SidebarMenuSection[] = [
         icon: Warehouse,
         roles: INVENTORY_ROLES,
       },
-      // {
-      //   id: "stock-view",
-      //   label: "Stock By Location",
-      //   icon: Warehouse,
-      //   roles: INVENTORY_ROLES,
-      // },
+    ],
+  },
+  {
+    id: "stock-ops",
+    label: "Stock Operations",
+    expandable: true,
+    items: [
       {
         id: "purchases",
         label: "Stock In (Purchases)",
@@ -194,10 +195,17 @@ const menuSections: SidebarMenuSection[] = [
       },
       {
         id: "inventory-audit",
-        label: "Inventory Financial Audit",
+        label: "Financial Audit",
         icon: Shield,
         roles: INVENTORY_ROLES,
       },
+    ],
+  },
+  {
+    id: "catalog",
+    label: "Product Catalog",
+    expandable: true,
+    items: [
       {
         id: "categories",
         label: "Categories",
@@ -304,6 +312,8 @@ export function Sidebar({
   const [expandedSections, setExpandedSections] = useState<string[]>([
     "sales",
     "inventory",
+    "stock-ops",
+    "catalog",
     "people",
     "system",
   ]);

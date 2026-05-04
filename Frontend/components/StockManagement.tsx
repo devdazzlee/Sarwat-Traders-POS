@@ -89,7 +89,6 @@ export function StockManagement() {
   const [stockPageSize, setStockPageSize] = useState(20);
 
   // Dialog state
-  const [isTransferOpen, setIsTransferOpen] = useState(false);
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isAdjustOpen, setIsAdjustOpen] = useState(false);
   const [isRemoveOpen, setIsRemoveOpen] = useState(false);
@@ -98,23 +97,14 @@ export function StockManagement() {
   // Dropdown state for product selection
   const [addProductDropdownOpen, setAddProductDropdownOpen] = useState(false);
   const [adjustProductDropdownOpen, setAdjustProductDropdownOpen] = useState(false);
-  const [transferProductDropdownOpen, setTransferProductDropdownOpen] = useState(false);
   const [removeProductDropdownOpen, setRemoveProductDropdownOpen] = useState(false);
 
   // Refs for dropdown containers
   const addProductDropdownRef = React.useRef<HTMLDivElement>(null);
   const adjustProductDropdownRef = React.useRef<HTMLDivElement>(null);
-  const transferProductDropdownRef = React.useRef<HTMLDivElement>(null);
   const removeProductDropdownRef = React.useRef<HTMLDivElement>(null);
 
   // Form state
-  const [transferForm, setTransferForm] = useState({
-    productId: "",
-    fromBranchId: "",
-    toBranchId: "",
-    quantity: "" as string | number,
-    notes: "",
-  });
 
   const [addForm, setAddForm] = useState({
     productId: "",
@@ -223,7 +213,6 @@ export function StockManagement() {
     const handleClickOutside = (event: MouseEvent) => {
       if (addProductDropdownRef.current && !addProductDropdownRef.current.contains(event.target as Node)) setAddProductDropdownOpen(false);
       if (adjustProductDropdownRef.current && !adjustProductDropdownRef.current.contains(event.target as Node)) setAdjustProductDropdownOpen(false);
-      if (transferProductDropdownRef.current && !transferProductDropdownRef.current.contains(event.target as Node)) setTransferProductDropdownOpen(false);
       if (removeProductDropdownRef.current && !removeProductDropdownRef.current.contains(event.target as Node)) setRemoveProductDropdownOpen(false);
     };
 
@@ -238,39 +227,6 @@ export function StockManagement() {
   const totalStockPages = stockMeta.totalPages || 1;
 
   // Handlers
-  const handleTransfer = async () => {
-    const quantity = typeof transferForm.quantity === "string"
-      ? (transferForm.quantity === "" ? 0 : Number(transferForm.quantity) || 0)
-      : transferForm.quantity;
-
-    if (!transferForm.productId || !transferForm.fromBranchId || !transferForm.toBranchId || quantity <= 0) {
-      toast.error("Please fill all required fields");
-      return;
-    }
-
-    setIsTransferring(true);
-    try {
-      await apiClient.post(`${API_BASE}/stock/transfer`, {
-        productId: transferForm.productId,
-        fromBranchId: transferForm.fromBranchId,
-        toBranchId: transferForm.toBranchId,
-        quantity: quantity,
-        notes: transferForm.notes,
-      });
-
-      setIsTransferOpen(false);
-      setTransferForm({ productId: "", fromBranchId: "", toBranchId: "", quantity: "", notes: "" });
-      setProductSearch("");
-      setTransferProductDropdownOpen(false);
-      refreshAllData();
-
-      toast.success("Stock transferred successfully");
-    } catch (e: any) {
-      showErrorToast(e);
-    } finally {
-      setIsTransferring(false);
-    }
-  };
 
   const handleAddStock = async () => {
     const quantity = typeof addForm.quantity === "string"
@@ -401,19 +357,17 @@ export function StockManagement() {
     setProductSearch("");
     setAddProductDropdownOpen(false);
     setAdjustProductDropdownOpen(false);
-    setTransferProductDropdownOpen(false);
     setRemoveProductDropdownOpen(false);
     // Reset forms to default
     setAddForm({ productId: "", branchId: "", quantity: "", supplierId: "", unitCost: "" });
     setAdjustForm({ productId: "", branchId: "", quantityChange: "", reason: "CORRECTION" });
-    setRemoveForm({ productId: "", branch_id: "", quantity: "", reason: "WASTE", notes: "" });
-    setTransferForm({ productId: "", fromBranchId: "", toBranchId: "", quantity: "", notes: "" });
+    setRemoveForm({ productId: "", branchId: "", quantity: "", reason: "WASTE", notes: "" });
   };
 
   const handleExport = () => {
     if (allStocks.length === 0) return;
 
-    const headers = ["Product", "Branch", "SKU", "Category", "Quantity", "Last Updated"];
+    const headers = ["Product", "Branch", "Item code", "Category", "Quantity", "Last Updated"];
     const csvContent = [
       headers.join(","),
       ...allStocks.map(s => [
@@ -447,7 +401,7 @@ export function StockManagement() {
   return (
     <div className="p-4 md:p-5 space-y-8 bg-slate-50/30 min-h-screen">
       {/* HEADER SECTION: THE COMMAND CENTER */}
-      <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-6">
+      <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
         <div className="space-y-1">
           <div className="flex items-center gap-3">
             <div className="h-10 w-10 bg-slate-900 rounded-lg shadow-md shadow-slate-100 flex items-center justify-center">
@@ -457,39 +411,12 @@ export function StockManagement() {
               <h1 className="text-2xl font-black text-slate-900 tracking-tight flex items-center gap-2">
                 Stock Management
               </h1>
-
             </div>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
-          <Button
-            variant="outline"
-            onClick={handleExport}
-            className="hidden sm:flex h-9 border-slate-300 rounded-md text-slate-600 bg-white hover:bg-slate-50 text-xs font-medium gap-2 px-4 shadow-sm"
-          >
-            <FileDown className="h-4 w-4" /> Export
-          </Button>
-
-          <Button
-            variant="outline"
-            onClick={() => setIsBulkImportOpen(true)}
-            className="hidden sm:flex h-9 border-slate-300 rounded-md text-slate-600 bg-white hover:bg-slate-50 text-xs font-medium gap-2 px-4 shadow-sm"
-          >
-            <Upload className="h-4 w-4" /> Bulk Import
-          </Button>
-
-          <Button 
-            variant="outline" 
-            size="icon" 
-            onClick={() => { refreshAllData(); triggerGlobalRefresh(); }} 
-            disabled={isLoading || globalLoading} 
-            className="h-9 w-9 border-slate-300 rounded-md bg-white shadow-sm flex-shrink-0"
-          >
-            <RefreshCw className={`h-4 w-4 ${isLoading || globalLoading ? 'animate-spin' : ''}`} />
-          </Button>
-        </div>
-          <div className="flex items-center bg-white p-1 rounded-md border border-slate-200 shadow-sm gap-1">
+        {/* Primary action buttons: RECORD / ADJUST / DISPOSE */}
+        <div className="flex items-center bg-white p-1 rounded-md border border-slate-200 shadow-sm gap-1">
             <Dialog
               open={isAddOpen}
               onOpenChange={(open) => {
@@ -502,7 +429,7 @@ export function StockManagement() {
                   <Plus className="h-3.5 w-3.5" /> RECORD
                 </Button>
               </DialogTrigger>
-              <DialogContent className="max-w-lg bg-white border border-slate-100 shadow-xl">
+              <DialogContent className="max-w-2xl bg-white border border-slate-100 shadow-xl">
                 <DialogHeader>
                   <DialogTitle className="text-xl font-bold text-slate-900">Add Stock</DialogTitle>
                   <DialogDescription className="text-xs font-medium text-slate-500 uppercase tracking-wider">
@@ -543,7 +470,6 @@ export function StockManagement() {
                                 >
                                   <div className="flex flex-col">
                                     <span className="text-xs font-semibold text-slate-800">{p.name}</span>
-                                    <span className="text-[10px] text-slate-500 uppercase">{p.sku || p.id.slice(0, 8)}</span>
                                   </div>
                                 </button>
                               ))}
@@ -614,7 +540,7 @@ export function StockManagement() {
                   <Edit className="h-3.5 w-3.5 text-slate-500" /> ADJUST
                 </Button>
               </DialogTrigger>
-              <DialogContent className="max-w-md bg-white border border-slate-100 shadow-xl">
+              <DialogContent className="max-w-2xl bg-white border border-slate-100 shadow-xl">
                 <DialogHeader>
                   <DialogTitle className="text-xl font-bold text-slate-900">Adjust Stock</DialogTitle>
                   <DialogDescription className="text-xs font-medium text-slate-500 uppercase tracking-wider">
@@ -627,7 +553,7 @@ export function StockManagement() {
                     <div className="relative group">
                       <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-600 transition-colors" />
                       <Input
-                        placeholder="Type SKU or Product Name..."
+                        placeholder="Search product…"
                         value={productSearch}
                         onFocus={() => setAdjustProductDropdownOpen(true)}
                         autoComplete="off"
@@ -655,7 +581,6 @@ export function StockManagement() {
                                 >
                                   <div className="flex flex-col">
                                     <span className="text-xs font-semibold text-slate-800">{p.name}</span>
-                                    <span className="text-[10px] text-slate-500 uppercase">{p.sku || p.id.slice(0, 8)}</span>
                                   </div>
                                 </button>
                               ))}
@@ -741,7 +666,7 @@ export function StockManagement() {
                   <TrendingDown className="h-3.5 w-3.5 text-slate-500" /> DISPOSE
                 </Button>
               </DialogTrigger>
-              <DialogContent className="max-w-md bg-white border border-slate-100 shadow-xl">
+              <DialogContent className="max-w-2xl bg-white border border-slate-100 shadow-xl">
                 <DialogHeader>
                   <DialogTitle className="text-xl font-bold text-slate-900">Remove Stock</DialogTitle>
                   <DialogDescription className="text-xs font-medium text-slate-500 uppercase tracking-wider">
@@ -782,7 +707,6 @@ export function StockManagement() {
                                 >
                                   <div className="flex flex-col">
                                     <span className="text-xs font-semibold text-slate-800">{p.name}</span>
-                                    <span className="text-[10px] text-slate-500 uppercase">{p.sku || p.id.slice(0, 8)}</span>
                                   </div>
                                 </button>
                               ))}
@@ -839,141 +763,51 @@ export function StockManagement() {
                 </DialogFooter>
               </DialogContent>
             </Dialog>
-            <Dialog
-              open={isTransferOpen}
-              onOpenChange={(open) => {
-                setIsTransferOpen(open);
-                if (!open) clearProductUI();
-              }}
-            >
-              <DialogTrigger asChild>
-                <Button variant="ghost" className="text-slate-600 hover:bg-slate-50 font-bold h-8 px-4 rounded-lg text-xs gap-2">
-                  <ArrowRightLeft className="h-3.5 w-3.5 text-slate-500" /> TRANSFER
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="max-w-md bg-white border border-slate-100 shadow-xl">
-                <DialogHeader>
-                  <DialogTitle className="text-xl font-bold text-slate-900">Transfer Stock</DialogTitle>
-                  <DialogDescription className="text-xs font-medium text-slate-500 uppercase tracking-wider">
-                    Move inventory between branch nodes
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="space-y-4 py-4">
-                  <div className="space-y-2 relative" ref={transferProductDropdownRef}>
-                    <Label className="text-xs font-semibold text-slate-700">Asset for Transit</Label>
-                    <div className="relative group">
-                      <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-600 transition-colors" />
-                      <Input
-                        placeholder="Search product to transfer..."
-                        value={productSearch}
-                        onFocus={() => setTransferProductDropdownOpen(true)}
-                        autoComplete="off"
-                        onChange={(e) => {
-                          setProductSearch(e.target.value);
-                          setTransferProductDropdownOpen(true);
-                        }}
-                        className="pl-10 h-10 border-slate-300 rounded-md bg-white text-sm"
-                      />
-                      {transferProductDropdownOpen && (
-                        <Card className="absolute left-0 right-0 z-[100] mt-1 max-h-60 overflow-y-auto rounded-md border border-slate-200 bg-white shadow-lg">
-                          {filteredProducts.length === 0 ? (
-                            <div className="p-4 text-center text-xs text-slate-400">No products found</div>
-                          ) : (
-                            <div className="p-1">
-                              {filteredProducts.map((p) => (
-                                <button
-                                  key={p.id}
-                                  className="flex w-full items-center justify-between px-3 py-2 text-left hover:bg-slate-50 transition-all rounded-sm group"
-                                  onClick={() => {
-                                    setTransferForm({ ...transferForm, productId: p.id });
-                                    setProductSearch(p.name);
-                                    setTransferProductDropdownOpen(false);
-                                  }}
-                                >
-                                  <div className="flex flex-col">
-                                    <span className="text-xs font-semibold text-slate-800">{p.name}</span>
-                                    <span className="text-[10px] text-slate-500 uppercase">{p.sku || p.id.slice(0, 8)}</span>
-                                  </div>
-                                </button>
-                              ))}
-                            </div>
-                          )}
-                        </Card>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label className="text-xs font-semibold text-slate-700">Source Branch</Label>
-                      <Select value={transferForm.fromBranchId} onValueChange={(v) => setTransferForm({ ...transferForm, fromBranchId: v })}>
-                        <SelectTrigger className="h-10 border-slate-300 rounded-md bg-white text-sm">
-                          <SelectValue placeholder="Select Source" />
-                        </SelectTrigger>
-                        <SelectContent className="rounded-md shadow-xl">
-                          {branches.map(b => (
-                            <SelectItem key={b.id} value={b.id} disabled={b.id === transferForm.toBranchId} className="text-sm">{b.name}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-2">
-                      <Label className="text-xs font-semibold text-slate-700">Destination Branch</Label>
-                      <Select value={transferForm.toBranchId} onValueChange={(v) => setTransferForm({ ...transferForm, toBranchId: v })}>
-                        <SelectTrigger className="h-10 border-slate-300 rounded-md bg-white text-sm">
-                          <SelectValue placeholder="Select Destination" />
-                        </SelectTrigger>
-                        <SelectContent className="rounded-md shadow-xl">
-                          {branches.map(b => (
-                            <SelectItem key={b.id} value={b.id} disabled={b.id === transferForm.fromBranchId} className="text-sm">{b.name}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label className="text-xs font-semibold text-slate-700">Quantity</Label>
-                    <Input
-                      type="number"
-                      placeholder="0"
-                      value={transferForm.quantity}
-                      onChange={(e) => setTransferForm({ ...transferForm, quantity: e.target.value })}
-                      className="h-10 border-slate-300 rounded-md bg-white text-sm"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label className="text-xs font-semibold text-slate-700">Transfer Remarks</Label>
-                    <Input
-                      placeholder="Optional details..."
-                      value={transferForm.notes}
-                      onChange={(e) => setTransferForm({ ...transferForm, notes: e.target.value })}
-                      className="h-10 border-slate-300 rounded-md bg-white text-sm"
-                    />
-                  </div>
-                </div>
-                <DialogFooter className="gap-2 border-t border-slate-100 pt-5">
-                  <Button variant="outline" className="h-10 px-6" onClick={() => setIsTransferOpen(false)}>Cancel</Button>
-                  <Button className="bg-slate-900 hover:bg-slate-800 text-white h-10 px-6 font-medium rounded-md shadow-sm text-sm transition-all" onClick={handleTransfer} disabled={isTransferring}>
-                    {isTransferring && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
-                    Confirm Transfer
-                  </Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
-
           </div>
+      </div>
+
+      {/* Secondary buttons row: Export / Catalog import (Excel) / Reload */}
+      <div className="flex flex-wrap items-center gap-2 justify-end pt-2">
+        <Button
+          variant="outline"
+          onClick={handleExport}
+          className="h-8 border-slate-200 rounded-md text-slate-500 bg-white hover:bg-slate-50 text-xs font-medium gap-2 px-3 shadow-sm"
+        >
+          <FileDown className="h-3.5 w-3.5" /> Export
+        </Button>
+
+        <div className="relative group">
+          <Button
+            variant="outline"
+            onClick={() => setIsBulkImportOpen(true)}
+            className="h-8 border-slate-200 rounded-md text-slate-500 bg-white hover:bg-slate-50 text-xs font-medium gap-2 px-3 shadow-sm"
+          >
+            <Upload className="h-3.5 w-3.5" /> New products (Excel)
+          </Button>
+          <span className="absolute top-full right-0 mt-1 w-[200px] text-[9px] text-slate-400 text-right leading-tight hidden sm:block">
+            Adds catalog items + opening qty — not stock-in/out slips
+          </span>
         </div>
+
+        <Button
+          variant="outline"
+          size="icon"
+          onClick={() => { refreshAllData(); triggerGlobalRefresh(); }}
+          disabled={isLoading || globalLoading}
+          className="h-8 w-8 border-slate-200 rounded-md bg-white shadow-sm flex-shrink-0"
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${isLoading || globalLoading ? 'animate-spin' : ''}`} />
+        </Button>
+      </div>
 
       {/* KPI GRID: THE POWER PANEL */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-        {/* TOTAL SKUs */}
+        {/* Tracked product / stock lines */}
         <Card className="border-none shadow-md bg-white rounded-xl overflow-hidden transition-all hover:shadow-xl hover:-translate-y-0.5">
           <CardContent className="p-5">
             <div className="flex items-start justify-between">
               <div>
-                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-0.5">Inventory SKUs</p>
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-0.5">Products tracked</p>
                 {isLoading ? (
                   <div className="h-9 w-20 bg-slate-100 animate-pulse rounded-lg mt-1" />
                 ) : (
@@ -1057,7 +891,7 @@ export function StockManagement() {
         <div className="flex-1 w-full relative group">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
           <Input
-            placeholder="Search by Product Name or SKU..."
+            placeholder="Search by product name…"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="pl-10 h-10 rounded-md border-slate-300 bg-white text-sm"
@@ -1122,11 +956,12 @@ export function StockManagement() {
             <CardContent className="p-0 relative">
 
 
+              <div className="overflow-x-auto">
               <Table>
                 <TableHeader className="bg-slate-50/30">
                   <TableRow className="hover:bg-transparent border-slate-100">
                     <TableHead className="w-[300px] font-black text-[10px] uppercase tracking-widest text-slate-400 p-5 py-4">Product Detail</TableHead>
-                    <TableHead className="font-black text-[10px] uppercase tracking-widest text-slate-400 py-4">Identity / SKU</TableHead>
+                    <TableHead className="font-black text-[10px] uppercase tracking-widest text-slate-400 py-4">Item code</TableHead>
                     <TableHead className="font-black text-[10px] uppercase tracking-widest text-slate-400 py-4 text-center">In-Hand Units</TableHead>
                     <TableHead className="font-black text-[10px] uppercase tracking-widest text-slate-400 py-4">Status</TableHead>
                     <TableHead className="font-black text-[10px] uppercase tracking-widest text-slate-400 p-5 py-4 text-right">Synchronization</TableHead>
@@ -1161,8 +996,8 @@ export function StockManagement() {
                             </div>
                           </TableCell>
                           <TableCell>
-                            <div className="font-mono text-[11px] font-extrabold text-slate-500 bg-slate-50 px-2 py-1 rounded inline-block uppercase italic">
-                              {s.product.sku || (s.product.id ? s.product.id.slice(0, 8) : 'N/A')}
+                            <div className="font-mono text-[11px] font-medium text-slate-600 bg-slate-50 px-2 py-1 rounded inline-block">
+                              {s.product.sku || (s.product.id ? s.product.id.slice(0, 8) : "—")}
                             </div>
                           </TableCell>
                           <TableCell className="text-center">
@@ -1185,6 +1020,7 @@ export function StockManagement() {
                   )}
                 </TableBody>
               </Table>
+              </div>
 
               {/* Pagination Section */}
               {totalStockPages > 1 && (
@@ -1222,6 +1058,7 @@ export function StockManagement() {
         {/* Movement History Tab Content */}
         <TabsContent value="history" className="mt-0 outline-none">
           <Card className="border-none shadow-sm rounded-xl overflow-hidden bg-white">
+            <div className="overflow-x-auto">
             <Table>
               <TableHeader className="bg-slate-50/30">
                 <TableRow className="border-slate-100">
@@ -1277,12 +1114,14 @@ export function StockManagement() {
                 )}
               </TableBody>
             </Table>
+            </div>
           </Card>
         </TabsContent>
 
         {/* Today's Movement Tab */}
         <TabsContent value="today" className="mt-0 outline-none">
           <Card className="border-none shadow-sm rounded-3xl overflow-hidden bg-white">
+            <div className="overflow-x-auto">
             <Table>
               <TableHeader className="bg-slate-50/30">
                 <TableRow className="border-slate-100">
@@ -1325,6 +1164,7 @@ export function StockManagement() {
                 )}
               </TableBody>
             </Table>
+            </div>
           </Card>
         </TabsContent>
       </Tabs>

@@ -79,7 +79,15 @@ app.use(cors({
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  // Must list every non-simple header the browser may send, or preflight fails (DevTools: CORS error).
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Requested-With',
+    'X-Operation-Id',
+    'X-Skip-Offline-Cache',
+    'X-Skip-Offline-Queue',
+  ],
   exposedHeaders: ['Content-Range', 'X-Content-Range']
 }));
 app.use(helmet({

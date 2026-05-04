@@ -58,6 +58,7 @@ import { SaleEditor } from "./sale-editor";
 
 interface SaleItem {
   id: string;
+  product_id?: string;
   product: {
     name: string;
     sku?: string;
@@ -145,7 +146,9 @@ export function SalesHistory() {
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(false);
   const [viewSale, setViewSale] = useState<Sale | null>(null);
-  const [editSale, setEditSale] = useState<Sale | null>(null);
+  const [saleEditorOpen, setSaleEditorOpen] = useState(false);
+  const [saleEditorData, setSaleEditorData] = useState<Sale | null>(null);
+  const [saleEditorLoading, setSaleEditorLoading] = useState(false);
   const [viewLoading, setViewLoading] = useState(false);
   const [branchInfo, setBranchInfo] = useState<BranchInfo>({
     name: "SARWAT TRADER",
@@ -203,6 +206,34 @@ export function SalesHistory() {
   };
 
   // Fetch sales
+  const openSaleEditor = async (saleId: string) => {
+    setSaleEditorOpen(true);
+    setSaleEditorLoading(true);
+    setSaleEditorData(null);
+    try {
+      const res = await apiClient.get(`/sale/${saleId}`);
+      const envelope = res.data as { data?: Sale; success?: boolean };
+      const full = envelope?.data;
+      if (!full?.id) {
+        throw new Error("Invalid sale response");
+      }
+      setSaleEditorData(full);
+    } catch (err: any) {
+      console.error("Failed to load sale for edit:", err);
+      toast({
+        title: "Could not open sale editor",
+        description:
+          err?.response?.data?.message ||
+          err?.message ||
+          "Failed to load sale details. Try again.",
+        variant: "destructive",
+      });
+      setSaleEditorOpen(false);
+    } finally {
+      setSaleEditorLoading(false);
+    }
+  };
+
   const fetchSales = async () => {
     setLoading(true);
     try {
@@ -1101,7 +1132,7 @@ export function SalesHistory() {
                           <Button
                             size="sm"
                             variant="ghost"
-                            onClick={() => setEditSale(s)}
+                            onClick={() => openSaleEditor(s.id)}
                             title="Edit Sale"
                             className="text-amber-600 hover:text-amber-700 hover:bg-amber-50"
                           >
@@ -1354,10 +1385,17 @@ export function SalesHistory() {
           ) : null}
         </DialogContent>
       </Dialog>
-      <SaleEditor 
-        sale={editSale as any} 
-        open={!!editSale} 
-        onOpenChange={(open) => !open && setEditSale(null)} 
+      <SaleEditor
+        sale={saleEditorData}
+        open={saleEditorOpen}
+        loading={saleEditorLoading}
+        onOpenChange={(open) => {
+          if (!open) {
+            setSaleEditorOpen(false);
+            setSaleEditorData(null);
+            setSaleEditorLoading(false);
+          }
+        }}
         onSuccess={fetchSales}
       />
     </div>

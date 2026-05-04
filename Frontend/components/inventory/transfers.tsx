@@ -56,26 +56,7 @@ import { API_BASE } from "@/config/constants";
 import { toast } from "sonner";
 import { usePosData } from "@/hooks/use-pos-data";
 import { cn } from "@/lib/utils";
-
-// --- PROFESSIONAL LOADER ---
-function ProfessionalLoader({ message = "Synchronizing Transfer Ledger..." }: { message?: string }) {
-  return (
-    <div className="min-h-[60vh] flex flex-col items-center justify-center p-8 animate-in fade-in zoom-in duration-500">
-      <div className="relative mb-8 pt-10">
-        <div className="h-20 w-20 rounded-full border-4 border-slate-100 border-t-indigo-600 animate-spin" />
-        <div className="absolute inset-0 flex items-center justify-center mt-10">
-           <div className="h-10 w-10 bg-indigo-50 rounded-full flex items-center justify-center animate-pulse shadow-lg shadow-indigo-100">
-              <Truck className="h-5 w-5 text-indigo-600" />
-           </div>
-        </div>
-      </div>
-      <div className="text-center space-y-2">
-        <p className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-slate-900 to-slate-700">{message}</p>
-        <p className="text-sm text-slate-400 font-medium tracking-wide uppercase">Enterprise Data Node: Online</p>
-      </div>
-    </div>
-  );
-}
+import { PageLoader } from "@/components/ui/page-loader";
 
 // --- KPI CARD COMPONENT ---
 function KpiCard({ title, value, icon: Icon, color, description }: any) {
@@ -357,10 +338,10 @@ export function Transfers() {
     return { total, pending, dispatched, received };
   }, [transfers]);
 
-  if (loading && transfers.length === 0) return <ProfessionalLoader />;
+  if (loading && transfers.length === 0) return <PageLoader message="Loading transfers..." />;
 
   return (
-    <div className="p-6 max-w-[1600px] mx-auto space-y-8 animate-in fade-in duration-500">
+    <div className="p-6 space-y-8 animate-in fade-in duration-500">
       {/* HEADER SECTION */}
       <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6">
         <div className="space-y-1">

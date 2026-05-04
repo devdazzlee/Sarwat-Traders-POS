@@ -78,6 +78,21 @@ import {
 import { Check, ChevronsUpDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useHoldSales } from "@/hooks/use-hold-sales";
+import { normalizeBranchId } from "@/lib/branch-utils";
+
+type SalePaymentMethod = "Cash" | "Credit" | "Card";
+
+function getStoredBranchIdForSale(): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  const id = normalizeBranchId(localStorage.getItem("branch"));
+  return id || undefined;
+}
+
+function toApiPaymentMethod(method: SalePaymentMethod): "CASH" | "CARD" | "CREDIT" {
+  if (method === "Cash") return "CASH";
+  if (method === "Card") return "CARD";
+  return "CREDIT";
+}
 
 interface CartItem {
   id: string; // Unique cart item ID (product.id + timestamp for separate entries)
@@ -115,6 +130,64 @@ interface Product {
 // Printer type from global hook
 type Printer = ReturnType<typeof usePrinterSettings>["printers"][number];
 
+/** Best-effort message from axios/API errors (validation, stock, discount, etc.) */
+function formatSaleApiError(error: unknown): string {
+  const e = error as {
+    message?: string;
+    response?: { data?: unknown };
+  };
+  const d = e?.response?.data;
+  if (d !== undefined && d !== null) {
+    if (typeof d === "string" && d.trim()) return d.trim();
+    if (typeof d === "object") {
+      const o = d as Record<string, unknown>;
+      if (typeof o.message === "string" && o.message.trim()) return o.message.trim();
+      if (Array.isArray(o.message)) {
+        const parts = o.message.map((x) =>
+          typeof x === "string" ? x : (x as { message?: string })?.message ?? JSON.stringify(x)
+        );
+        const joined = parts.filter(Boolean).join(", ");
+        if (joined) return joined;
+      }
+      if (typeof o.error === "string" && o.error.trim()) return o.error.trim();
+      if (Array.isArray(o.errors)) {
+        const parts = (o.errors as unknown[]).map((x) =>
+          typeof x === "string" ? x : (x as { message?: string })?.message ?? JSON.stringify(x)
+        );
+        const joined = parts.filter(Boolean).join(", ");
+        if (joined) return joined;
+      }
+      if (o.errors && typeof o.errors === "object" && !Array.isArray(o.errors)) {
+        const parts = Object.entries(o.errors as Record<string, unknown>).map(([k, v]) => {
+          const val = Array.isArray(v) ? v.join(", ") : String(v);
+          return `${k}: ${val}`;
+        });
+        if (parts.length) return parts.join("; ");
+      }
+      if (typeof o.detail === "string" && o.detail.trim()) return o.detail.trim();
+    }
+  }
+  if (typeof e?.message === "string" && e.message.trim()) return e.message.trim();
+  return "Something went wrong while processing the sale.";
+}
+
+const SALE_ERROR_NOTIFIED = "__saleErrorNotified" as const;
+
+function markSaleErrorUserNotified(error: unknown) {
+  try {
+    Object.defineProperty(error as object, SALE_ERROR_NOTIFIED, {
+      value: true,
+      enumerable: false,
+      configurable: true,
+    });
+  } catch {
+    (error as Record<string, unknown>)[SALE_ERROR_NOTIFIED] = true;
+  }
+}
+
+function wasSaleErrorUserNotified(error: unknown): boolean {
+  return Boolean((error as Record<string, unknown>)?.[SALE_ERROR_NOTIFIED]);
+}
 
 export function NewSale() {
   const { toast } = useToast();
@@ -128,7 +201,7 @@ export function NewSale() {
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
-  const [paymentMethodPending, setPaymentMethodPending] = useState<"Cash" | "Credit" | null>(null);
+  const [paymentMethodPending, setPaymentMethodPending] = useState<SalePaymentMethod | null>(null);
   const [tenderedAmount, setTenderedAmount] = useState("");
   const [calculatedChange, setCalculatedChange] = useState(0);
   const [calculatedCredit, setCalculatedCredit] = useState(0);
@@ -964,7 +1037,15 @@ export function NewSale() {
     resetPaymentState();
   };
 
-  const startPayment = (method: "Cash" | "Credit") => {
+  const startPayment = (method: SalePaymentMethod) => {
+    if (method === "Credit" && !selectedCustomer) {
+      toast({
+        variant: "destructive",
+        title: "Customer required",
+        description: "Please select or add a customer for credit sales.",
+      });
+      return;
+    }
     setPaymentMethodPending(method);
     setTenderedAmount(method === "Credit" ? "0" : total.toFixed(2));
     setPaymentError("");
@@ -982,6 +1063,16 @@ export function NewSale() {
 
   const confirmPayment = async () => {
     if (!paymentMethodPending) {
+      return;
+    }
+
+    if (paymentMethodPending === "Credit" && !selectedCustomer) {
+      setPaymentError("Select a customer for credit sales.");
+      toast({
+        variant: "destructive",
+        title: "Customer required",
+        description: "Please select or add a customer for credit sales.",
+      });
       return;
     }
 
@@ -1012,7 +1103,7 @@ export function NewSale() {
   };
 
   const handlePayment = async (
-    method: "Cash" | "Credit",
+    method: SalePaymentMethod,
     amountPaid: number,
     changeAmount: number
   ): Promise<InvoiceData | null> => {
@@ -1039,7 +1130,7 @@ export function NewSale() {
         // Prepare payload
         const payload: any = {
           items: saleItems,
-          paymentMethod: method === "Cash" ? "CASH" : "CREDIT",
+          paymentMethod: toApiPaymentMethod(method),
           discountAmount: globalDiscountAmount,
         };
         if (selectedCustomer) {
@@ -1062,8 +1153,29 @@ export function NewSale() {
             saleData = saleResponse.data.data;
             transactionId = saleData.sale_number || generateTransactionId();
           } catch (error: any) {
-            // If API call fails, fall back to offline mode
-            console.warn("API call failed, saving offline:", error);
+            // Distinguish real API errors (validation, business rules) from network failures.
+            // - 4xx/5xx with a server response → surface the actual error to the user, do NOT silently queue
+            // - true network failure (no response) → fall back to offline queue
+            const hasServerResponse = !!error?.response;
+            const isNetworkFailure =
+              !hasServerResponse ||
+              error?.code === "ERR_NETWORK" ||
+              error?.code === "ECONNABORTED";
+
+            if (hasServerResponse && !isNetworkFailure) {
+              const apiMsg = formatSaleApiError(error);
+              console.error("Sale API error:", error.response?.data ?? error);
+              toast({
+                variant: "destructive",
+                title: "Sale failed",
+                description: apiMsg,
+              });
+              markSaleErrorUserNotified(error);
+              throw error;
+            }
+
+            // True offline / unreachable backend: queue for sync
+            console.warn("Network unreachable, saving offline:", error);
             transactionId = generateTransactionId();
             saleData = {
               sale_number: transactionId,
@@ -1071,26 +1183,24 @@ export function NewSale() {
               _pending: true,
               _offline: true
             };
-            
-            // Save sale to IndexedDB for later sync
+
             await offlineDB.saveSale({
               id: transactionId,
               products: saleItems,
               total: total,
               customer: selectedCustomer ? { id: selectedCustomer } : null,
               payment: {
-                method: method === "Cash" ? "CASH" : "CREDIT",
+                method: toApiPaymentMethod(method),
                 amountPaid,
                 changeAmount
               },
               employeeId: localStorage.getItem("userId") || undefined,
-              branchId: branchId || undefined,
+              branchId: getStoredBranchIdForSale(),
               timestamp: Date.now(),
               synced: false,
               discountAmount: globalDiscountAmount,
             });
 
-            // Queue the API request directly — avoids a second live API call
             await offlineDB.enqueue({
               operationId: crypto.randomUUID(),
               type: 'sale',
@@ -1100,6 +1210,11 @@ export function NewSale() {
               maxRetries: 5,
               priority: 10,
               headers: {},
+            });
+
+            toast({
+              title: "Saved offline",
+              description: "Network is unavailable — sale will sync when you're back online.",
             });
           }
         } else {
@@ -1119,12 +1234,12 @@ export function NewSale() {
             total: total,
             customer: selectedCustomer ? { id: selectedCustomer } : null,
             payment: {
-              method: method === "Cash" ? "CASH" : "CREDIT",
+              method: toApiPaymentMethod(method),
               amountPaid,
               changeAmount
             },
             employeeId: localStorage.getItem("userId") || undefined,
-            branchId: branchId || undefined,
+            branchId: getStoredBranchIdForSale(),
             timestamp: Date.now(),
             synced: false,
             discountAmount: globalDiscountAmount,
@@ -1174,8 +1289,13 @@ export function NewSale() {
           storeAddress: fullAddress,
           storePhone: "02132727444",
           customerName: selectedCustomerObj?.name || "Walk-in Customer",
-          customerPhone: selectedCustomerObj?.phone_number || "",
-          customerWhatsApp: selectedCustomerObj?.whatsapp_number || selectedCustomerObj?.phone_number || "",
+          customerPhone:
+            selectedCustomerObj?.phone_number || selectedCustomerObj?.phone || "",
+          customerWhatsApp:
+            selectedCustomerObj?.whatsapp_number ||
+            selectedCustomerObj?.phone_number ||
+            selectedCustomerObj?.phone ||
+            "",
           customerEmail: selectedCustomerObj?.email || "",
           saleNumber: transactionId,
           date: new Date(),
@@ -1193,8 +1313,15 @@ export function NewSale() {
           balanceDue: method === "Credit" ? Math.max(0, total - amountPaid) : 0,
           amountPaid: method === "Credit" ? amountPaid : total,
         };
-      } catch (error) {
+      } catch (error: unknown) {
         console.error("Payment error:", error);
+        if (!wasSaleErrorUserNotified(error)) {
+          toast({
+            variant: "destructive",
+            title: "Sale failed",
+            description: formatSaleApiError(error),
+          });
+        }
         return null;
       }
     });
@@ -1566,6 +1693,14 @@ export function NewSale() {
       if ((e.key === 'd' || e.key === 'D') && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
         if (cart.length > 0 && total > 0 && !paymentDialogOpen) {
+          if (!selectedCustomer) {
+            toast({
+              variant: "destructive",
+              title: "Customer required",
+              description: "Please select or add a customer for credit sales.",
+            });
+            return;
+          }
           startPayment("Credit");
         }
         return;
@@ -1588,7 +1723,7 @@ export function NewSale() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [cart, total, paymentDialogOpen, paymentMethodPending, startPayment, isScanning]);
+  }, [cart, total, paymentDialogOpen, paymentMethodPending, startPayment, isScanning, selectedCustomer, toast]);
 
   return (
     <div className="flex flex-col lg:flex-row h-screen">
@@ -2565,8 +2700,8 @@ export function NewSale() {
                   size="sm"
                   variant="outline"
                   onClick={() => startPayment("Credit")}
-                  disabled={paymentLoading || (!selectedCustomer && total > 0)}
-                  className="h-10 text-sm border-blue-200 hover:bg-blue-50 hover:text-blue-700 text-blue-600 font-semibold"
+                  disabled={paymentLoading || !selectedCustomer || cart.length === 0}
+                  className="h-10 text-sm border-blue-200 hover:bg-blue-50 hover:text-blue-700 text-blue-600 font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <CreditCard className="mr-2 h-4 w-4" />
                   Credit Sale
@@ -2808,14 +2943,31 @@ export function NewSale() {
                       description: "Customer will be created when connection is restored.",
                     });
                   } else {
-                    const res = await apiClient.post("/customer", custPayload);
-                    await fetchCustomers(true);
-                    if (res.data?.data?.id) setSelectedCustomer(res.data.data.id);
-                    toast({
-                      title: "Success",
-                      description: "Customer added and selected successfully",
-                      className: "bg-emerald-50 border-emerald-200 text-emerald-800",
-                    });
+                    try {
+                      const res = await apiClient.post("/customer", custPayload);
+                      await fetchCustomers(true);
+                      if (res.data?.data?.id) setSelectedCustomer(res.data.data.id);
+                      toast({
+                        title: "Success",
+                        description: "Customer added and selected successfully",
+                        className: "bg-emerald-50 border-emerald-200 text-emerald-800",
+                      });
+                    } catch {
+                      await offlineDB.enqueue({
+                        operationId: crypto.randomUUID(),
+                        type: 'customer',
+                        url: '/customer',
+                        method: 'POST',
+                        payload: custPayload,
+                        maxRetries: 5,
+                        priority: 7,
+                        headers: {},
+                      });
+                      toast({
+                        title: "Saved for sync",
+                        description: "Could not reach the server. Customer will be created when connection is stable.",
+                      });
+                    }
                   }
 
                   setIsAddCustomerOpen(false);

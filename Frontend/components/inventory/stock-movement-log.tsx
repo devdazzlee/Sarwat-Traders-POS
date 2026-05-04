@@ -20,15 +20,15 @@ import {
   TableRow 
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { 
+import {
   Download,
   Search,
   Activity,
   ArrowUpRight,
   ArrowDownRight,
   Package,
-  Calendar, 
-  Filter, 
+  Calendar,
+  Filter,
   RefreshCw,
   Archive,
   History,
@@ -36,7 +36,9 @@ import {
   FileText,
   AlertTriangle,
   X,
-  Loader2
+  Loader2,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import apiClient from "@/lib/apiClient";
 import { API_BASE } from "@/config/constants";
@@ -64,7 +66,13 @@ export function StockMovementLog() {
   const [movements, setMovements] = useState<any[]>([]);
   const [summary, setSummary] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  
+
+  // Pagination state
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalRecords, setTotalRecords] = useState(0);
+
   // Custom Search States
   const [prodSearch, setProdSearch] = useState("");
   const [prodDropdownOpen, setProdDropdownOpen] = useState(false);
@@ -80,7 +88,7 @@ export function StockMovementLog() {
   const fetchMovements = useCallback(async () => {
     try {
       setLoading(true);
-      const params: any = { page: 1, limit: 100 };
+      const params: any = { page, limit: pageSize };
       if (filters.productId !== "all") params.productId = filters.productId;
       if (filters.movementType !== "all") params.movementType = filters.movementType;
       if (filters.startDate) params.startDate = filters.startDate;
@@ -88,14 +96,22 @@ export function StockMovementLog() {
 
       const res = await apiClient.get(`${API_BASE}/inventory/movements`, { params });
       setMovements(res.data?.data || []);
-      setSummary(res.data?.summary || null);
+      const meta = res.data?.meta || {};
+      setSummary(meta.summary || null);
+      setTotalPages(meta.totalPages || 1);
+      setTotalRecords(meta.total || 0);
     } catch (e: any) {
       const backendMessage = e?.response?.data?.message || e?.message || "Failed to load stock audit trail";
       toast.error(backendMessage);
     } finally {
       setTimeout(() => setLoading(false), 500);
     }
-  }, [filters, toast]);
+  }, [filters, page, pageSize]);
+
+  // Reset to page 1 whenever any filter changes
+  useEffect(() => {
+    setPage(1);
+  }, [filters.productId, filters.movementType, filters.startDate, filters.endDate, pageSize]);
 
   useEffect(() => {
     fetchProducts();
@@ -162,7 +178,7 @@ export function StockMovementLog() {
   if (loading && movements.length === 0) return <PageLoader message="Loading history..." />;
 
   return (
-    <div className="p-4 max-w-[1400px] mx-auto space-y-4">
+    <div className="p-4 space-y-4">
       
       {/* HEADER SECTION */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
@@ -263,7 +279,7 @@ export function StockMovementLog() {
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
               <Input 
-                placeholder="Find by SKU or Name..."
+                placeholder="Find by product name…"
                 className="h-10 pl-9 rounded-lg bg-slate-50 border-slate-200 text-xs"
                 value={filters.productId === "all" ? prodSearch : selectedProdName}
                 onFocus={() => {
@@ -311,7 +327,6 @@ export function StockMovementLog() {
                         className="w-full px-4 py-2 text-left hover:bg-slate-50 border-b border-slate-50 last:border-none flex flex-col"
                       >
                          <span className="font-bold text-slate-800 text-xs">{p.name}</span>
-                         <span className="text-[10px] text-slate-400 uppercase tracking-tighter">SKU: {p.sku || "N/A"}</span>
                       </button>
                     ))
                   )}
@@ -339,7 +354,7 @@ export function StockMovementLog() {
                 <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-10 px-4">Timestamp</TableHead>
                 <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-10 px-4">Activity</TableHead>
                 <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-10 px-4">Product</TableHead>
-                <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-10 px-4 text-right">Identifier</TableHead>
+                <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-10 px-4 text-right">Item code</TableHead>
                 <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-10 px-4 text-right">Delta</TableHead>
                 <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-10 px-4 text-right">Final</TableHead>
               </TableRow>
@@ -386,6 +401,62 @@ export function StockMovementLog() {
                 <p className="text-xs font-semibold">No stock movements found</p>
                 <p className="text-[10px] uppercase tracking-wider">Try adjusting your filters</p>
              </div>
+          )}
+
+          {/* PAGINATION FOOTER */}
+          {totalRecords > 0 && (
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-slate-100 bg-slate-50/50">
+              <div className="flex items-center gap-3 text-xs text-slate-600">
+                <span className="font-medium">
+                  Showing{" "}
+                  <span className="font-bold text-slate-900">
+                    {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, totalRecords)}
+                  </span>{" "}
+                  of <span className="font-bold text-slate-900">{totalRecords}</span>
+                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-400">Per page</span>
+                  <Select
+                    value={String(pageSize)}
+                    onValueChange={(v) => setPageSize(Number(v))}
+                  >
+                    <SelectTrigger className="h-7 w-[70px] text-xs border-slate-200">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="10">10</SelectItem>
+                      <SelectItem value="25">25</SelectItem>
+                      <SelectItem value="50">50</SelectItem>
+                      <SelectItem value="100">100</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 px-2 border-slate-200"
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={page <= 1 || loading}
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                </Button>
+                <span className="px-3 text-xs font-semibold text-slate-700">
+                  Page {page} of {totalPages}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 px-2 border-slate-200"
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={page >= totalPages || loading}
+                >
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </div>
           )}
       </div>
     </div>

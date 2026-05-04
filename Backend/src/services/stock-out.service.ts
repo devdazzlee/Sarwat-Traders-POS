@@ -170,7 +170,12 @@ export class StockOutService {
       throw new AppError(400, 'At least one item is required');
     }
 
-    return prisma.$transaction(async (tx) => {
+    // Many rows × (upsert + update + movement) can exceed Prisma's default ~5s
+    // interactive transaction timeout → P2028 "Transaction not found".
+    const txTimeoutMs = Math.min(180_000, Math.max(30_000, 10_000 + data.items.length * 2_500));
+
+    return prisma.$transaction(
+      async (tx) => {
       const results = [];
 
       for (const item of data.items) {
@@ -231,7 +236,9 @@ export class StockOutService {
       }
 
       return { success: true, results };
-    });
+    },
+      { maxWait: 15_000, timeout: txTimeoutMs },
+    );
   }
 
   async getStockOutHistory(params: {

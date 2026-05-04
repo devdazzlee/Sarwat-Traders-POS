@@ -73,6 +73,10 @@ export async function queueMutation<T = any>(
       case 'PATCH':  res = await apiClient.patch(url, payload); break;
       case 'DELETE': res = await apiClient.delete(url); break;
     }
+    // apiClient may queue on network loss and return 202 + _syncPending (already in sync queue)
+    if (res?.status === 202 || res?.data?._syncPending === true) {
+      return { queued: true, data: (res?.data?.data ?? null) as T | null };
+    }
     return { queued: false, data: res?.data?.data ?? res?.data ?? null };
   } catch {
     return enqueue();

@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { AuthService } from '../services/auth.service';
 import { ApiResponse } from '../utils/apiResponse';
 import asyncHandler from '../middleware/asyncHandler';
+import { prisma } from '../prisma/client';
 
 const authService = new AuthService();
 
@@ -22,12 +23,22 @@ const login = asyncHandler(async (req: Request, res: Response) => {
 });
 
 const logout = asyncHandler(async (req: Request, res: Response) => {
-  await authService.logout(req.user?.id!);
+  const token = req.headers.authorization?.split(' ')[1];
+  await authService.logout(req.user?.id!, token);
   new ApiResponse(null, 'Logout successful').send(res);
 });
 
 const getCurrentUser = asyncHandler(async (req: Request, res: Response) => {
-  new ApiResponse(req.user, 'Current user fetched').send(res);
+  const user = await prisma.user.findUnique({
+    where: { id: req.user?.id },
+    select: {
+      id: true,
+      email: true,
+      role: true,
+      branch_id: true,
+    },
+  });
+  new ApiResponse(user, 'Current user fetched').send(res);
 });
 
 const changePassword = asyncHandler(async (req: Request, res: Response) => {

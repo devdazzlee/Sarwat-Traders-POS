@@ -237,7 +237,7 @@ export function StockAdjustment() {
                   <Plus className="h-4 w-4 mr-2" /> New Adjustment
                 </Button>
               </DialogTrigger>
-              <DialogContent className="sm:max-w-[450px]">
+              <DialogContent className="sm:max-w-2xl">
                 <DialogHeader>
                   <DialogTitle>Stock Adjustment</DialogTitle>
                   <DialogDescription>
@@ -252,7 +252,7 @@ export function StockAdjustment() {
                     <div className="relative">
                       <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
                       <Input 
-                        placeholder="Type SKU or Product Name..."
+                        placeholder="Search product…"
                         className="pl-10"
                         value={form.productId ? selectedProduct?.name : searchTerm}
                         onFocus={() => {
@@ -287,7 +287,6 @@ export function StockAdjustment() {
                             className="w-full px-4 py-2 text-left hover:bg-slate-50 border-b border-slate-50 last:border-none flex flex-col"
                           >
                             <span className="font-medium text-slate-900 text-sm">{p.name}</span>
-                            <span className="text-xs text-slate-500">SKU: {p.sku || "N/A"}</span>
                           </button>
                         ))}
                       </div>
@@ -436,7 +435,7 @@ export function StockAdjustment() {
                   </TableCell>
                   <TableCell>
                      <p className="font-black text-slate-900 text-xs uppercase mb-0.5">{a.product?.name}</p>
-                     <code className="text-[9px] bg-slate-100 px-1.5 py-0.5 rounded font-mono font-bold text-slate-600 uppercase">SKU: {a.product?.sku}</code>
+                     <code className="text-[9px] bg-slate-100 px-1.5 py-0.5 rounded font-mono font-medium text-slate-600">Code: {a.product?.sku || "—"}</code>
                   </TableCell>
                   <TableCell>
                      <div className="flex items-center gap-2">

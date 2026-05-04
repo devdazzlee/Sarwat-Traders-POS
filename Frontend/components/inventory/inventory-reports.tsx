@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { DatePicker } from "@/components/ui/date-picker";
 import { format, parseISO } from "date-fns";
+import { PageLoader } from "@/components/ui/page-loader";
 import { 
   Download, 
   FileText, 
@@ -288,16 +289,7 @@ export function InventoryReports() {
         <Card className="border-none shadow-sm bg-white rounded-2xl overflow-hidden min-h-[400px]">
            <CardContent className="p-0">
              {loading ? (
-               <div className="py-20 flex flex-col items-center justify-center animate-in fade-in zoom-in duration-500">
-                  <div className="relative mb-6">
-                    <div className="h-16 w-16 rounded-full border-4 border-slate-100 border-t-blue-600 animate-spin" />
-                    <div className="absolute inset-0 flex items-center justify-center">
-                       <RefreshCw className="h-5 w-5 text-blue-600 animate-pulse" />
-                    </div>
-                  </div>
-                  <h3 className="text-sm font-medium text-slate-800 tracking-tight uppercase mb-1">Generating Report...</h3>
-                  <p className="text-[10px] text-slate-400 uppercase tracking-widest italic animate-pulse">Aggregating Data</p>
-               </div>
+               <PageLoader message="Generating report..." />
              ) : reportType === "valuation" && data?.byLocation ? (
                 <div className="divide-y divide-slate-100">
                   {Object.entries(data.byLocation).map(([bid, loc]: [string, any]) => {

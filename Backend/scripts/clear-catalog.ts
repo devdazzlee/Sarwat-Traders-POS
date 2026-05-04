@@ -11,53 +11,103 @@ dotenv.config();
 const prisma = new PrismaClient();
 
 async function main() {
-  console.log('Starting catalog wipe...\n');
+  console.log('Starting full database wipe (except Users)...\n');
 
-  // 1. Stock movements (depend on Product)
-  const sm = await prisma.stockMovement.deleteMany({});
-  console.log(`✓ StockMovement   — ${sm.count} deleted`);
+  // Order matters for foreign keys!
+  
+  // 1. Transactions & History
+  await prisma.stockMovement.deleteMany({});
+  console.log('✓ StockMovement deleted');
+  
+  await prisma.stockAdjustment.deleteMany({});
+  console.log('✓ StockAdjustment deleted');
+  
+  await prisma.saleItem.deleteMany({});
+  console.log('✓ SaleItem deleted');
+  
+  await prisma.sale.deleteMany({});
+  console.log('✓ Sale deleted');
+  
+  await prisma.orderItem.deleteMany({});
+  console.log('✓ OrderItem deleted');
+  
+  await prisma.order.deleteMany({});
+  console.log('✓ Order deleted');
+  
+  await prisma.purchaseOrderItem.deleteMany({});
+  console.log('✓ PurchaseOrderItem deleted');
+  
+  await prisma.purchaseOrder.deleteMany({});
+  console.log('✓ PurchaseOrder deleted');
+  
+  await prisma.purchase.deleteMany({});
+  console.log('✓ Purchase deleted');
+  
+  await prisma.transfer.deleteMany({});
+  console.log('✓ Transfer deleted');
+  
+  await prisma.holdSale.deleteMany({});
+  console.log('✓ HoldSale deleted');
 
-  // 2. Stock adjustments (depend on Product)
-  const sa = await prisma.stockAdjustment.deleteMany({});
-  console.log(`✓ StockAdjustment — ${sa.count} deleted`);
+  // 2. Product Catalog
+  await prisma.productImage.deleteMany({});
+  console.log('✓ ProductImage deleted');
+  
+  await prisma.stock.deleteMany({});
+  console.log('✓ Stock deleted');
+  
+  await prisma.product.deleteMany({});
+  console.log('✓ Product deleted');
+  
+  await prisma.categoryImages.deleteMany({});
+  console.log('✓ CategoryImages deleted');
+  
+  await prisma.subcategory.deleteMany({});
+  console.log('✓ Subcategory deleted');
+  
+  await prisma.category.deleteMany({});
+  console.log('✓ Category deleted');
 
-  // 3. Stock records (depend on Product)
-  const st = await prisma.stock.deleteMany({});
-  console.log(`✓ Stock           — ${st.count} deleted`);
+  // 3. Metadata / Attributes
+  await prisma.brand.deleteMany({});
+  console.log('✓ Brand deleted');
 
-  // 4. Purchases / stock-in records (depend on Product)
-  const pu = await prisma.purchase.deleteMany({});
-  console.log(`✓ Purchase        — ${pu.count} deleted`);
+  await prisma.supplier.deleteMany({});
+  console.log('✓ Supplier deleted');
 
-  // 5. Transfers (depend on Product)
-  const tr = await prisma.transfer.deleteMany({});
-  console.log(`✓ Transfer        — ${tr.count} deleted`);
+  await prisma.tax.deleteMany({});
+  console.log('✓ Tax deleted');
 
-  // 6. Purchase order items (depend on Product)
-  const poi = await prisma.purchaseOrderItem.deleteMany({});
-  console.log(`✓ PurchaseOrderItem — ${poi.count} deleted`);
+  await prisma.color.deleteMany({});
+  console.log('✓ Color deleted');
 
-  // 7. Sale items (depend on Product — required to unlock Product delete)
-  const si = await prisma.saleItem.deleteMany({});
-  console.log(`✓ SaleItem        — ${si.count} deleted`);
+  await prisma.size.deleteMany({});
+  console.log('✓ Size deleted');
 
-  // 8. Product images (depend on Product)
-  const pi = await prisma.productImage.deleteMany({});
-  console.log(`✓ ProductImage    — ${pi.count} deleted`);
+  await prisma.unit.deleteMany({});
+  console.log('✓ Unit deleted');
 
-  // 9. Products
-  const pr = await prisma.product.deleteMany({});
-  console.log(`✓ Product         — ${pr.count} deleted`);
+  await prisma.discount.deleteMany({});
+  console.log('✓ Discount deleted');
 
-  // 10. Category images (depend on Category)
-  const ci = await prisma.categoryImages.deleteMany({});
-  console.log(`✓ CategoryImages  — ${ci.count} deleted`);
+  // 4. Financials & Ledgers
+  await prisma.customerLedger.deleteMany({});
+  console.log('✓ CustomerLedger deleted');
 
-  // 11. Categories
-  const ca = await prisma.category.deleteMany({});
-  console.log(`✓ Category        — ${ca.count} deleted`);
+  await prisma.cashFlow.deleteMany({});
+  console.log('✓ CashFlow deleted');
 
-  console.log('\nDone. All products, categories, and stock data have been removed.');
+  await prisma.expense.deleteMany({});
+  console.log('✓ Expense deleted');
+
+  // 5. Entities
+  await prisma.customer.deleteMany({});
+  console.log('✓ Customer deleted');
+
+  await prisma.area.deleteMany({});
+  console.log('✓ Area deleted');
+
+  console.log('\nDone. Database has been completely wiped (excluding Users).');
 }
 
 main()

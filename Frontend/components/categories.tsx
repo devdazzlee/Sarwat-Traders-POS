@@ -755,10 +755,7 @@ export function Categories() {
               <div>
                 <Label>Display on Branches</Label>
                 {branchesLoading ? (
-                  <div className="flex items-center justify-center py-4">
-                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                    Loading branches...
-                  </div>
+                  <PageLoader message="Loading branches..." size="sm" />
                 ) : (
                   <div className="grid grid-cols-2 gap-2 mt-2">
                     {branches.map((branch) => (
@@ -1082,10 +1079,7 @@ export function Categories() {
               <div>
                 <Label>Display on Branches</Label>
                 {branchesLoading ? (
-                  <div className="flex items-center justify-center py-4">
-                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                    Loading branches...
-                  </div>
+                  <PageLoader message="Loading branches..." size="sm" />
                 ) : (
                   <div className="grid grid-cols-2 gap-2 mt-2">
                     {branches.map((branch) => (
@@ -1169,10 +1163,7 @@ export function Categories() {
             </DialogTitle>
           </DialogHeader>
           {loadingProducts ? (
-            <div className="flex items-center justify-center py-8">
-              <Loader2 className="h-6 w-6 animate-spin mr-2" />
-              <span>Loading products...</span>
-            </div>
+            <PageLoader message="Loading products..." size="sm" />
           ) : categoryProducts.length === 0 ? (
             <div className="text-center py-8 text-gray-500">
               <Package className="h-12 w-12 mx-auto mb-4 text-gray-400" />

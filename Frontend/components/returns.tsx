@@ -34,10 +34,16 @@ interface Sale {
   id: string
   sale_number: string
   customer?: {
+    id?: string
     name: string
     email: string
     phone_number?: string
     whatsapp_number?: string
+  }
+  /** Set by GET /sale/for-returns for Process Return dropdown */
+  return_eligibility?: {
+    fully_returned: boolean
+    has_prior_returns: boolean
   }
   sale_date: string
   total_amount: number
@@ -48,7 +54,11 @@ interface Sale {
       name: string
       sku: string
     }
+    /** Units on the original sale line */
     quantity: number
+    /** Units still allowed to return (original minus prior returns) — from GET /sale/:id */
+    quantity_returnable?: number
+    quantity_already_returned?: number
     unit_price: number
     line_total: number
   }>
@@ -58,6 +68,7 @@ interface ReturnItem {
   id: string
   sale_number: string
   customer?: {
+    id?: string
     name: string
     email: string
     phone_number?: string
@@ -122,7 +133,11 @@ interface SelectedReturnItem {
   productId: string
   productName: string
   sku: string
+  /** Max returnable now (remaining on line) */
   originalQuantity: number
+  /** Units originally sold on this line */
+  soldQuantity: number
+  alreadyReturned?: number
   returnQuantity: number
   unitPrice: number
 }
@@ -135,6 +150,7 @@ const normalizeSaleRecord = (sale: any): Sale => ({
   sale_number: String(sale?.sale_number || ""),
   customer: sale?.customer
     ? {
+        id: sale.customer.id != null ? String(sale.customer.id) : undefined,
         name: String(sale.customer.name || ""),
         email: String(sale.customer.email || ""),
         phone_number: sale.customer.phone_number ? String(sale.customer.phone_number) : undefined,
@@ -147,18 +163,35 @@ const normalizeSaleRecord = (sale: any): Sale => ({
       : new Date(sale?.sale_date || Date.now()).toISOString(),
   total_amount: Number(sale?.total_amount || 0),
   sale_items: Array.isArray(sale?.sale_items)
-    ? sale.sale_items.map((item: any) => ({
-        id: String(item?.id || ""),
-        product: {
-          id: String(item?.product?.id || item?.product_id || ""),
-          name: String(item?.product?.name || "Unnamed Product"),
-          sku: String(item?.product?.sku || ""),
-        },
-        quantity: Number(item?.quantity || 0),
-        unit_price: Number(item?.unit_price || 0),
-        line_total: Number(item?.line_total || 0),
-      }))
+    ? sale.sale_items.map((item: any) => {
+        const soldQty = Number(item?.quantity || 0)
+        const returnableRaw = item?.quantity_returnable
+        const returnable =
+          returnableRaw !== undefined && returnableRaw !== null ? Number(returnableRaw) : soldQty
+        const alreadyRaw = item?.quantity_already_returned
+        const alreadyReturned =
+          alreadyRaw !== undefined && alreadyRaw !== null ? Number(alreadyRaw) : undefined
+        return {
+          id: String(item?.id || ""),
+          product: {
+            id: String(item?.product?.id || item?.product_id || ""),
+            name: String(item?.product?.name || "Unnamed Product"),
+            sku: String(item?.product?.sku || ""),
+          },
+          quantity: soldQty,
+          quantity_returnable: returnable,
+          quantity_already_returned: alreadyReturned,
+          unit_price: Number(item?.unit_price || 0),
+          line_total: Number(item?.line_total || 0),
+        }
+      })
     : [],
+  return_eligibility: sale?.return_eligibility
+    ? {
+        fully_returned: !!sale.return_eligibility.fully_returned,
+        has_prior_returns: !!sale.return_eligibility.has_prior_returns,
+      }
+    : undefined,
 })
 
 const matchesSaleSearch = (sale: any, term: string) => {
@@ -520,12 +553,15 @@ export function Returns() {
     return searchableSales.filter((sale) => matchesSaleSearch(sale, term)).slice(0, 5)
   }, [filteredReturns.length, searchableSales, searchTerm])
 
+  /** Sales from /sale/for-returns (includes return_eligibility for dropdown) */
+  const processReturnSales = useMemo(() => sales.map(normalizeSaleRecord), [sales])
+
   const filteredSales = useMemo(() => {
     const term = normalizeSaleSearchTerm(saleSearch).toLowerCase()
-    if (!term) return searchableSales
+    if (!term) return processReturnSales
 
-    return searchableSales.filter((sale) => matchesSaleSearch(sale, term))
-  }, [saleSearch, searchableSales])
+    return processReturnSales.filter((sale) => matchesSaleSearch(sale, term))
+  }, [saleSearch, processReturnSales])
 
   const ineligibleSaleMatch = useMemo(() => {
     if (!normalizeSaleSearchTerm(saleSearch) || filteredSales.length > 0) {
@@ -875,9 +911,14 @@ export function Returns() {
     setSaleDropdownOpen(false)
 
     // Use cached sale_number for immediate display, then fetch fresh data with items
-    const cached = searchableSales.find(s => s.id === saleId)
+    const cached =
+      processReturnSales.find((s) => s.id === saleId) || searchableSales.find((s) => s.id === saleId)
     setSaleSearch(cached?.sale_number || "")
-    setNewReturn(prev => ({ ...prev, saleId }))
+    setNewReturn((prev) => ({
+      ...prev,
+      saleId,
+      customerId: cached?.customer?.id ? String(cached.customer.id) : prev.customerId,
+    }))
 
     try {
       // Always fetch by ID to guarantee sale_items are included
@@ -886,35 +927,55 @@ export function Returns() {
       setSelectedSale(fresh)
       setSaleSearch(fresh.sale_number)
 
-      const items: SelectedReturnItem[] = fresh.sale_items.map(item => ({
-        productId: item.product.id,
-        productName: item.product.name,
-        sku: item.product.sku,
-        originalQuantity: item.quantity,
-        returnQuantity: item.quantity,
-        unitPrice: item.unit_price,
-      }))
+      const items: SelectedReturnItem[] = fresh.sale_items.map((item) => {
+        const sold = item.quantity
+        const maxReturnable = item.quantity_returnable ?? item.quantity
+        return {
+          productId: item.product.id,
+          productName: item.product.name,
+          sku: item.product.sku,
+          originalQuantity: maxReturnable,
+          soldQuantity: sold,
+          alreadyReturned: item.quantity_already_returned,
+          returnQuantity: maxReturnable,
+          unitPrice: item.unit_price,
+        }
+      })
       setSelectedReturnItems(items)
-      setNewReturn(prev => ({
+      setNewReturn((prev) => ({
         ...prev,
-        returnedItems: items.map(i => ({ productId: i.productId, quantity: i.returnQuantity })),
+        customerId: fresh.customer?.id ? String(fresh.customer.id) : "",
+        returnedItems: items.map((i) => ({ productId: i.productId, quantity: i.returnQuantity })),
       }))
+      if (items.length > 0 && items.every((i) => i.originalQuantity <= 0)) {
+        toast({
+          title: "Nothing left to return",
+          description: "This sale has already been fully returned.",
+        })
+      }
     } catch {
       // Fall back to cached version if fetch fails
       setSelectedSale(cached || null)
       if (cached) {
-        const items: SelectedReturnItem[] = cached.sale_items.map(item => ({
-          productId: item.product.id,
-          productName: item.product.name,
-          sku: item.product.sku,
-          originalQuantity: item.quantity,
-          returnQuantity: item.quantity,
-          unitPrice: item.unit_price,
-        }))
+        const items: SelectedReturnItem[] = cached.sale_items.map((item) => {
+          const sold = item.quantity
+          const maxReturnable = item.quantity_returnable ?? item.quantity
+          return {
+            productId: item.product.id,
+            productName: item.product.name,
+            sku: item.product.sku,
+            originalQuantity: maxReturnable,
+            soldQuantity: sold,
+            alreadyReturned: item.quantity_already_returned,
+            returnQuantity: maxReturnable,
+            unitPrice: item.unit_price,
+          }
+        })
         setSelectedReturnItems(items)
-        setNewReturn(prev => ({
+        setNewReturn((prev) => ({
           ...prev,
-          returnedItems: items.map(i => ({ productId: i.productId, quantity: i.returnQuantity })),
+          customerId: cached.customer?.id ? String(cached.customer.id) : prev.customerId,
+          returnedItems: items.map((i) => ({ productId: i.productId, quantity: i.returnQuantity })),
         }))
       } else {
         setSelectedReturnItems([])
@@ -1025,7 +1086,12 @@ export function Returns() {
               paginatedData.map((returnItem) => (
             <TableRow key={returnItem.id}>
               <TableCell className="font-medium">{returnItem.sale_number}</TableCell>
-              <TableCell>{returnItem.customer?.name || returnItem.customer?.email || "N/A"}</TableCell>
+              <TableCell>
+                {returnItem.customer?.name || returnItem.customer?.email
+                  ? <span className="font-medium">{returnItem.customer?.name || returnItem.customer?.email}</span>
+                  : <span className="text-gray-400 italic text-sm">Walk-in Customer</span>
+                }
+              </TableCell>
               <TableCell>{new Date(returnItem.sale_date).toLocaleDateString()}</TableCell>
               <TableCell>Rs {Math.abs(Number(returnItem.total_amount)).toLocaleString()}</TableCell>
               <TableCell className="capitalize">{returnItem.payment_method}</TableCell>
@@ -1205,10 +1271,7 @@ export function Returns() {
                   {saleDropdownOpen && (
                     <div className="absolute left-0 right-0 z-20 mt-1 max-h-60 overflow-y-auto rounded-md border border-gray-200 bg-white shadow-lg">
                       {salesLoading || saleSearchPending ? (
-                        <div className="flex items-center justify-center py-6">
-                          <Loader2 className="h-6 w-6 animate-spin text-blue-500" />
-                          <span className="ml-2 text-sm text-gray-500">Searching sales...</span>
-                        </div>
+                        <PageLoader message="Searching sales..." size="sm" />
                       ) : filteredSales.length === 0 && ineligibleSaleMatch ? (
                         <div className="px-3 py-6 text-center">
                           <XCircle className="mx-auto mb-2 h-8 w-8 text-amber-400" />
@@ -1226,27 +1289,56 @@ export function Returns() {
                           <p className="text-xs text-gray-400 mt-1">Try a different sale # or customer info</p>
                         </div>
                       ) : (
-                        filteredSales.map((sale) => (
-                          <button
-                            key={sale.id}
-                            type="button"
-                            className={`w-full px-3 py-2 text-left text-sm transition hover:bg-blue-50 ${
-                              newReturn.saleId === sale.id
-                                ? "bg-blue-50 font-semibold text-blue-900"
-                                : "text-gray-800"
-                            }`}
-                            onMouseDown={(event) => event.preventDefault()}
-                            onClick={() => handleSaleSelect(sale.id)}
-                          >
-                            <div className="flex flex-col">
-                              <span>{sale.sale_number}</span>
-                              <span className="text-xs text-gray-500">
-                                {sale.customer?.name || sale.customer?.email || "No customer"} • Rs{" "}
-                                {Math.abs(Number(sale.total_amount)).toLocaleString()}
-                              </span>
-                            </div>
-                          </button>
-                        ))
+                        filteredSales.map((sale) => {
+                          const fullyReturned = sale.return_eligibility?.fully_returned === true
+                          const partialReturn =
+                            !fullyReturned && sale.return_eligibility?.has_prior_returns === true
+                          const disabled = fullyReturned
+                          return (
+                            <button
+                              key={sale.id}
+                              type="button"
+                              disabled={disabled}
+                              className={`w-full px-3 py-2 text-left text-sm transition ${
+                                disabled
+                                  ? "cursor-not-allowed bg-gray-50 text-gray-400 opacity-80"
+                                  : newReturn.saleId === sale.id
+                                    ? "bg-blue-50 font-semibold text-blue-900 hover:bg-blue-50"
+                                    : "text-gray-800 hover:bg-blue-50"
+                              }`}
+                              onMouseDown={(event) => event.preventDefault()}
+                              onClick={() => {
+                                if (!disabled) handleSaleSelect(sale.id)
+                              }}
+                            >
+                              <div className="flex flex-col gap-1">
+                                <div className="flex items-start justify-between gap-2">
+                                  <span className="font-medium">{sale.sale_number}</span>
+                                  <div className="flex flex-wrap justify-end gap-1 shrink-0">
+                                    {fullyReturned ? (
+                                      <span className="text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 bg-amber-100 text-amber-900 border border-amber-200">
+                                        Fully returned
+                                      </span>
+                                    ) : partialReturn ? (
+                                      <span className="text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 bg-sky-100 text-sky-900 border border-sky-200">
+                                        Partial return
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                </div>
+                                <span className="text-xs text-gray-500">
+                                  {sale.customer?.name || sale.customer?.email || "Walk-in / no customer"} • Rs{" "}
+                                  {Math.abs(Number(sale.total_amount)).toLocaleString()}
+                                </span>
+                                {fullyReturned ? (
+                                  <span className="text-[11px] text-amber-700">
+                                    All items on this sale were already returned or exchanged.
+                                  </span>
+                                ) : null}
+                              </div>
+                            </button>
+                          )
+                        })
                       )}
                     </div>
                   )}
@@ -1331,7 +1423,11 @@ export function Returns() {
                         <div className="flex-1">
                           <div className="font-medium">{item.productName}</div>
                           <div className="text-sm text-gray-500">
-                            SKU: {item.sku} • Original Qty: {item.originalQuantity} • Price: Rs {Number(item.unitPrice).toLocaleString()}
+                            SKU: {item.sku} • Sold: {item.soldQuantity} • Returnable now: {item.originalQuantity}
+                            {item.alreadyReturned != null && item.alreadyReturned > 0
+                              ? ` (${item.alreadyReturned} already returned)`
+                              : ""}{" "}
+                            • Price: Rs {Number(item.unitPrice).toLocaleString()}
                           </div>
                         </div>
                         <div className="flex items-center gap-2">
@@ -1379,7 +1475,7 @@ export function Returns() {
                                     // Show error toast when exceeding original quantity
                                     toast({
                                       title: "Invalid Return Quantity",
-                                      description: `Return quantity (${numValue}) cannot exceed original sale quantity (${item.originalQuantity}) for ${item.productName}.`,
+                                      description: `Return quantity (${numValue}) cannot exceed what is still returnable (${item.originalQuantity}) for ${item.productName}.`,
                                       variant: "destructive",
                                     })
                                     // Set to max allowed (originalQuantity)
@@ -1433,7 +1529,7 @@ export function Returns() {
                                     // Show error toast when exceeding original quantity
                                     toast({
                                       title: "Invalid Return Quantity",
-                                      description: `Return quantity (${numValue}) cannot exceed original sale quantity (${item.originalQuantity}) for ${item.productName}.`,
+                                      description: `Return quantity (${numValue}) cannot exceed what is still returnable (${item.originalQuantity}) for ${item.productName}.`,
                                       variant: "destructive",
                                     })
                                     // Set to max allowed (originalQuantity)
@@ -1525,9 +1621,7 @@ export function Returns() {
                     {exchangeProductDropdownOpen && (
                       <div className="absolute left-0 right-0 z-20 mt-1 max-h-60 overflow-y-auto rounded-md border border-gray-200 bg-white shadow-lg">
                         {productsLoading ? (
-                          <div className="px-3 py-2 text-sm text-gray-500">
-                            Loading products...
-                          </div>
+                          <PageLoader message="Loading products..." size="sm" />
                         ) : filteredExchangeProducts.length === 0 ? (
                           <div className="px-3 py-2 text-sm text-gray-500">
                             {exchangeProductSearch ? "No matching products found" : "No products available"}

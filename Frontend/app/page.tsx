@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { LoginForm } from "@/components/login-form";
 import { Dashboard } from "@/components/dashboard";
-import { LoadingSpinner } from "@/components/ui/loading-spinner";
+import { PageLoader } from "@/components/ui/page-loader";
 
 export default function Home() {
   const [token, setToken] = useState<string | null>(null);
@@ -64,6 +64,7 @@ export default function Home() {
     localStorage.setItem("token", jwt);
     localStorage.setItem("branch", user.branch_id ?? "Not Found");
     localStorage.setItem("role", user.role);
+    if (user.email) localStorage.setItem("email", user.email);
     setToken(jwt);
 
     // Fetch and log branch name
@@ -107,8 +108,8 @@ export default function Home() {
   };
   if (checking) {
     return (
-      <div className="flex h-screen items-center justify-center">
-        <LoadingSpinner className="w-12 h-12" />
+      <div className="flex min-h-screen flex-col bg-gray-50">
+        <PageLoader message="Loading..." size="lg" className="flex-1" />
       </div>
     );
   }

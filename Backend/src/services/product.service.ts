@@ -16,6 +16,22 @@ type RelationField =
 type Numeric = number | Prisma.Decimal
 
 export class ProductService {
+    /** UUID v4 (loose) — rejects UI filter sentinels like "all". */
+    private isValidUuid(id: string): boolean {
+        return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id.trim());
+    }
+
+    /** Returns null for empty, "all", or non-UUID strings. */
+    private coerceRelationId(val: unknown): string | null {
+        if (val === undefined || val === null) return null;
+        const s = String(val).trim();
+        if (!s) return null;
+        const lower = s.toLowerCase();
+        if (lower === 'all' || lower === 'none') return null;
+        if (!this.isValidUuid(s)) return null;
+        return s;
+    }
+
     async getProductsForExcelExport(filters?: {
         search?: string;
         category_id?: string;
@@ -423,8 +439,8 @@ export class ProductService {
             console.log('✅ Product created successfully with ID:', product.id);
             return product;
         }, {
-            maxWait: 20000, // 20 seconds
-            timeout: 15000  // 15 seconds,
+            maxWait: 30000,  // 30s — wait up to this long for a connection slot
+            timeout: 60000,  // 60s — Neon serverless + first-run "Unknown" entity creation can exceed 15s
         });
     }
 
@@ -813,20 +829,24 @@ export class ProductService {
         // Build the update payload — scalar fields + relation FKs in one shot
         const updateData: any = { ...this.buildUpdateProductData(data) };
 
-        // Set relation foreign keys directly (no extra verification queries needed;
-        // the DB's FK constraints will catch invalid IDs automatically)
-        // Required FKs (non-nullable in schema) — only set if a truthy value is provided
+        // Required FKs — only set valid UUIDs (never "all" from table filters / bad clients)
         const requiredFks = ['unit_id', 'category_id'] as const;
         for (const field of requiredFks) {
-            const val = (data as any)[field];
-            if (val) updateData[field] = val;          // only set when there's a real ID
+            if ((data as any)[field] === undefined) continue;
+            const coerced = this.coerceRelationId((data as any)[field]);
+            if (coerced) updateData[field] = coerced;
         }
-        // Optional FKs (nullable in schema) — set to null when empty/falsy
+        // Optional FKs — null clears; invalid / "all" coerces to null
         const optionalFks = ['subcategory_id', 'tax_id', 'supplier_id', 'brand_id', 'color_id', 'size_id'] as const;
         for (const field of optionalFks) {
-            if ((data as any)[field] !== undefined) {
-                updateData[field] = (data as any)[field] || null;
+            if ((data as any)[field] === undefined) continue;
+            const raw = (data as any)[field];
+            if (raw === null || raw === '' || String(raw).toLowerCase() === 'all') {
+                updateData[field] = null;
+                continue;
             }
+            const coerced = this.coerceRelationId(raw);
+            updateData[field] = coerced;
         }
 
         console.log('📦 Product update payload:', JSON.stringify(updateData, null, 2));
@@ -850,8 +870,11 @@ export class ProductService {
         } catch (error: any) {
             // If FK constraint fails, give a friendly message
             if (error?.code === 'P2003') {
-                const field = error?.meta?.field_name || 'unknown';
-                throw new AppError(400, `Invalid reference for ${field}. The related record does not exist.`);
+                const field = (error?.meta?.field_name as string) || 'foreign key';
+                throw new AppError(
+                    400,
+                    `Invalid reference (${field}). Pick a real unit/category from the lists — the value "all" is only for filtering, not for saving.`,
+                );
             }
             if (error?.code === 'P2025') {
                 throw new AppError(404, 'Product not found');
@@ -963,6 +986,8 @@ export class ProductService {
             sales_rate_exc_dis_and_tax: true,
             sales_rate_inc_dis_and_tax: true,
             discount_amount: true,
+            min_qty: true,
+            max_qty: true,
             is_active: true,
             display_on_pos: true,
             created_at: true,
@@ -1340,35 +1365,37 @@ export class ProductService {
             delete finalData.sku;
         }
 
-        // Update or create the product
-        const product = existingProduct
-            ? await prisma.product.update({
+        const include = {
+            unit: true,
+            category: true,
+            subcategory: true,
+            tax: true,
+            supplier: true,
+            brand: true,
+            color: true,
+            size: true,
+        } as const;
+
+        let product: Product & {
+            unit: any;
+            category: any;
+            subcategory: any;
+            tax: any;
+            supplier: any;
+            brand: any;
+            color: any;
+            size: any;
+        };
+
+        if (existingProduct) {
+            product = await prisma.product.update({
                 where: { id: existingProduct.id },
                 data: finalData,
-                include: {
-                    unit: true,
-                    category: true,
-                    subcategory: true,
-                    tax: true,
-                    supplier: true,
-                    brand: true,
-                    color: true,
-                    size: true,
-                }
-            })
-            : await prisma.product.create({
-                data: finalData,
-                include: {
-                    unit: true,
-                    category: true,
-                    subcategory: true,
-                    tax: true,
-                    supplier: true,
-                    brand: true,
-                    color: true,
-                    size: true,
-                }
-            }) as Product & {
+                include,
+            }) as any;
+        } else {
+            // Concurrency-safe code generation retry (multiple bulk uploads can race on unique code).
+            let created: (Product & {
                 unit: any;
                 category: any;
                 subcategory: any;
@@ -1377,7 +1404,37 @@ export class ProductService {
                 brand: any;
                 color: any;
                 size: any;
-            };
+            }) | null = null;
+
+            for (let attempt = 0; attempt < 3 && !created; attempt++) {
+                try {
+                    created = await prisma.product.create({
+                        data: finalData,
+                        include,
+                    }) as any;
+                } catch (error: any) {
+                    const isCodeCollision =
+                        error?.code === 'P2002' &&
+                        (
+                            String(error.meta?.target || '').includes('code') ||
+                            (Array.isArray(error.meta?.target) && error.meta?.target.includes('code'))
+                        );
+                    if (!isCodeCollision || attempt === 2) throw error;
+
+                    const lastProduct = await prisma.product.findFirst({
+                        orderBy: { created_at: 'desc' },
+                        select: { code: true },
+                    });
+                    const nextCode = lastProduct ? (parseInt(lastProduct.code) + 1).toString() : String(1000 + attempt + 1);
+                    finalData.code = nextCode;
+                }
+            }
+
+            if (!created) {
+                throw new AppError(500, 'Failed to create product during bulk upload.');
+            }
+            product = created;
+        }
 
         console.log(existingProduct ? `✅ Product updated: ${product.id}` : `✅ Product created: ${product.id}`);
         return product;
@@ -1421,22 +1478,24 @@ export class ProductService {
     }
 
     async deleteProduct(id: string) {
-        // Delete a single product and its related records in a transaction
-        return await prisma.$transaction(async (tx) => {
-            // 1. Delete related records first due to foreign key constraints
-            await tx.productImage.deleteMany({ where: { product_id: id } });
-            await tx.stockMovement.deleteMany({ where: { product_id: id } });
-            await tx.stock.deleteMany({ where: { product_id: id } });
-            await tx.saleItem.deleteMany({ where: { product_id: id } });
-            await tx.purchaseOrderItem.deleteMany({ where: { product_id: id } });
-            await tx.orderItem.deleteMany({ where: { product_id: id } });
-            await tx.purchase.deleteMany({ where: { product_id: id } });
-            await tx.transfer.deleteMany({ where: { product_id: id } });
-            await tx.stockAdjustment.deleteMany({ where: { product_id: id } });
-            
-            // 2. Finally, delete the Product
-            return await tx.product.delete({ where: { id } });
-        });
+        // Many FK deletes + serverless DB (e.g. Neon) can exceed Prisma's default ~5s interactive
+        // transaction timeout → "Transaction not found".
+        return await prisma.$transaction(
+            async (tx) => {
+                await tx.productImage.deleteMany({ where: { product_id: id } });
+                await tx.stockMovement.deleteMany({ where: { product_id: id } });
+                await tx.stock.deleteMany({ where: { product_id: id } });
+                await tx.saleItem.deleteMany({ where: { product_id: id } });
+                await tx.purchaseOrderItem.deleteMany({ where: { product_id: id } });
+                await tx.orderItem.deleteMany({ where: { product_id: id } });
+                await tx.purchase.deleteMany({ where: { product_id: id } });
+                await tx.transfer.deleteMany({ where: { product_id: id } });
+                await tx.stockAdjustment.deleteMany({ where: { product_id: id } });
+
+                return await tx.product.delete({ where: { id } });
+            },
+            { maxWait: 15_000, timeout: 60_000 },
+        );
     }
 
     async deleteAllProducts(): Promise<{ 
@@ -1448,32 +1507,32 @@ export class ProductService {
         deletedPurchaseOrderItems: number;
         deletedOrderItems: number;
     }> {
-        // Delete all products and their related records in a transaction
         // Order matters due to foreign key constraints (ON DELETE RESTRICT)
-        return await prisma.$transaction(async (tx) => {
-            // 1. Delete related records first due to foreign key constraints
-            const deletedImages = await tx.productImage.deleteMany({});
-            const deletedStockMovements = await tx.stockMovement.deleteMany({});
-            const deletedStocks = await tx.stock.deleteMany({});
-            const deletedSaleItems = await tx.saleItem.deleteMany({});
-            const deletedPurchaseOrderItems = await tx.purchaseOrderItem.deleteMany({});
-            const deletedOrderItems = await tx.orderItem.deleteMany({});
-            await tx.purchase.deleteMany({});
-            await tx.transfer.deleteMany({});
-            await tx.stockAdjustment.deleteMany({});
-            
-            // 2. Finally, delete all Products
-            const deletedProducts = await tx.product.deleteMany({});
-            
-            return {
-                deletedCount: deletedProducts.count,
-                deletedImages: deletedImages.count,
-                deletedStocks: deletedStocks.count,
-                deletedStockMovements: deletedStockMovements.count,
-                deletedSaleItems: deletedSaleItems.count,
-                deletedPurchaseOrderItems: deletedPurchaseOrderItems.count,
-                deletedOrderItems: deletedOrderItems.count,
-            };
-        });
+        return await prisma.$transaction(
+            async (tx) => {
+                const deletedImages = await tx.productImage.deleteMany({});
+                const deletedStockMovements = await tx.stockMovement.deleteMany({});
+                const deletedStocks = await tx.stock.deleteMany({});
+                const deletedSaleItems = await tx.saleItem.deleteMany({});
+                const deletedPurchaseOrderItems = await tx.purchaseOrderItem.deleteMany({});
+                const deletedOrderItems = await tx.orderItem.deleteMany({});
+                await tx.purchase.deleteMany({});
+                await tx.transfer.deleteMany({});
+                await tx.stockAdjustment.deleteMany({});
+
+                const deletedProducts = await tx.product.deleteMany({});
+
+                return {
+                    deletedCount: deletedProducts.count,
+                    deletedImages: deletedImages.count,
+                    deletedStocks: deletedStocks.count,
+                    deletedStockMovements: deletedStockMovements.count,
+                    deletedSaleItems: deletedSaleItems.count,
+                    deletedPurchaseOrderItems: deletedPurchaseOrderItems.count,
+                    deletedOrderItems: deletedOrderItems.count,
+                };
+            },
+            { maxWait: 15_000, timeout: 120_000 },
+        );
     }
 }

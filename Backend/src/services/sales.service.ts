@@ -28,6 +28,74 @@ interface HoldSaleCartItem {
 }
 
 class SaleService {
+  /**
+   * Sum of RETURN line quantities already posted against each original sale_item id
+   * (from follow-up sales with original_sale_id pointing at the original sale).
+   */
+  private async getReturnedQtyByOriginalSaleLineIds(originalSaleId: string) {
+    const prior = await prisma.sale.findMany({
+      where: {
+        original_sale_id: originalSaleId,
+        status: { in: [SaleStatus.REFUNDED, SaleStatus.EXCHANGED] },
+      },
+      select: { sale_items: true },
+    });
+    const map = new Map<string, Prisma.Decimal>();
+    for (const s of prior) {
+      for (const si of s.sale_items) {
+        if (si.item_type === SaleItemType.RETURN && si.ref_sale_item_id) {
+          const q = si.quantity.abs();
+          const k = si.ref_sale_item_id;
+          map.set(k, (map.get(k) ?? new Prisma.Decimal(0)).plus(q));
+        }
+      }
+    }
+    return map;
+  }
+
+  /** For return/exchange rows with no customer, show the original sale's customer in lists. */
+  private async hydrateReturnSaleCustomers<
+    T extends {
+      id: string;
+      customer_id: string | null;
+      customer: unknown;
+      original_sale_id: string | null;
+      status: SaleStatus;
+    },
+  >(sales: T[]): Promise<T[]> {
+    const originalIds = [
+      ...new Set(
+        sales
+          .filter(
+            (s) =>
+              (s.status === SaleStatus.REFUNDED || s.status === SaleStatus.EXCHANGED) &&
+              !s.customer_id &&
+              s.original_sale_id,
+          )
+          .map((s) => s.original_sale_id!),
+      ),
+    ];
+    if (originalIds.length === 0) return sales;
+
+    const originals = await prisma.sale.findMany({
+      where: { id: { in: originalIds } },
+      select: { id: true, customer: true },
+    });
+    const customerByOriginalId = new Map(originals.map((o) => [o.id, o.customer]));
+
+    return sales.map((s) => {
+      if (
+        (s.status === SaleStatus.REFUNDED || s.status === SaleStatus.EXCHANGED) &&
+        !s.customer_id &&
+        s.original_sale_id
+      ) {
+        const c = customerByOriginalId.get(s.original_sale_id);
+        if (c) return { ...s, customer: c } as T;
+      }
+      return s;
+    });
+  }
+
   async getSales({
     branchId,
     page,
@@ -85,12 +153,13 @@ class SaleService {
         include,
         orderBy: { sale_date: 'desc' },
       });
+      const hydrated = await this.hydrateReturnSaleCustomers(data);
       return {
-        data,
+        data: hydrated,
         meta: {
-          total: data.length,
+          total: hydrated.length,
           page: 1,
-          limit: data.length,
+          limit: hydrated.length,
           totalPages: 1,
         },
       };
@@ -111,8 +180,9 @@ class SaleService {
       }),
     ]);
 
+    const hydrated = await this.hydrateReturnSaleCustomers(data);
     return {
-      data,
+      data: hydrated,
       meta: {
         total,
         page: safePage,
@@ -122,10 +192,84 @@ class SaleService {
     };
   }
 
+  /**
+   * For original (COMPLETED) sales: compute whether anything is still returnable and if a return/exchange
+   * was already posted against this sale (for UI badges in Process Return dropdown).
+   */
+  private async getReturnProcessingFlagsForSales(
+    sales: Array<{
+      id: string;
+      sale_items: Array<{ id: string; quantity: Prisma.Decimal; item_type: SaleItemType }>;
+    }>,
+  ): Promise<Map<string, { fully_returned: boolean; has_prior_returns: boolean }>> {
+    const out = new Map<string, { fully_returned: boolean; has_prior_returns: boolean }>();
+    const originalIds = sales.map((s) => s.id);
+    if (originalIds.length === 0) return out;
+
+    const childSales = await prisma.sale.findMany({
+      where: {
+        original_sale_id: { in: originalIds },
+        status: { in: [SaleStatus.REFUNDED, SaleStatus.EXCHANGED] },
+      },
+      select: {
+        original_sale_id: true,
+        sale_items: {
+          select: { item_type: true, ref_sale_item_id: true, quantity: true },
+        },
+      },
+    });
+
+    const returnedByLineByOriginal = new Map<string, Map<string, Prisma.Decimal>>();
+    for (const id of originalIds) {
+      returnedByLineByOriginal.set(id, new Map());
+    }
+    for (const c of childSales) {
+      const oid = c.original_sale_id!;
+      const m = returnedByLineByOriginal.get(oid)!;
+      for (const si of c.sale_items) {
+        if (si.item_type === SaleItemType.RETURN && si.ref_sale_item_id) {
+          const k = si.ref_sale_item_id;
+          const prev = m.get(k) ?? new Prisma.Decimal(0);
+          m.set(k, prev.plus(si.quantity.abs()));
+        }
+      }
+    }
+
+    for (const sale of sales) {
+      const lineMap = returnedByLineByOriginal.get(sale.id)!;
+      const originalLines = sale.sale_items.filter((l) => l.item_type === SaleItemType.ORIGINAL);
+      const lines = originalLines.length > 0 ? originalLines : sale.sale_items;
+
+      const has_prior_returns = childSales.some((c) => c.original_sale_id === sale.id);
+
+      if (lines.length === 0) {
+        out.set(sale.id, { fully_returned: false, has_prior_returns });
+        continue;
+      }
+
+      let anyReturnable = false;
+      for (const line of lines) {
+        if (originalLines.length > 0 && line.item_type !== SaleItemType.ORIGINAL) continue;
+        const already = lineMap.get(line.id)?.toNumber() ?? 0;
+        if (line.quantity.toNumber() - already > 0) {
+          anyReturnable = true;
+          break;
+        }
+      }
+
+      out.set(sale.id, {
+        fully_returned: !anyReturnable,
+        has_prior_returns,
+      });
+    }
+
+    return out;
+  }
+
   async getSalesForReturns({ branchId, search }: { branchId?: string; search?: string }) {
     const normalizedSearch = search?.replace(/\s+/g, ' ').trim();
 
-    return prisma.sale.findMany({
+    const sales = await prisma.sale.findMany({
       where: {
         branch_id: branchId,
         status: 'COMPLETED', // Only completed sales can be returned
@@ -146,7 +290,29 @@ class SaleService {
         customer: true,
       },
       orderBy: { sale_date: 'desc' },
-      take: 50, // Limit results for performance
+      take: 100,
+    });
+
+    const flags = await this.getReturnProcessingFlagsForSales(
+      sales.map((s) => ({
+        id: s.id,
+        sale_items: s.sale_items.map((it) => ({
+          id: it.id,
+          quantity: it.quantity,
+          item_type: it.item_type,
+        })),
+      })),
+    );
+
+    return sales.map((s) => {
+      const f = flags.get(s.id) ?? { fully_returned: false, has_prior_returns: false };
+      return {
+        ...s,
+        return_eligibility: {
+          fully_returned: f.fully_returned,
+          has_prior_returns: f.has_prior_returns,
+        },
+      };
     });
   }
 
@@ -161,7 +327,23 @@ class SaleService {
       },
     });
     if (!sale) throw new AppError(404, 'Sale not found');
-    return sale;
+
+    if (sale.status !== SaleStatus.COMPLETED) {
+      return sale;
+    }
+
+    const returnedMap = await this.getReturnedQtyByOriginalSaleLineIds(saleId);
+    const saleItems = sale.sale_items.map((item) => {
+      const already = returnedMap.get(item.id)?.toNumber() ?? 0;
+      const origQty = item.quantity.toNumber();
+      return {
+        ...item,
+        quantity_already_returned: already,
+        quantity_returnable: Math.max(0, origQty - already),
+      };
+    });
+
+    return { ...sale, sale_items: saleItems };
   }
 
   async getHoldSales() {
@@ -751,15 +933,25 @@ class SaleService {
       throw new AppError(400, `Products not found: ${missingExchangeProductIds.join(', ')}`);
     }
 
+    const returnedQtyByLineId = await this.getReturnedQtyByOriginalSaleLineIds(originalSaleId);
+
     for (const ret of returnedItems) {
       const originalItem = originalSale.sale_items.find((item) => item.product_id === ret.productId);
       if (!originalItem) {
         throw new AppError(400, `Product ${ret.productId} not found in original sale`);
       }
-      if (ret.quantity > originalItem.quantity.toNumber()) {
+      const alreadyReturned = returnedQtyByLineId.get(originalItem.id)?.toNumber() ?? 0;
+      const maxReturnable = originalItem.quantity.toNumber() - alreadyReturned;
+      if (maxReturnable <= 0) {
         throw new AppError(
           400,
-          `Return quantity (${ret.quantity}) exceeds original sale quantity (${originalItem.quantity}) for product ${ret.productId}`,
+          `Nothing left to return for this product (${alreadyReturned} of ${originalItem.quantity.toNumber()} units were already returned).`,
+        );
+      }
+      if (ret.quantity > maxReturnable) {
+        throw new AppError(
+          400,
+          `Return quantity (${ret.quantity}) exceeds what is still returnable (${maxReturnable}) for product ${ret.productId}. ${alreadyReturned} unit(s) were already returned.`,
         );
       }
     }
@@ -873,12 +1065,14 @@ class SaleService {
     }
 
     const ops: Prisma.PrismaPromise<any>[] = [];
+    const resolvedCustomerId = customerId ?? originalSale.customer_id ?? undefined;
+
     ops.push(
       prisma.sale.create({
         data: {
           sale_number: `SALE-${Date.now()}`,
           branch_id: branchId,
-          customer_id: customerId,
+          customer_id: resolvedCustomerId,
           original_sale_id: originalSaleId,
           notes,
           subtotal: total,
