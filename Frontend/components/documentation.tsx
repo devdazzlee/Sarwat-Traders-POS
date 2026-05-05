@@ -70,7 +70,7 @@ const UI_TEXT = {
   whatIs: { en: "What is this?", ur: "یہ کیا ہے؟" },
   example: { en: "Real-life example", ur: "حقیقی مثال" },
   options: { en: "What you can do here", ur: "یہاں آپ کیا کر سکتے ہیں" },
-  howTo: { en: "How to use it (step by step)", ur: "استعمال کا طریقہ (مرحلہ وار)" },
+  howToUse: { en: "How to use it (step by step)", ur: "استعمال کا طریقہ (مرحلہ وار)" },
   tip: { en: "Tip", ur: "تجویز" },
   noResults: { en: "No topics match your search", ur: "آپ کی تلاش سے کوئی موضوع نہیں ملا" },
   noResultsHint: {
