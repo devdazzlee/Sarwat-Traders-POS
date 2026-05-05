@@ -34,6 +34,7 @@ import {
   Printer as PrinterIcon,
   Download,
   User,
+  BookOpen,
   type LucideIcon,
 } from "lucide-react";
 
@@ -275,6 +276,17 @@ const menuSections: SidebarMenuSection[] = [
         label: "Profile Settings",
         icon: User,
         roles: ADMIN_ROLES,
+      },
+    ],
+  },
+  {
+    id: "help",
+    label: "Help & Guide",
+    items: [
+      {
+        id: "documentation",
+        label: "Documentation",
+        icon: BookOpen,
       },
     ],
   },

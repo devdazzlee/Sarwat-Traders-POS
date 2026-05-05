@@ -58,6 +58,7 @@ import { NewSale } from "./new-sale";
 import { PrinterSettings } from "./printer-settings";
 import { ProductExport } from "./product-export";
 import { CustomerLedger } from "./customer-ledger";
+import { Documentation } from "./documentation";
 
 
 interface DashboardProps {
@@ -188,6 +189,8 @@ export function Dashboard({ onLogout }: DashboardProps) {
         return <PrinterSettings />;
       case "product-export":
         return <ProductExport />;
+      case "documentation":
+        return <Documentation />;
       default:
         return <DashboardHome />;
     }
