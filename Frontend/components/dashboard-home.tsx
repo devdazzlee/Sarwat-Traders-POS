@@ -51,6 +51,7 @@ interface DashboardStats {
   todaySales: any[]
   dailyRevenue: number
   dailyCredit: number
+  dailyCash: number
   dailyExpense: number
 }
 
@@ -178,6 +179,7 @@ export function DashboardHome({ onNavigate }: DashboardHomeProps) {
       `- Low Stock Items: ${stats.lowStockProducts.length}`,
       `- Today's Transactions: ${stats.todaySales.length}`,
       `- Daily Revenue: Rs ${(stats.dailyRevenue || 0).toFixed(2)}`,
+      `- Daily Cash: Rs ${(stats.dailyCash || 0).toFixed(2)}`,
       `- Daily Credit: Rs ${(stats.dailyCredit || 0).toFixed(2)}`,
       `- Daily Expenses: Rs ${(stats.dailyExpense || 0).toFixed(2)}`,
     ]
@@ -339,9 +341,10 @@ export function DashboardHome({ onNavigate }: DashboardHomeProps) {
       </div>
 
       {/* Stats Cards — Row 2: Financial Metrics */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 md:gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 md:gap-6">
         {initialLoading ? (
           <>
+            <StatCardSkeleton />
             <StatCardSkeleton />
             <StatCardSkeleton />
             <StatCardSkeleton />
@@ -356,6 +359,17 @@ export function DashboardHome({ onNavigate }: DashboardHomeProps) {
               <CardContent>
                 <div className="text-2xl font-bold text-blue-700">{formatCurrency(stats?.dailyRevenue || 0)}</div>
                 <p className="text-xs text-blue-500 mt-1">All cash + credit sales</p>
+              </CardContent>
+            </Card>
+
+            <Card className="hover:shadow-md transition-shadow border-emerald-200 bg-emerald-50/50">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium text-emerald-800">Cash Sales (Today)</CardTitle>
+                <DollarSign className="h-5 w-5 text-emerald-600" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-emerald-700">{formatCurrency(stats?.dailyCash || 0)}</div>
+                <p className="text-xs text-emerald-500 mt-1">Paid cash transactions</p>
               </CardContent>
             </Card>
 
