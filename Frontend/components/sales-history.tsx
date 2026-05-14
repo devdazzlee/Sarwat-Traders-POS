@@ -480,11 +480,12 @@ export function SalesHistory() {
     
     const itemsHtml = (data.items || [])
       .map((item, idx) => `
-        <tr style="border-bottom: 1px solid #e2e8f0;">
-          <td style="padding: 10px 0; font-size: 13px;">${item.name}</td>
-          <td style="padding: 10px 0; font-size: 13px; text-align: center;">${item.quantity}</td>
-          <td style="padding: 10px 0; font-size: 13px; text-align: right;">${item.price.toFixed(2)}</td>
-          <td style="padding: 10px 0; font-size: 13px; text-align: right; font-weight: 600;">${item.lineTotal.toFixed(2)}</td>
+        <tr>
+          <td style="padding: 4px 0; font-size: 12px; text-align: center; width: 40px;">${idx + 1}</td>
+          <td style="padding: 4px 0; font-size: 12px;">${item.name}</td>
+          <td style="padding: 4px 0; font-size: 12px; text-align: center;">${item.quantity}</td>
+          <td style="padding: 4px 0; font-size: 12px; text-align: right;">${item.price.toFixed(2)}</td>
+          <td style="padding: 4px 0; font-size: 12px; text-align: right; font-weight: 600;">${item.lineTotal.toFixed(2)}</td>
         </tr>
       `).join("");
 
@@ -507,8 +508,8 @@ export function SalesHistory() {
             .bill-to { margin-bottom: 30px; }
             .bill-label { font-size: 11px; color: #777; margin-bottom: 4px; text-transform: uppercase; }
             .customer-name { font-size: 16px; font-weight: bold; }
-            table { width: 100%; border-collapse: collapse; margin-bottom: 30px; }
-            th { text-align: left; border-bottom: 2px solid #000; padding: 10px 0; font-size: 12px; text-transform: uppercase; }
+            table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+            th { text-align: left; border-bottom: 2px solid #000; padding: 6px 0; font-size: 11px; text-transform: uppercase; }
             .summary { display: flex; flex-direction: column; align-items: flex-end; }
             .summary-row { display: flex; width: 250px; justify-content: space-between; margin-bottom: 6px; font-size: 14px; }
             .grand-total { border-top: 1px solid #000; padding-top: 10px; margin-top: 10px; font-size: 18px; font-weight: bold; }
@@ -543,7 +544,8 @@ export function SalesHistory() {
           <table>
             <thead>
               <tr>
-                <th style="width: 50%;">Description</th>
+                <th style="width: 40px; text-align: center;">S.NO</th>
+                <th style="width: 45%;">Description</th>
                 <th style="text-align: center;">Qty</th>
                 <th style="text-align: right;">Price</th>
                 <th style="text-align: right;">Amount</th>

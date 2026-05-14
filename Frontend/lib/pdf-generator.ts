@@ -159,33 +159,34 @@ const buildInvoiceDoc = (data: InvoiceData, logoDataUrl: string | null): jsPDF =
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9);
   doc.setTextColor(50, 50, 50);
-  doc.text('DESCRIPTION', margin, tableTop + 6);
+  const snoX = margin;
+  const descX = margin + 12;
+  doc.text('S.NO', snoX, tableTop + 6);
+  doc.text('DESCRIPTION', descX, tableTop + 6);
   doc.text('QTY', pageWidth - 80, tableTop + 6, { align: 'center' });
   doc.text('PRICE', pageWidth - 50, tableTop + 6, { align: 'right' });
   doc.text('AMOUNT', pageWidth - margin, tableTop + 6, { align: 'right' });
-  
-  doc.line(margin, tableTop + 10, pageWidth - margin, tableTop + 10);
+
+  doc.line(margin, tableTop + 9, pageWidth - margin, tableTop + 9);
 
   // Table Body
-  let currentY = tableTop + 18;
+  let currentY = tableTop + 14;
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(10);
+  doc.setFontSize(9);
   doc.setTextColor(0, 0, 0);
-  
-  data.items.forEach((item) => {
-    if (currentY > pageHeight - 60) {
+
+  data.items.forEach((item, index) => {
+    if (currentY > pageHeight - 50) {
       doc.addPage();
       currentY = 30;
     }
-    doc.text(item.name, margin, currentY);
+    doc.text(String(index + 1), snoX, currentY);
+    doc.text(item.name, descX, currentY);
     doc.text(item.quantity.toString(), pageWidth - 80, currentY, { align: 'center' });
     doc.text(formatAmount(item.price), pageWidth - 50, currentY, { align: 'right' });
     doc.text(formatAmount(item.lineTotal), pageWidth - margin, currentY, { align: 'right' });
-    
-    currentY += 12;
-    // Simple thin line between items
-    doc.setDrawColor(245, 245, 245);
-    doc.line(margin, currentY - 5, pageWidth - margin, currentY - 5);
+
+    currentY += 6;
   });
 
   // Summary section
@@ -294,27 +295,31 @@ const buildReturnNoteDoc = (data: ReturnNoteData, logoDataUrl: string | null): j
   doc.line(margin, tableTop, pageWidth - margin, tableTop);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9);
-  doc.text('DESCRIPTION', margin, tableTop + 6);
+  const rnSnoX = margin;
+  const rnDescX = margin + 12;
+  doc.text('S.NO', rnSnoX, tableTop + 6);
+  doc.text('DESCRIPTION', rnDescX, tableTop + 6);
   doc.text('QTY', pageWidth - 80, tableTop + 6, { align: 'center' });
   doc.text('PRICE', pageWidth - 50, tableTop + 6, { align: 'right' });
   doc.text('AMOUNT', pageWidth - margin, tableTop + 6, { align: 'right' });
-  doc.line(margin, tableTop + 10, pageWidth - margin, tableTop + 10);
+  doc.line(margin, tableTop + 9, pageWidth - margin, tableTop + 9);
 
-  let currentY = tableTop + 18;
+  let currentY = tableTop + 14;
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(10);
+  doc.setFontSize(9);
 
   const allItems = [
     ...data.returnedItems.map(i => ({ ...i, type: 'Return' })),
     ...data.exchangedItems.map(i => ({ ...i, type: 'Exchange' }))
   ];
 
-  allItems.forEach((item) => {
-    doc.text(`${item.type}: ${item.name}`, margin, currentY);
+  allItems.forEach((item, index) => {
+    doc.text(String(index + 1), rnSnoX, currentY);
+    doc.text(`${item.type}: ${item.name}`, rnDescX, currentY);
     doc.text(item.qty.toString(), pageWidth - 80, currentY, { align: 'center' });
     doc.text(formatAmount(item.price), pageWidth - 50, currentY, { align: 'right' });
     doc.text(formatAmount(item.qty * item.price), pageWidth - margin, currentY, { align: 'right' });
-    currentY += 10;
+    currentY += 6;
   });
 
   // Totals

@@ -2211,15 +2211,20 @@ function buildReturnNoteHtml(d: {
   netAmount: number
   date: string
 }): string {
+  let rowIndex = 0;
   const rows = (items: typeof d.returnedItems, label: string) =>
-    items.map(it => `
-      <tr style="border-bottom: 1px solid #e2e8f0;">
-        <td style="padding: 10px 0; font-size: 13px;">${label}: ${it.name}</td>
-        <td style="padding: 10px 0; font-size: 13px; text-align: center;">${it.qty}</td>
-        <td style="padding: 10px 0; font-size: 13px; text-align: right;">${it.price.toFixed(2)}</td>
-        <td style="padding: 10px 0; font-size: 13px; text-align: right; font-weight: 600;">${(it.qty * it.price).toFixed(2)}</td>
+    items.map(it => {
+      rowIndex += 1;
+      return `
+      <tr>
+        <td style="padding: 4px 0; font-size: 12px; text-align: center; width: 40px;">${rowIndex}</td>
+        <td style="padding: 4px 0; font-size: 12px;">${label}: ${it.name}</td>
+        <td style="padding: 4px 0; font-size: 12px; text-align: center;">${it.qty}</td>
+        <td style="padding: 4px 0; font-size: 12px; text-align: right;">${it.price.toFixed(2)}</td>
+        <td style="padding: 4px 0; font-size: 12px; text-align: right; font-weight: 600;">${(it.qty * it.price).toFixed(2)}</td>
       </tr>
-    `).join('')
+    `;
+    }).join('')
 
   return `
     <!DOCTYPE html>
@@ -2237,8 +2242,8 @@ function buildReturnNoteHtml(d: {
           .invoice-label { font-size: 20px; font-weight: bold; margin-bottom: 10px; }
           .info-row { font-size: 12px; margin-bottom: 4px; }
           .info-val { font-weight: bold; }
-          table { width: 100%; border-collapse: collapse; margin-bottom: 30px; }
-          th { text-align: left; border-bottom: 2px solid #000; padding: 10px 0; font-size: 12px; text-transform: uppercase; }
+          table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+          th { text-align: left; border-bottom: 2px solid #000; padding: 6px 0; font-size: 11px; text-transform: uppercase; }
           .summary { display: flex; flex-direction: column; align-items: flex-end; }
           .summary-row { display: flex; width: 250px; justify-content: space-between; margin-bottom: 6px; font-size: 14px; }
           .grand-total { border-top: 1px solid #000; padding-top: 10px; margin-top: 10px; font-size: 18px; font-weight: bold; }
@@ -2265,7 +2270,8 @@ function buildReturnNoteHtml(d: {
         <table>
           <thead>
             <tr>
-              <th style="width: 50%;">Description</th>
+              <th style="width: 40px; text-align: center;">S.NO</th>
+              <th style="width: 45%;">Description</th>
               <th style="text-align: center;">Qty</th>
               <th style="text-align: right;">Price</th>
               <th style="text-align: right;">Amount</th>

@@ -30,6 +30,7 @@ import {
   DollarSign,
   Plus,
   Loader2,
+  Printer,
 } from "lucide-react";
 import apiClient from "@/lib/apiClient";
 import { API_BASE } from "@/config/constants";
@@ -159,7 +160,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
     }
   };
 
-  const handleDownloadPDF = () => {
+  const buildLedgerDoc = () => {
     const doc = new jsPDF();
     const pageWidth = doc.internal.pageSize.width;
 
@@ -265,7 +266,24 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
       }
     });
 
+    return doc;
+  };
+
+  const handleDownloadPDF = () => {
+    const doc = buildLedgerDoc();
     doc.save(`${customer.name}_Statement_${format(new Date(), "yyyyMMdd")}.pdf`);
+  };
+
+  const handlePrint = () => {
+    const doc = buildLedgerDoc();
+    const blobUrl = doc.output("bloburl");
+    const win = window.open(blobUrl as unknown as string, "_blank");
+    if (win) {
+      win.addEventListener("load", () => {
+        win.focus();
+        win.print();
+      });
+    }
   };
 
   if (loading) return <PageLoader message="Loading ledger..." />;
@@ -349,6 +367,9 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
             </Button>
             <Button variant="outline" size="sm" onClick={handleDownloadPDF} className="gap-1.5 border-blue-200 text-blue-600 hover:bg-blue-50">
               <Download className="h-3.5 w-3.5" /> Export PDF
+            </Button>
+            <Button variant="outline" size="sm" onClick={handlePrint} className="gap-1.5 border-slate-200 text-slate-700 hover:bg-slate-50">
+              <Printer className="h-3.5 w-3.5" /> Print
             </Button>
             <Button 
                 size="sm" 

@@ -1095,10 +1095,6 @@ export function NewSale() {
       setGlobalDiscountValue("");
       setSelectedCustomer(null);
       setCheckoutSuccessData(result);
-      // Auto-download A4 Invoice instead of thermal print
-      if (result) {
-        downloadA4Invoice(result);
-      }
     }
   };
 
@@ -2223,20 +2219,8 @@ export function NewSale() {
               <div className="space-y-2">
                 {cart.map((item) => {
                   const unitName = item.unitName || item.unit;
-                  const presetOptions = getQuantityPresetOptions(unitName);
-                  const matchedPresetValue = getPresetValueForQuantity(item.quantity, unitName);
-                  const quantityMode = quantityModes[item.id] === "custom" ? "custom" : "preset";
-                  const selectedPresetValue =
-                    quantityMode === "custom"
-                      ? "custom"
-                      : matchedPresetValue === "custom"
-                        ? presetOptions[0]?.value || "custom"
-                        : matchedPresetValue;
                   const minQuantity = isPieceUnit(unitName) ? 1 : 0.01;
-                  const minControlQuantity =
-                    quantityMode === "preset" && isWeightUnit(unitName)
-                      ? presetOptions[0]?.quantity ?? minQuantity
-                      : minQuantity;
+                  const minControlQuantity = minQuantity;
                   const effectiveUnitPrice = getSellingPrice(item);
 
                   return (
@@ -2249,7 +2233,7 @@ export function NewSale() {
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="space-y-1">
-                        <h4 className="text-sm font-semibold text-gray-900 leading-snug flex items-center gap-2">
+                        <h4 className="text-xs font-semibold text-gray-900 leading-snug flex items-center gap-2">
                           <span>{item.name}</span>
                           {isPriceOverridden(item) && (
                             <Badge variant="outline" className="text-[10px] border-amber-300 text-amber-700 bg-amber-50">
@@ -2269,11 +2253,11 @@ export function NewSale() {
                       </Button>
                     </div>
 
-                    <div className="mt-3 rounded-lg border border-gray-100 bg-slate-50 p-3 space-y-3">
+                    <div className="mt-2 rounded-lg border border-gray-100 bg-slate-50 p-2 space-y-2">
                       {/* Price editor */}
                       <div>
                         <div className="flex items-center justify-between">
-                          <label className="text-[11px] font-semibold tracking-wide text-gray-600">
+                          <label className="text-[10px] font-semibold tracking-wide text-gray-600">
                             Selling Price (Rs)
                           </label>
                           {isPriceOverridden(item) && (
@@ -2408,227 +2392,90 @@ export function NewSale() {
                               isUserInteractingRef.current = false;
                             }, 300);
                           }}
-                          className={`mt-1 h-10 text-base font-semibold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
+                          className={`mt-1 h-8 text-sm font-semibold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
                             isPriceOverridden(item) ? "border-amber-400 bg-amber-50" : ""
                           }`}
                         />
                       </div>
                       
                       {/* Quantity + amount based auto-calc */}
-                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                      <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
                       <div>
-                          <label className="text-[11px] font-semibold uppercase tracking-wide text-gray-600">
-                            Quantity {unitName ? `(${unitName})` : ""}
+                          <label className="text-[10px] font-semibold uppercase tracking-wide text-gray-600">
+                            Quantity {unitName && unitName.toLowerCase() !== "unknown" ? `(${unitName})` : ""}
                         </label>
                           <div className="mt-1 space-y-2">
-                            <Select
-                              value={selectedPresetValue}
-                              onValueChange={(value) => {
-                                if (value === "custom") {
-                                  setQuantityModes((prev) => ({ ...prev, [item.id]: "custom" }));
-                                  setQuantityInputs((prev) => ({
-                                    ...prev,
-                                    [item.id]: isPieceUnit(unitName)
-                                      ? String(Math.max(1, Math.round(item.quantity)))
-                                      : item.quantity.toFixed(3),
-                                  }));
+                            <Input
+                              ref={(el) => {
+                                quantityInputRefs.current[item.id] = el;
+                                if (el) {
+                                  el.setAttribute("data-quantity-input", "true");
+                                }
+                              }}
+                              type="text"
+                              inputMode={isWeightUnit(unitName) ? "text" : "decimal"}
+                              placeholder={
+                                isPieceUnit(unitName)
+                                  ? "Type pieces"
+                                  : isWeightUnit(unitName)
+                                    ? "250g or 0.25kg"
+                                    : "Type quantity"
+                              }
+                              value={quantityInputs[item.id] ?? formatQuantityValue(item.quantity)}
+                              onFocus={() => {
+                                isUserInteractingRef.current = true;
+                              }}
+                              onChange={(e) => {
+                                const value = e.target.value.trim();
+                                setQuantityModes((prev) => ({ ...prev, [item.id]: "custom" }));
+                                if (value === "") {
+                                  setQuantityInputs((prev) => ({ ...prev, [item.id]: "" }));
                                   return;
                                 }
 
-                                const selectedPreset = presetOptions.find((preset) => preset.value === value);
-                                if (!selectedPreset) return;
-
-                                setQuantityModes((prev) => ({ ...prev, [item.id]: "preset" }));
-                                setQuantityInputs((prev) => {
-                                  const next = { ...prev };
-                                  delete next[item.id];
-                                  return next;
-                                });
-                                updateQuantityManual(item.id, selectedPreset.quantity, unitName);
+                                setQuantityInputs((prev) => ({ ...prev, [item.id]: value }));
+                                const parsed = parseCustomQuantityInput(value, unitName);
+                                if (parsed === null) return;
+                                updateQuantityManual(item.id, parsed, unitName);
                               }}
-                            >
-                              <SelectTrigger
-                            ref={(el) => {
-                              quantityInputRefs.current[item.id] = el;
-                              if (el) {
-                                    el.setAttribute("data-quantity-select", "true");
-                              }
-                            }}
-                                className="h-10 bg-white text-sm"
-                            onFocus={() => {
-                              isUserInteractingRef.current = true;
-                            }}
-                                onBlur={() => {
-                                  setTimeout(() => {
-                                    isUserInteractingRef.current = false;
-                                  }, 300);
-                                }}
-                              >
-                                <SelectValue placeholder="Select quantity" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {presetOptions.map((preset) => (
-                                  <SelectItem key={`${item.id}-${preset.value}`} value={preset.value}>
-                                    {preset.label}
-                                  </SelectItem>
-                                ))}
-                                <SelectItem value="custom">Custom...</SelectItem>
-                              </SelectContent>
-                            </Select>
-
-                            {quantityMode === "custom" && (
-                          <Input
-                            ref={(el) => {
-                              quantityInputRefs.current[item.id] = el;
-                              if (el) {
-                                    el.setAttribute("data-quantity-input", "true");
-                              }
-                            }}
-                            type="text"
-                                inputMode={isWeightUnit(unitName) ? "text" : "decimal"}
-                                placeholder={
-                                  isPieceUnit(unitName)
-                                    ? "Type pieces"
-                                    : isWeightUnit(unitName)
-                                      ? "250g or 0.25kg"
-                                      : "Type quantity"
-                                }
-                                value={quantityInputs[item.id] ?? ""}
-                            onFocus={() => {
-                              isUserInteractingRef.current = true;
-                            }}
-                            onChange={(e) => {
-                                  const value = e.target.value.trim();
-                                  if (value === "") {
-                                    setQuantityInputs((prev) => ({ ...prev, [item.id]: "" }));
-                                return;
-                              }
-                              
-                                  setQuantityInputs((prev) => ({ ...prev, [item.id]: value }));
-                                  const parsed = parseCustomQuantityInput(value, unitName);
-                                  if (parsed === null) return;
+                              onBlur={() => {
+                                const currentValue = quantityInputs[item.id];
+                                const parsed = currentValue
+                                  ? parseCustomQuantityInput(currentValue, unitName)
+                                  : null;
+                                if (!currentValue || parsed === null || parsed <= 0) {
+                                  setQuantityInputs((prev) => {
+                                    const next = { ...prev };
+                                    delete next[item.id];
+                                    return next;
+                                  });
+                                  updateQuantityManual(item.id, minQuantity, unitName);
+                                } else {
                                   updateQuantityManual(item.id, parsed, unitName);
-                                }}
-                                onBlur={() => {
-                                  const currentValue = quantityInputs[item.id];
-                                  const parsed = currentValue
-                                    ? parseCustomQuantityInput(currentValue, unitName)
-                                    : null;
-                                  if (!currentValue || parsed === null || parsed <= 0) {
-                                    setQuantityInputs((prev) => ({
-                                      ...prev,
-                                      [item.id]: isPieceUnit(unitName) ? "1" : "0.01",
-                                    }));
-                                    updateQuantityManual(item.id, minQuantity, unitName);
-                              } else {
-                                    updateQuantityManual(item.id, parsed, unitName);
-                                  }
-                              setTimeout(() => {
-                                isUserInteractingRef.current = false;
-                              }, 300);
-                            }}
-                                className="h-10 text-sm font-semibold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                              />
-                            )}
-
-                            <div className="flex items-center gap-1.5">
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => {
-                                  const currentItem = cart.find((cartItem) => cartItem.id === item.id);
-                                  if (currentItem && currentItem.quantity > minControlQuantity) {
-                                    updateQuantity(item.id, -1);
-                                  }
-                                }}
-                                className="h-10 w-10 p-0"
-                                disabled={item.quantity <= minControlQuantity}
-                              >
-                                <Minus className="h-4 w-4" />
-                              </Button>
-                              <div className="h-10 flex-1 rounded-md border border-gray-200 bg-white px-3 text-sm font-semibold text-gray-800 flex items-center justify-center whitespace-nowrap">
-                                {formatQuantityWithUnit(item.quantity, unitName)}
-                              </div>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => updateQuantity(item.id, 1)}
-                                className="h-10 w-10 p-0"
-                          >
-                                <Plus className="h-4 w-4" />
-                          </Button>
-                            </div>
-                        </div>
+                                  setQuantityInputs((prev) => {
+                                    const next = { ...prev };
+                                    delete next[item.id];
+                                    return next;
+                                  });
+                                }
+                                setTimeout(() => {
+                                  isUserInteractingRef.current = false;
+                                }, 300);
+                              }}
+                              className="h-8 text-xs font-semibold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            />
+                          </div>
                       </div>
                       
-                        <div className="space-y-2">
-                          <label className="text-[11px] font-semibold uppercase tracking-wide text-gray-600">
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-semibold uppercase tracking-wide text-gray-600">
                             Total
                           </label>
-                          <div className="rounded-md border border-blue-100 bg-blue-50 px-3 h-10 flex items-center justify-start">
-                            <span className="text-base font-semibold text-blue-900 whitespace-nowrap text-left">
+                          <div className="rounded-md border border-blue-100 bg-blue-50 px-2 h-8 flex items-center justify-start">
+                            <span className="text-sm font-semibold text-blue-900 whitespace-nowrap text-left">
                               Rs {formatMoney(effectiveUnitPrice * item.quantity)}
                             </span>
                           </div>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="h-8 w-full text-xs"
-                            onClick={() =>
-                              setShowAmountEditors((prev) => ({
-                                ...prev,
-                                [item.id]: !prev[item.id],
-                              }))
-                            }
-                          >
-                            {showAmountEditors[item.id] ? "Hide Amount" : "Amount by Rs"}
-                          </Button>
-                          {showAmountEditors[item.id] && (
-                            <div className="rounded-md border border-gray-200 bg-white p-2">
-                              <label className="text-[10px] font-semibold uppercase tracking-wide text-gray-600">
-                                Amount (Rs)
-                        </label>
-                        <Input
-                                data-amount-input="true"
-                          type="text"
-                          inputMode="decimal"
-                                placeholder="e.g. 500"
-                                value={amountInputs[item.id] ?? ""}
-                          onFocus={() => {
-                            isUserInteractingRef.current = true;
-                          }}
-                          onChange={(e) => {
-                            const value = e.target.value;
-                                  if (value !== "" && !/^(\d*\.?\d*)$/.test(value)) return;
-                                  setAmountInputs((prev) => ({ ...prev, [item.id]: value }));
-
-                                  if (value === "" || value === ".") return;
-
-                                  const amountValue = parseFloat(value);
-                                  if (Number.isNaN(amountValue) || amountValue < 0 || effectiveUnitPrice <= 0) return;
-                                  const computedQuantity = amountValue / effectiveUnitPrice;
-                                  updateQuantityManual(item.id, computedQuantity, unitName);
-                                  setQuantityModes((prev) => ({ ...prev, [item.id]: "custom" }));
-                                  setQuantityInputs((prev) => ({
-                                    ...prev,
-                                    [item.id]: isPieceUnit(unitName)
-                                      ? String(Math.max(1, Math.round(computedQuantity)))
-                                      : computedQuantity.toFixed(3),
-                                  }));
-                          }}
-                          onBlur={() => {
-                            setTimeout(() => {
-                              isUserInteractingRef.current = false;
-                            }, 300);
-                          }}
-                                className="mt-1 h-9 text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                        />
-                              <p className="mt-1 text-[10px] text-blue-600 font-medium">
-                                Auto qty: {formatQuantityWithUnit(item.quantity, unitName)}
-                              </p>
-                      </div>
-                          )}
                     </div>
                   </div>
                     </div>
