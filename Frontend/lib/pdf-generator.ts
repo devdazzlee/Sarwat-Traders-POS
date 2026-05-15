@@ -100,58 +100,80 @@ const buildInvoiceDoc = (data: InvoiceData, logoDataUrl: string | null): jsPDF =
   const topY = 20;
   
   doc.setFont('helvetica');
-  
-  // Header section
-  const logoSize = 25;
+
+  // Header section — logo + SARWAT TRADER side by side
+  const logoSize = 18;
+  let brandTextX = margin;
   if (logoDataUrl) {
     try {
       doc.addImage(logoDataUrl, 'JPEG', margin, topY, logoSize, logoSize);
+      brandTextX = margin + logoSize + 4;
     } catch {
-      // If even the canvas image fails, skip silently (no placeholder box)
+      // If image fails, skip silently
     }
   }
 
-  // Store Details (Below Logo)
   doc.setTextColor(0, 0, 0);
-  doc.setFontSize(14);
+  doc.setFontSize(16);
   doc.setFont('helvetica', 'bold');
-  doc.text('SARWAT TRADER', margin, topY + logoSize + 8);
-  
+  doc.text('SARWAT TRADER', brandTextX, topY + 10);
+
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9);
+  doc.setFontSize(8);
   doc.setTextColor(80, 80, 80);
-  doc.text("(021) 3272-7444", margin, topY + logoSize + 15);
-  doc.text("Shop no 109, 1st floor city shopping mall, Marston road", margin, topY + logoSize + 20);
-  doc.text("Karachi, Pakistan.", margin, topY + logoSize + 24);
+  doc.text("Shop no 109, 1st floor city shopping mall, Marston road, Karachi.", margin, topY + logoSize + 4);
+  doc.text("Contact: (021) 3272-7444", margin, topY + logoSize + 8);
 
   // Invoice Details (Top Right)
-  const labelX = pageWidth - 85; 
+  const labelX = pageWidth - 85;
   const valueX = pageWidth - margin;
-  
-  doc.setTextColor(120, 120, 120);
-  doc.setFontSize(10);
-  doc.setFont('helvetica', 'normal');
-  doc.text(`Date:`, labelX, topY + 5); 
+
   doc.setTextColor(0, 0, 0);
+  doc.setFontSize(18);
   doc.setFont('helvetica', 'bold');
-  doc.text(format(data.date, 'MMMM dd, yyyy'), valueX, topY + 5, { align: 'right' });
-  
+  doc.text('INVOICE', valueX, topY + 5, { align: 'right' });
+
+  doc.setFontSize(9);
   doc.setTextColor(120, 120, 120);
   doc.setFont('helvetica', 'normal');
-  doc.text(`Invoice No:`, labelX, topY + 12);
+  doc.text(`Date:`, labelX, topY + 12);
   doc.setTextColor(0, 0, 0);
   doc.setFont('helvetica', 'bold');
-  doc.text(`#${data.saleNumber}`, valueX, topY + 12, { align: 'right' });
+  doc.text(format(data.date, 'MMMM dd, yyyy'), valueX, topY + 12, { align: 'right' });
 
   doc.setTextColor(120, 120, 120);
   doc.setFont('helvetica', 'normal');
-  doc.text(`Payment Method:`, labelX, topY + 19);
+  doc.text(`Invoice No:`, labelX, topY + 17);
   doc.setTextColor(0, 0, 0);
   doc.setFont('helvetica', 'bold');
-  doc.text(data.paymentMethod, valueX, topY + 19, { align: 'right' });
+  doc.text(`#${data.saleNumber}`, valueX, topY + 17, { align: 'right' });
+
+  doc.setTextColor(120, 120, 120);
+  doc.setFont('helvetica', 'normal');
+  doc.text(`Payment:`, labelX, topY + 22);
+  doc.setTextColor(0, 0, 0);
+  doc.setFont('helvetica', 'bold');
+  doc.text(data.paymentMethod, valueX, topY + 22, { align: 'right' });
+
+  // Bill To (inline)
+  const billY = topY + logoSize + 16;
+  doc.setFontSize(8);
+  doc.setTextColor(120, 120, 120);
+  doc.setFont('helvetica', 'normal');
+  doc.text('BILL TO:', margin, billY);
+  doc.setFontSize(10);
+  doc.setTextColor(0, 0, 0);
+  doc.setFont('helvetica', 'bold');
+  doc.text(data.customerName || 'Walk-in Customer', margin + 14, billY);
+  if (data.customerPhone) {
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(80, 80, 80);
+    doc.text(data.customerPhone, margin, billY + 5);
+  }
 
   // Table Header
-  const tableTop = 80;
+  const tableTop = billY + 10;
   doc.setDrawColor(220, 220, 220);
   doc.setLineWidth(0.5);
   doc.line(margin, tableTop, pageWidth - margin, tableTop);
@@ -246,23 +268,25 @@ const buildReturnNoteDoc = (data: ReturnNoteData, logoDataUrl: string | null): j
 
   doc.setFont('helvetica');
 
-  // Header
-  const logoSize = 22;
+  // Header — logo + SARWAT TRADER side by side
+  const logoSize = 18;
+  let rnBrandTextX = margin;
   if (logoDataUrl) {
     try {
       doc.addImage(logoDataUrl, 'JPEG', margin, topY, logoSize, logoSize);
+      rnBrandTextX = margin + logoSize + 4;
     } catch {
       // skip silently if image fails
     }
   }
-  doc.setFontSize(12);
+  doc.setFontSize(16);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(0, 0, 0);
-  doc.text('SARWAT TRADER', margin, topY + logoSize + 8);
-  doc.setFontSize(9);
+  doc.text('SARWAT TRADER', rnBrandTextX, topY + 10);
+  doc.setFontSize(8);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(80, 80, 80);
-  doc.text('Return / Exchange Note', margin, topY + logoSize + 13);
+  doc.text('Return / Exchange Note', margin, topY + logoSize + 4);
 
   // Right Info
   const rLabelX = pageWidth - 85;
@@ -377,15 +401,19 @@ export const downloadA4Invoice = async (data: InvoiceData) => {
 };
 
 export const printA4Invoice = async (data: InvoiceData) => {
-  const url = await generateA4InvoicePDF(data);
-  const win = window.open(url);
-  if (win) {
-    win.onload = () => {
-      win.focus();
-      win.print();
-    };
+  const logoDataUrl = await loadLogoDataUrl();
+  const doc = buildInvoiceDoc(data, logoDataUrl);
+  doc.autoPrint();
+  const blobUrl = URL.createObjectURL(doc.output('blob'));
+  const win = window.open(blobUrl);
+  if (!win) {
+    const a = document.createElement('a');
+    a.href = blobUrl;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.click();
   }
-  setTimeout(() => URL.revokeObjectURL(url), 30000);
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
 };
 
 type ShareResult =
@@ -423,13 +451,17 @@ export const downloadReturnNote = async (data: ReturnNoteData) => {
 export const printReturnNote = async (data: ReturnNoteData) => {
   const logoDataUrl = await loadLogoDataUrl();
   const doc = buildReturnNoteDoc(data, logoDataUrl);
-  const blob = doc.output('blob');
-  const url = URL.createObjectURL(blob);
-  const win = window.open(url);
-  if (win) {
-    win.onload = () => { win.focus(); win.print(); };
+  doc.autoPrint();
+  const blobUrl = URL.createObjectURL(doc.output('blob'));
+  const win = window.open(blobUrl);
+  if (!win) {
+    const a = document.createElement('a');
+    a.href = blobUrl;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.click();
   }
-  setTimeout(() => URL.revokeObjectURL(url), 30000);
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
 };
 
 export const shareOnWhatsApp = async (data: InvoiceData): Promise<ShareResult> => {

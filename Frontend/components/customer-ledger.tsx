@@ -276,14 +276,17 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
 
   const handlePrint = () => {
     const doc = buildLedgerDoc();
-    const blobUrl = doc.output("bloburl");
-    const win = window.open(blobUrl as unknown as string, "_blank");
-    if (win) {
-      win.addEventListener("load", () => {
-        win.focus();
-        win.print();
-      });
+    doc.autoPrint();
+    const blobUrl = URL.createObjectURL(doc.output("blob"));
+    const win = window.open(blobUrl, "_blank");
+    if (!win) {
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.click();
     }
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
   };
 
   if (loading) return <PageLoader message="Loading ledger..." />;

@@ -53,7 +53,7 @@ import {
 } from "@/components/ui/dialog";
 import { printReceiptViaServer, type ReceiptData } from "@/lib/print-server";
 import { usePrinterSettings } from "@/hooks/use-printer-settings";
-import { downloadA4Invoice, generateA4InvoicePDF, shareOnEmail, shareOnWhatsApp, type InvoiceData } from "@/lib/pdf-generator";
+import { downloadA4Invoice, generateA4InvoicePDF, printA4Invoice, shareOnEmail, shareOnWhatsApp, type InvoiceData } from "@/lib/pdf-generator";
 import { SaleEditor } from "./sale-editor";
 
 interface SaleItem {
@@ -494,33 +494,40 @@ export function SalesHistory() {
       <html>
         <head>
           <meta charset="UTF-8">
+          <title></title>
           <style>
-            body { font-family: 'Helvetica', Arial, sans-serif; color: #000; line-height: 1.4; padding: 40px; }
-            .header { display: flex; justify-content: space-between; margin-bottom: 40px; }
+            @page { size: A4; margin: 10mm; }
+            html, body { margin: 0; }
+            body { font-family: 'Helvetica', Arial, sans-serif; color: #000; line-height: 1.4; padding: 20px; }
+            .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
             .logo-section { display: flex; flex-direction: column; align-items: flex-start; }
-            .logo { height: 50px; width: auto; max-width: 100%; object-fit: contain; margin-bottom: 10px; }
-            .store-name { font-size: 18px; font-weight: bold; margin-bottom: 4px; }
+            .brand-row { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+            .logo { height: 44px; width: auto; max-width: 100%; object-fit: contain; }
+            .store-name { font-size: 20px; font-weight: bold; letter-spacing: 0.5px; }
             .store-info { font-size: 11px; color: #555; }
             .invoice-info { text-align: right; }
-            .invoice-label { font-size: 24px; font-weight: bold; margin-bottom: 10px; }
+            .invoice-label { font-size: 22px; font-weight: bold; margin-bottom: 8px; }
             .info-row { font-size: 13px; margin-bottom: 4px; }
             .info-val { font-weight: bold; }
-            .bill-to { margin-bottom: 30px; }
-            .bill-label { font-size: 11px; color: #777; margin-bottom: 4px; text-transform: uppercase; }
-            .customer-name { font-size: 16px; font-weight: bold; }
+            .bill-to { margin-bottom: 12px; display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; }
+            .bill-label { font-size: 11px; color: #777; text-transform: uppercase; }
+            .customer-name { font-size: 14px; font-weight: bold; }
+            .bill-to .info-row { width: 100%; }
             table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
             th { text-align: left; border-bottom: 2px solid #000; padding: 6px 0; font-size: 11px; text-transform: uppercase; }
             .summary { display: flex; flex-direction: column; align-items: flex-end; }
             .summary-row { display: flex; width: 250px; justify-content: space-between; margin-bottom: 6px; font-size: 14px; }
             .grand-total { border-top: 1px solid #000; padding-top: 10px; margin-top: 10px; font-size: 18px; font-weight: bold; }
-            .footer { margin-top: 100px; text-align: center; font-size: 10px; color: #999; border-top: 1px solid #eee; padding-top: 20px; }
+            .footer { margin-top: 60px; text-align: center; font-size: 10px; color: #999; border-top: 1px solid #eee; padding-top: 16px; }
           </style>
         </head>
         <body>
           <div class="header">
             <div class="logo-section">
-              <img src="/logo.png" class="logo" onerror="this.style.display='none'"/>
-              <div class="store-name">SARWAT TRADER</div>
+              <div class="brand-row">
+                <img src="/logo.png" class="logo" onerror="this.style.display='none'"/>
+                <div class="store-name">SARWAT TRADER</div>
+              </div>
               <div class="store-info">
                 Shop no 109, 1st floor city shopping mall, Marston road<br>
                 Karachi, Pakistan.<br>
@@ -1325,13 +1332,9 @@ export function SalesHistory() {
                         <Download className="h-4 w-4 mr-2" />
                         Download A4 Invoice
                       </Button>
-                      <Button 
-                        variant="outline" 
-                        onClick={() => {
-                          if (receiptIframeRef.current) {
-                            receiptIframeRef.current.contentWindow?.print();
-                          }
-                        }}
+                      <Button
+                        variant="outline"
+                        onClick={() => printA4Invoice(mapSaleToInvoiceData(viewSale))}
                         className="whitespace-nowrap shadow-sm hover:shadow-md transition-all"
                         size="default"
                       >
