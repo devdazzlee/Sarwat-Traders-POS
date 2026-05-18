@@ -97,122 +97,146 @@ const buildInvoiceDoc = (data: InvoiceData, logoDataUrl: string | null): jsPDF =
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
   const margin = 20;
-  const topY = 20;
-  
-  doc.setFont('helvetica');
-
-  // Header section — logo + SARWAT TRADER side by side
+  const topY = 14;
   const logoSize = 18;
-  let brandTextX = margin;
-  if (logoDataUrl) {
-    try {
-      doc.addImage(logoDataUrl, 'JPEG', margin, topY, logoSize, logoSize);
-      brandTextX = margin + logoSize + 4;
-    } catch {
-      // If image fails, skip silently
-    }
-  }
 
-  doc.setTextColor(0, 0, 0);
-  doc.setFontSize(16);
-  doc.setFont('helvetica', 'bold');
-  doc.text('SARWAT TRADER', brandTextX, topY + 10);
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  doc.setTextColor(80, 80, 80);
-  doc.text("Shop no 109, 1st floor city shopping mall, Marston road, Karachi.", margin, topY + logoSize + 4);
-  doc.text("Contact: (021) 3272-7444", margin, topY + logoSize + 8);
-
-  // Invoice Details (Top Right)
-  const labelX = pageWidth - 85;
-  const valueX = pageWidth - margin;
-
-  doc.setTextColor(0, 0, 0);
-  doc.setFontSize(18);
-  doc.setFont('helvetica', 'bold');
-  doc.text('INVOICE', valueX, topY + 5, { align: 'right' });
-
-  doc.setFontSize(9);
-  doc.setTextColor(120, 120, 120);
-  doc.setFont('helvetica', 'normal');
-  doc.text(`Date:`, labelX, topY + 12);
-  doc.setTextColor(0, 0, 0);
-  doc.setFont('helvetica', 'bold');
-  doc.text(format(data.date, 'MMMM dd, yyyy'), valueX, topY + 12, { align: 'right' });
-
-  doc.setTextColor(120, 120, 120);
-  doc.setFont('helvetica', 'normal');
-  doc.text(`Invoice No:`, labelX, topY + 17);
-  doc.setTextColor(0, 0, 0);
-  doc.setFont('helvetica', 'bold');
-  doc.text(`#${data.saleNumber}`, valueX, topY + 17, { align: 'right' });
-
-  doc.setTextColor(120, 120, 120);
-  doc.setFont('helvetica', 'normal');
-  doc.text(`Payment:`, labelX, topY + 22);
-  doc.setTextColor(0, 0, 0);
-  doc.setFont('helvetica', 'bold');
-  doc.text(data.paymentMethod, valueX, topY + 22, { align: 'right' });
-
-  // Bill To (inline)
-  const billY = topY + logoSize + 16;
-  doc.setFontSize(8);
-  doc.setTextColor(120, 120, 120);
-  doc.setFont('helvetica', 'normal');
-  doc.text('BILL TO:', margin, billY);
-  doc.setFontSize(10);
-  doc.setTextColor(0, 0, 0);
-  doc.setFont('helvetica', 'bold');
-  doc.text(data.customerName || 'Walk-in Customer', margin + 14, billY);
-  if (data.customerPhone) {
-    doc.setFontSize(8);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(80, 80, 80);
-    doc.text(data.customerPhone, margin, billY + 5);
-  }
-
-  // Table Header
-  const tableTop = billY + 10;
-  doc.setDrawColor(220, 220, 220);
-  doc.setLineWidth(0.5);
-  doc.line(margin, tableTop, pageWidth - margin, tableTop);
-  
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9);
-  doc.setTextColor(50, 50, 50);
   const snoX = margin;
   const descX = margin + 12;
-  doc.text('S.NO', snoX, tableTop + 6);
-  doc.text('DESCRIPTION', descX, tableTop + 6);
-  doc.text('QTY', pageWidth - 80, tableTop + 6, { align: 'center' });
-  doc.text('PRICE', pageWidth - 50, tableTop + 6, { align: 'right' });
-  doc.text('AMOUNT', pageWidth - margin, tableTop + 6, { align: 'right' });
+  const qtyX = pageWidth - 80;
+  const priceX = pageWidth - 50;
+  const amountX = pageWidth - margin;
 
-  doc.line(margin, tableTop + 9, pageWidth - margin, tableTop + 9);
+  doc.setFont('helvetica');
 
-  // Table Body
-  let currentY = tableTop + 14;
+  const drawHeader = (): number => {
+    // Logo + SARWAT TRADER side by side
+    let brandTextX = margin;
+    if (logoDataUrl) {
+      try {
+        doc.addImage(logoDataUrl, 'JPEG', margin, topY, logoSize, logoSize);
+        brandTextX = margin + logoSize + 4;
+      } catch {
+        // skip silently
+      }
+    }
+
+    doc.setTextColor(0, 0, 0);
+    doc.setFontSize(16);
+    doc.setFont('helvetica', 'bold');
+    doc.text('SARWAT TRADER', brandTextX, topY + 10);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(80, 80, 80);
+    doc.text('Shop no 109, 1st floor city shopping mall, Marston road, Karachi.', margin, topY + logoSize + 4);
+    doc.text('Contact: (021) 3272-7444', margin, topY + logoSize + 8);
+
+    // Invoice meta (top right)
+    const labelX = pageWidth - 85;
+    const valueX = pageWidth - margin;
+
+    doc.setTextColor(0, 0, 0);
+    doc.setFontSize(18);
+    doc.setFont('helvetica', 'bold');
+    doc.text('INVOICE', valueX, topY + 5, { align: 'right' });
+
+    doc.setFontSize(9);
+    doc.setTextColor(120, 120, 120);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Date:', labelX, topY + 12);
+    doc.setTextColor(0, 0, 0);
+    doc.setFont('helvetica', 'bold');
+    doc.text(format(data.date, 'MMMM dd, yyyy'), valueX, topY + 12, { align: 'right' });
+
+    doc.setTextColor(120, 120, 120);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Invoice No:', labelX, topY + 17);
+    doc.setTextColor(0, 0, 0);
+    doc.setFont('helvetica', 'bold');
+    doc.text(`#${data.saleNumber}`, valueX, topY + 17, { align: 'right' });
+
+    doc.setTextColor(120, 120, 120);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Payment:', labelX, topY + 22);
+    doc.setTextColor(0, 0, 0);
+    doc.setFont('helvetica', 'bold');
+    doc.text(data.paymentMethod, valueX, topY + 22, { align: 'right' });
+
+    // Bill To
+    const billY = topY + logoSize + 16;
+    doc.setFontSize(8);
+    doc.setTextColor(120, 120, 120);
+    doc.setFont('helvetica', 'normal');
+    doc.text('BILL TO:', margin, billY);
+    doc.setFontSize(10);
+    doc.setTextColor(0, 0, 0);
+    doc.setFont('helvetica', 'bold');
+    doc.text(data.customerName || 'Walk-in Customer', margin + 14, billY);
+
+    // Table header
+    const tableTop = billY + 6;
+    doc.setDrawColor(180, 180, 180);
+    doc.setLineWidth(0.5);
+    doc.line(margin, tableTop, pageWidth - margin, tableTop);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(50, 50, 50);
+    doc.text('S.NO', snoX, tableTop + 5);
+    doc.text('DESCRIPTION', descX, tableTop + 5);
+    doc.text('QTY', qtyX, tableTop + 5, { align: 'center' });
+    doc.text('PRICE', priceX, tableTop + 5, { align: 'right' });
+    doc.text('AMOUNT', amountX, tableTop + 5, { align: 'right' });
+
+    doc.line(margin, tableTop + 8, pageWidth - margin, tableTop + 8);
+
+    return tableTop + 13; // first row Y
+  };
+
+  const drawFooter = (pageNum: number, pageTotal: number) => {
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(180, 180, 180);
+    doc.text('Powered by ACE STUDIOS | Support: +92 336 2500357 | www.acestudios.pk', pageWidth / 2, pageHeight - 10, { align: 'center' });
+    doc.text(`Page ${pageNum} of ${pageTotal}`, pageWidth - margin, pageHeight - 10, { align: 'right' });
+  };
+
+  const rowHeight = 6;
+  const bottomReserve = 50; // space for summary + footer on last page
+  const bottomReserveMid = 20; // space for footer only on intermediate pages
+
+  let currentY = drawHeader();
+
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
   doc.setTextColor(0, 0, 0);
 
   data.items.forEach((item, index) => {
-    if (currentY > pageHeight - 50) {
+    const isLast = index === data.items.length - 1;
+    const reserve = isLast ? bottomReserve : bottomReserveMid;
+    if (currentY > pageHeight - reserve) {
       doc.addPage();
-      currentY = 30;
+      currentY = drawHeader();
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+      doc.setTextColor(0, 0, 0);
     }
     doc.text(String(index + 1), snoX, currentY);
     doc.text(item.name, descX, currentY);
-    doc.text(item.quantity.toString(), pageWidth - 80, currentY, { align: 'center' });
-    doc.text(formatAmount(item.price), pageWidth - 50, currentY, { align: 'right' });
-    doc.text(formatAmount(item.lineTotal), pageWidth - margin, currentY, { align: 'right' });
-
-    currentY += 6;
+    doc.text(item.quantity.toString(), qtyX, currentY, { align: 'center' });
+    doc.text(formatAmount(item.price), priceX, currentY, { align: 'right' });
+    doc.text(formatAmount(item.lineTotal), amountX, currentY, { align: 'right' });
+    currentY += rowHeight;
   });
 
-  // Summary section
-  const summaryY = currentY + 5; // Reduced space from items
+  // Summary — ensure room; if not, push to a new page
+  const summaryHeight = data.discount > 0 ? 28 : 20;
+  if (currentY + summaryHeight > pageHeight - bottomReserveMid) {
+    doc.addPage();
+    currentY = drawHeader();
+  }
+
+  const summaryY = currentY + 5;
   const sLabelX = pageWidth - 80;
   const sValueX = pageWidth - margin;
 
@@ -235,7 +259,6 @@ const buildInvoiceDoc = (data: InvoiceData, logoDataUrl: string | null): jsPDF =
     doc.text(`- ${formatAmount(data.discount)}`, sValueX, lastRowY, { align: 'right' });
   }
 
-  // Divider sits BELOW the last summary row, not on top of it
   const dividerY = lastRowY + 4;
   doc.setDrawColor(0, 0, 0);
   doc.setLineWidth(0.5);
@@ -250,11 +273,12 @@ const buildInvoiceDoc = (data: InvoiceData, logoDataUrl: string | null): jsPDF =
   doc.text(`PKR ${formatAmount(data.total)}`, sValueX, grandTotalY, { align: 'right' });
   doc.setTextColor(0, 0, 0);
 
-  // Branding Footer
-  doc.setFontSize(8);
-  doc.setFont('helvetica', 'normal');
-  doc.setTextColor(180, 180, 180);
-  doc.text('Powered by ACE STUDIOS | Support: +92 336 2500357 | www.acestudios.pk', pageWidth / 2, pageHeight - 15, { align: 'center' });
+  // Draw footer on every page now that total count is known
+  const totalPages = doc.getNumberOfPages();
+  for (let p = 1; p <= totalPages; p++) {
+    doc.setPage(p);
+    drawFooter(p, totalPages);
+  }
 
   return doc;
 };
@@ -264,92 +288,137 @@ const buildReturnNoteDoc = (data: ReturnNoteData, logoDataUrl: string | null): j
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
   const margin = 20;
-  const topY = 20;
+  const topY = 14;
+  const logoSize = 18;
+
+  const rnSnoX = margin;
+  const rnDescX = margin + 12;
+  const rnQtyX = pageWidth - 80;
+  const rnPriceX = pageWidth - 50;
+  const rnAmountX = pageWidth - margin;
 
   doc.setFont('helvetica');
 
-  // Header — logo + SARWAT TRADER side by side
-  const logoSize = 18;
-  let rnBrandTextX = margin;
-  if (logoDataUrl) {
-    try {
-      doc.addImage(logoDataUrl, 'JPEG', margin, topY, logoSize, logoSize);
-      rnBrandTextX = margin + logoSize + 4;
-    } catch {
-      // skip silently if image fails
+  const drawHeader = (): number => {
+    let rnBrandTextX = margin;
+    if (logoDataUrl) {
+      try {
+        doc.addImage(logoDataUrl, 'JPEG', margin, topY, logoSize, logoSize);
+        rnBrandTextX = margin + logoSize + 4;
+      } catch {
+        // skip silently
+      }
     }
-  }
-  doc.setFontSize(16);
-  doc.setFont('helvetica', 'bold');
-  doc.setTextColor(0, 0, 0);
-  doc.text('SARWAT TRADER', rnBrandTextX, topY + 10);
-  doc.setFontSize(8);
-  doc.setFont('helvetica', 'normal');
-  doc.setTextColor(80, 80, 80);
-  doc.text('Return / Exchange Note', margin, topY + logoSize + 4);
+    doc.setFontSize(16);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(0, 0, 0);
+    doc.text('SARWAT TRADER', rnBrandTextX, topY + 10);
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(80, 80, 80);
+    doc.text('Return / Exchange Note', margin, topY + logoSize + 4);
 
-  // Right Info
-  const rLabelX = pageWidth - 85;
-  const rValueX = pageWidth - margin;
+    // Right Info
+    const rLabelX = pageWidth - 85;
+    const rValueX = pageWidth - margin;
 
-  doc.setTextColor(120, 120, 120);
-  doc.setFontSize(9);
-  doc.text(`Note No:`, rLabelX, topY + 5);
-  doc.setTextColor(0, 0, 0);
-  doc.setFont('helvetica', 'bold');
-  doc.text(`#${data.saleNumber}`, rValueX, topY + 5, { align: 'right' });
-  
-  doc.setTextColor(120, 120, 120);
-  doc.setFont('helvetica', 'normal');
-  doc.text(`Date:`, rLabelX, topY + 11);
-  doc.setTextColor(0, 0, 0);
-  doc.setFont('helvetica', 'bold');
-  doc.text(format(data.date, 'MMM dd, yyyy'), rValueX, topY + 11, { align: 'right' });
+    doc.setTextColor(0, 0, 0);
+    doc.setFontSize(18);
+    doc.setFont('helvetica', 'bold');
+    doc.text('RETURN', rValueX, topY + 5, { align: 'right' });
 
-  doc.setTextColor(120, 120, 120);
-  doc.setFont('helvetica', 'normal');
-  doc.text(`Ref Sale:`, rLabelX, topY + 17);
-  doc.setTextColor(0, 0, 0);
-  doc.setFont('helvetica', 'bold');
-  doc.text(`#${data.originalSaleNumber}`, rValueX, topY + 17, { align: 'right' });
+    doc.setFontSize(9);
+    doc.setTextColor(120, 120, 120);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Note No:', rLabelX, topY + 12);
+    doc.setTextColor(0, 0, 0);
+    doc.setFont('helvetica', 'bold');
+    doc.text(`#${data.saleNumber}`, rValueX, topY + 12, { align: 'right' });
 
-  // Table
-  const tableTop = 70;
-  doc.setDrawColor(220, 220, 220);
-  doc.line(margin, tableTop, pageWidth - margin, tableTop);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9);
-  const rnSnoX = margin;
-  const rnDescX = margin + 12;
-  doc.text('S.NO', rnSnoX, tableTop + 6);
-  doc.text('DESCRIPTION', rnDescX, tableTop + 6);
-  doc.text('QTY', pageWidth - 80, tableTop + 6, { align: 'center' });
-  doc.text('PRICE', pageWidth - 50, tableTop + 6, { align: 'right' });
-  doc.text('AMOUNT', pageWidth - margin, tableTop + 6, { align: 'right' });
-  doc.line(margin, tableTop + 9, pageWidth - margin, tableTop + 9);
+    doc.setTextColor(120, 120, 120);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Date:', rLabelX, topY + 17);
+    doc.setTextColor(0, 0, 0);
+    doc.setFont('helvetica', 'bold');
+    doc.text(format(data.date, 'MMM dd, yyyy'), rValueX, topY + 17, { align: 'right' });
 
-  let currentY = tableTop + 14;
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9);
+    doc.setTextColor(120, 120, 120);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Ref Sale:', rLabelX, topY + 22);
+    doc.setTextColor(0, 0, 0);
+    doc.setFont('helvetica', 'bold');
+    doc.text(`#${data.originalSaleNumber}`, rValueX, topY + 22, { align: 'right' });
+
+    // Table header
+    const tableTop = topY + logoSize + 14;
+    doc.setDrawColor(180, 180, 180);
+    doc.setLineWidth(0.5);
+    doc.line(margin, tableTop, pageWidth - margin, tableTop);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(50, 50, 50);
+    doc.text('S.NO', rnSnoX, tableTop + 5);
+    doc.text('DESCRIPTION', rnDescX, tableTop + 5);
+    doc.text('QTY', rnQtyX, tableTop + 5, { align: 'center' });
+    doc.text('PRICE', rnPriceX, tableTop + 5, { align: 'right' });
+    doc.text('AMOUNT', rnAmountX, tableTop + 5, { align: 'right' });
+    doc.line(margin, tableTop + 8, pageWidth - margin, tableTop + 8);
+
+    return tableTop + 13;
+  };
+
+  const drawFooter = (pageNum: number, pageTotal: number) => {
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(180, 180, 180);
+    doc.text('Powered by ACE STUDIOS | Support: +92 336 2500357 | www.acestudios.pk', pageWidth / 2, pageHeight - 10, { align: 'center' });
+    doc.text(`Page ${pageNum} of ${pageTotal}`, pageWidth - margin, pageHeight - 10, { align: 'right' });
+  };
 
   const allItems = [
     ...data.returnedItems.map(i => ({ ...i, type: 'Return' })),
     ...data.exchangedItems.map(i => ({ ...i, type: 'Exchange' }))
   ];
 
+  const rowHeight = 6;
+  const bottomReserve = 40;
+  const bottomReserveMid = 20;
+
+  let currentY = drawHeader();
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(0, 0, 0);
+
   allItems.forEach((item, index) => {
+    const isLast = index === allItems.length - 1;
+    const reserve = isLast ? bottomReserve : bottomReserveMid;
+    if (currentY > pageHeight - reserve) {
+      doc.addPage();
+      currentY = drawHeader();
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+      doc.setTextColor(0, 0, 0);
+    }
     doc.text(String(index + 1), rnSnoX, currentY);
     doc.text(`${item.type}: ${item.name}`, rnDescX, currentY);
-    doc.text(item.qty.toString(), pageWidth - 80, currentY, { align: 'center' });
-    doc.text(formatAmount(item.price), pageWidth - 50, currentY, { align: 'right' });
-    doc.text(formatAmount(item.qty * item.price), pageWidth - margin, currentY, { align: 'right' });
-    currentY += 6;
+    doc.text(item.qty.toString(), rnQtyX, currentY, { align: 'center' });
+    doc.text(formatAmount(item.price), rnPriceX, currentY, { align: 'right' });
+    doc.text(formatAmount(item.qty * item.price), rnAmountX, currentY, { align: 'right' });
+    currentY += rowHeight;
   });
 
-  // Totals
+  // Totals — push to new page if no room
+  const summaryHeightR = 28;
+  if (currentY + summaryHeightR > pageHeight - bottomReserveMid) {
+    doc.addPage();
+    currentY = drawHeader();
+  }
+
   const summaryY = currentY + 8;
   doc.setFontSize(10);
   if (data.refundTotal > 0) {
+    doc.setFont('helvetica', 'normal');
     doc.setTextColor(120, 120, 120);
     doc.text('Total Refund', pageWidth - 85, summaryY);
     doc.setTextColor(200, 0, 0);
@@ -375,11 +444,12 @@ const buildReturnNoteDoc = (data: ReturnNoteData, logoDataUrl: string | null): j
   doc.text('Net Balance', pageWidth - 85, summaryY + 18);
   doc.text(`PKR ${formatAmount(data.refundTotal - data.exchangeTotal)}`, pageWidth - margin, summaryY + 18, { align: 'right' });
 
-  // Branding Footer
-  doc.setFontSize(8);
-  doc.setFont('helvetica', 'normal');
-  doc.setTextColor(180, 180, 180);
-  doc.text('Powered by ACE STUDIOS | Support: +92 336 2500357 | www.acestudios.pk', pageWidth / 2, pageHeight - 15, { align: 'center' });
+  // Footer on every page
+  const totalPagesR = doc.getNumberOfPages();
+  for (let p = 1; p <= totalPagesR; p++) {
+    doc.setPage(p);
+    drawFooter(p, totalPagesR);
+  }
 
   return doc;
 };
