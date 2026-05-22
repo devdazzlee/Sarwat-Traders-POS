@@ -467,6 +467,7 @@ export function SalesHistory() {
         ? Math.max(0, total - parseFloat(sale.payment_received || "0"))
         : 0,
       amountPaid: parseFloat(sale.payment_received || "0") || total,
+      previousBalance: parseFloat(sale.previous_balance || "0"),
     };
   };
 
@@ -575,9 +576,19 @@ export function SalesHistory() {
               </div>
             ` : ''}
             <div class="summary-row grand-total">
-              <span>Grand Total</span>
+              <span>${(data.previousBalance && data.previousBalance > 0) ? 'This Sale Total' : 'Grand Total'}</span>
               <span>PKR ${data.total.toFixed(2)}</span>
             </div>
+            ${(data.previousBalance && data.previousBalance > 0) ? `
+              <div class="summary-row" style="color: #c00; margin-top: 8px; padding-top: 8px; border-top: 1px solid #ddd;">
+                <span>Previous Balance</span>
+                <span>PKR ${data.previousBalance.toFixed(2)}</span>
+              </div>
+              <div class="summary-row grand-total">
+                <span>Net Payable</span>
+                <span>PKR ${(data.previousBalance + data.total).toFixed(2)}</span>
+              </div>
+            ` : ''}
           </div>
 
           <div class="footer">

@@ -52,6 +52,7 @@ export interface InvoiceData {
   paymentMethod: string;
   balanceDue: number; // if credit sale
   amountPaid?: number; // actual amount received
+  previousBalance?: number; // customer's unpaid balance from prior transactions (before this sale)
 }
 
 export interface InventoryReportData {
@@ -230,14 +231,17 @@ const buildInvoiceDoc = (data: InvoiceData, logoDataUrl: string | null): jsPDF =
   });
 
   // Summary — ensure room; if not, push to a new page
-  const summaryHeight = data.discount > 0 ? 28 : 20;
+  const previousBalance = data.previousBalance && data.previousBalance > 0 ? data.previousBalance : 0;
+  const hasPrevBalance = previousBalance > 0;
+  let summaryHeight = data.discount > 0 ? 28 : 20;
+  if (hasPrevBalance) summaryHeight += 24;
   if (currentY + summaryHeight > pageHeight - bottomReserveMid) {
     doc.addPage();
     currentY = drawHeader();
   }
 
   const summaryY = currentY + 5;
-  const sLabelX = pageWidth - 80;
+  const sLabelX = pageWidth - 100;
   const sValueX = pageWidth - margin;
 
   doc.setFontSize(10);
@@ -268,10 +272,40 @@ const buildInvoiceDoc = (data: InvoiceData, logoDataUrl: string | null): jsPDF =
   doc.setFontSize(11);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(0, 0, 0);
-  doc.text('Grand Total', sLabelX, grandTotalY);
+  doc.text(hasPrevBalance ? 'This Sale Total' : 'Grand Total', sLabelX, grandTotalY);
   doc.setTextColor(200, 0, 0);
   doc.text(`PKR ${formatAmount(data.total)}`, sValueX, grandTotalY, { align: 'right' });
   doc.setTextColor(0, 0, 0);
+
+  // Previous unpaid balance — shown separately, clearly distinct from current sale
+  if (hasPrevBalance) {
+    const prevLabelY = grandTotalY + 10;
+    doc.setDrawColor(180, 180, 180);
+    doc.setLineWidth(0.3);
+    doc.line(sLabelX, prevLabelY - 5, sValueX, prevLabelY - 5);
+
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(100, 100, 100);
+    doc.text('Previous Balance', sLabelX, prevLabelY);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(200, 0, 0);
+    doc.text(`PKR ${formatAmount(previousBalance)}`, sValueX, prevLabelY, { align: 'right' });
+
+    const totalDueDividerY = prevLabelY + 4;
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.5);
+    doc.line(sLabelX, totalDueDividerY, sValueX, totalDueDividerY);
+
+    const totalDueY = totalDueDividerY + 7;
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(0, 0, 0);
+    doc.text('Net Payable', sLabelX, totalDueY);
+    doc.setTextColor(200, 0, 0);
+    doc.text(`PKR ${formatAmount(previousBalance + data.total)}`, sValueX, totalDueY, { align: 'right' });
+    doc.setTextColor(0, 0, 0);
+  }
 
   // Draw footer on every page now that total count is known
   const totalPages = doc.getNumberOfPages();
@@ -409,7 +443,14 @@ const buildReturnNoteDoc = (data: ReturnNoteData, logoDataUrl: string | null): j
   });
 
   // Totals — push to new page if no room
-  const summaryHeightR = 28;
+  const rnPrevBalance = data.previousBalance && data.previousBalance > 0 ? data.previousBalance : 0;
+  const hasCustomerAccount = !!(
+    data.customerName &&
+    data.customerName.trim() &&
+    data.customerName.trim().toLowerCase() !== 'walk-in customer'
+  );
+  const showBalanceBlock = rnPrevBalance > 0 || hasCustomerAccount;
+  const summaryHeightR = showBalanceBlock ? 44 : 28;
   if (currentY + summaryHeightR > pageHeight - bottomReserveMid) {
     doc.addPage();
     currentY = drawHeader();
@@ -438,11 +479,54 @@ const buildReturnNoteDoc = (data: ReturnNoteData, logoDataUrl: string | null): j
   doc.setLineWidth(0.5);
   doc.line(pageWidth - 85, summaryY + 12, pageWidth - margin, summaryY + 12);
 
+  // Dynamic label: pure refund → "Refund Amount"; exchange → "Net Refund" / "Net Payable"
+  const rnNetValue = data.refundTotal - data.exchangeTotal;
+  const rnHasExchange = data.exchangeTotal > 0;
+  const rnNetLabel = !rnHasExchange
+    ? 'Refund Amount'
+    : rnNetValue >= 0
+      ? 'Net Refund'
+      : 'Net Payable';
+
   doc.setFontSize(11);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(0, 0, 0);
-  doc.text('Net Balance', pageWidth - 85, summaryY + 18);
-  doc.text(`PKR ${formatAmount(data.refundTotal - data.exchangeTotal)}`, pageWidth - margin, summaryY + 18, { align: 'right' });
+  doc.text(rnNetLabel, pageWidth - 85, summaryY + 18);
+  doc.text(`PKR ${formatAmount(Math.abs(rnNetValue))}`, pageWidth - margin, summaryY + 18, { align: 'right' });
+
+  // Customer account: balance before this return → balance after (refund credited to account)
+  if (showBalanceBlock) {
+    const balLabelX = pageWidth - 100;
+    const balValueX = pageWidth - margin;
+    const prevBalY = summaryY + 28;
+
+    doc.setDrawColor(180, 180, 180);
+    doc.setLineWidth(0.3);
+    doc.line(balLabelX, prevBalY - 5, balValueX, prevBalY - 5);
+
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(100, 100, 100);
+    doc.text('Previous Balance', balLabelX, prevBalY);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(0, 0, 0);
+    doc.text(`PKR ${formatAmount(rnPrevBalance)}`, balValueX, prevBalY, { align: 'right' });
+
+    const updatedBalance = rnPrevBalance + (data.exchangeTotal - data.refundTotal);
+    const updBalDividerY = prevBalY + 4;
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.5);
+    doc.line(balLabelX, updBalDividerY, balValueX, updBalDividerY);
+
+    const updBalY = updBalDividerY + 7;
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(0, 0, 0);
+    doc.text('Updated Balance', balLabelX, updBalY);
+    doc.setTextColor(updatedBalance < 0 ? 0 : 200, updatedBalance < 0 ? 150 : 0, 0);
+    doc.text(`PKR ${formatAmount(updatedBalance)}`, balValueX, updBalY, { align: 'right' });
+    doc.setTextColor(0, 0, 0);
+  }
 
   // Footer on every page
   const totalPagesR = doc.getNumberOfPages();
@@ -504,6 +588,7 @@ export interface ReturnNoteData {
   netAmount: number; // negative = net refund, positive = customer pays
   customerWhatsApp?: string;
   customerEmail?: string;
+  previousBalance?: number; // customer's outstanding account balance (informational)
 }
 
 export const downloadReturnNote = async (data: ReturnNoteData) => {

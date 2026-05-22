@@ -518,6 +518,7 @@ model Sale {
   payment_status   PaymentStatus @default(PAID)
   payment_received Decimal       @default(0)
   change_amount    Decimal       @default(0)
+  previous_balance Decimal       @default(0) // customer's unpaid balance snapshot before this sale
   notes            String?
   status           SaleStatus    @default(COMPLETED)
   created_by       String?

@@ -24,6 +24,7 @@ import { useToast } from "@/hooks/use-toast"
 import { PageLoader } from "@/components/ui/page-loader"
 import { StatCardSkeleton } from "@/components/ui/stat-card-skeleton"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import apiClient from "@/lib/apiClient"
 import { offlineDB } from "@/lib/offline-db"
@@ -39,6 +40,7 @@ interface Sale {
     email: string
     phone_number?: string
     whatsapp_number?: string
+    outstanding_balance?: number
   }
   /** Set by GET /sale/for-returns for Process Return dropdown */
   return_eligibility?: {
@@ -140,6 +142,8 @@ interface SelectedReturnItem {
   alreadyReturned?: number
   returnQuantity: number
   unitPrice: number
+  /** Whether this product is included in the return (unchecked = excluded) */
+  included: boolean
 }
 
 const normalizeSaleSearchTerm = (value?: string) =>
@@ -155,6 +159,7 @@ const normalizeSaleRecord = (sale: any): Sale => ({
         email: String(sale.customer.email || ""),
         phone_number: sale.customer.phone_number ? String(sale.customer.phone_number) : undefined,
         whatsapp_number: sale.customer.whatsapp_number ? String(sale.customer.whatsapp_number) : undefined,
+        outstanding_balance: Number(sale.customer.outstanding_balance || 0),
       }
     : undefined,
   sale_date:
@@ -739,9 +744,9 @@ export function Returns() {
       return
     }
 
-    // Validate return quantities
-    const hasInvalidQuantity = selectedReturnItems.some(item => 
-      item.returnQuantity > item.originalQuantity
+    // Validate return quantities (only items included in the return)
+    const hasInvalidQuantity = selectedReturnItems.some(item =>
+      item.included && item.returnQuantity > item.originalQuantity
     )
     
     if (hasInvalidQuantity) {
@@ -815,7 +820,7 @@ export function Returns() {
 
       // Build success data for the return note PDF — use correct field names from SelectedReturnItem
       const retItems = selectedReturnItems
-        .filter(ri => Number(ri.returnQuantity) > 0)
+        .filter(ri => ri.included && Number(ri.returnQuantity) > 0)
         .map(ri => ({
           name: ri.productName || ri.productId,
           qty: Number(ri.returnQuantity),
@@ -842,6 +847,7 @@ export function Returns() {
         refundTotal,
         exchangeTotal,
         netAmount: exchangeTotal - refundTotal,
+        previousBalance: Number(selectedSale?.customer?.outstanding_balance || 0),
       })
 
       // Close process modal
@@ -939,6 +945,7 @@ export function Returns() {
           alreadyReturned: item.quantity_already_returned,
           returnQuantity: maxReturnable,
           unitPrice: item.unit_price,
+          included: true,
         }
       })
       setSelectedReturnItems(items)
@@ -969,6 +976,7 @@ export function Returns() {
             alreadyReturned: item.quantity_already_returned,
             returnQuantity: maxReturnable,
             unitPrice: item.unit_price,
+            included: true,
           }
         })
         setSelectedReturnItems(items)
@@ -1018,7 +1026,7 @@ export function Returns() {
 
     // Update newReturn.returnedItems
     const returnedItems = updatedItems
-        .filter((i) => i.returnQuantity > 0)
+        .filter((i) => i.included && i.returnQuantity > 0)
         .map((i) => ({
           productId: i.productId,
           quantity: i.returnQuantity
@@ -1037,6 +1045,20 @@ export function Returns() {
       const newState = { ...prev }
       delete newState[productId]
       return newState
+    })
+  }
+
+  // Include / exclude a product from the return (partial refund of specific items only)
+  const handleToggleReturnItem = (productId: string, included: boolean) => {
+    setSelectedReturnItems((prev) => {
+      const updatedItems = prev.map((i) =>
+        i.productId === productId ? { ...i, included } : i
+      )
+      const returnedItems = updatedItems
+        .filter((i) => i.included && i.returnQuantity > 0)
+        .map((i) => ({ productId: i.productId, quantity: i.returnQuantity }))
+      setNewReturn((prevReturn) => ({ ...prevReturn, returnedItems }))
+      return updatedItems
     })
   }
 
@@ -1419,8 +1441,21 @@ export function Returns() {
                   <Label>Select Items to Return</Label>
                   <div className="border rounded-lg p-4 space-y-3">
                     {selectedReturnItems.map((item) => (
-                      <div key={item.productId} className="flex items-center justify-between p-3 bg-white rounded border">
-                        <div className="flex-1">
+                      <div
+                        key={item.productId}
+                        className={`flex items-center gap-3 p-3 rounded border transition-colors ${
+                          item.included ? "bg-white" : "bg-gray-50 opacity-60"
+                        }`}
+                      >
+                        <Checkbox
+                          checked={item.included}
+                          onCheckedChange={(checked) =>
+                            handleToggleReturnItem(item.productId, checked === true)
+                          }
+                          aria-label={`Include ${item.productName} in return`}
+                          className="shrink-0"
+                        />
+                        <div className="flex-1 min-w-0">
                           <div className="font-medium">{item.productName}</div>
                           <div className="text-sm text-gray-500">
                             SKU: {item.sku} • Sold: {item.soldQuantity} • Returnable now: {item.originalQuantity}
@@ -1429,19 +1464,29 @@ export function Returns() {
                               : ""}{" "}
                             • Price: Rs {Number(item.unitPrice).toLocaleString()}
                           </div>
+                          <div className="text-sm font-semibold mt-0.5">
+                            {item.included ? (
+                              <span className="text-gray-800">
+                                Refund: Rs {(item.returnQuantity * item.unitPrice).toLocaleString()}
+                              </span>
+                            ) : (
+                              <span className="text-gray-400">Excluded from refund</span>
+                            )}
+                          </div>
                         </div>
                         <div className="flex items-center gap-2">
                           <Button
                             variant="outline"
                             size="sm"
                             onClick={() => handleReturnQuantityChange(item.productId, item.returnQuantity - 1)}
-                            disabled={item.returnQuantity <= 0}
+                            disabled={!item.included || item.returnQuantity <= 0}
                           >
                             <Minus className="w-3 h-3" />
                           </Button>
                           <Input
                             type="text"
                             inputMode="decimal"
+                            disabled={!item.included}
                             value={returnQuantityInputs[item.productId] !== undefined ? returnQuantityInputs[item.productId] : (item.returnQuantity === 0 ? "" : String(item.returnQuantity))}
                             onChange={(e) => {
                               const value = e.target.value
@@ -1569,7 +1614,7 @@ export function Returns() {
                             variant="outline"
                             size="sm"
                             onClick={() => handleReturnQuantityChange(item.productId, item.returnQuantity + 1)}
-                            disabled={item.returnQuantity >= item.originalQuantity}
+                            disabled={!item.included || item.returnQuantity >= item.originalQuantity}
                           >
                             <Plus className="w-3 h-3" />
                           </Button>
@@ -1579,15 +1624,16 @@ export function Returns() {
                   </div>
                   
                   {/* Return Summary */}
-                  {selectedReturnItems.some(item => item.returnQuantity > 0) && (
+                  {selectedReturnItems.some(item => item.included && item.returnQuantity > 0) && (
                     <div className="bg-blue-50 p-3 rounded-lg">
                       <h4 className="font-medium text-blue-900 mb-2">Return Summary</h4>
                       <div className="text-sm text-blue-800 space-y-1">
                         <div>
-                          <strong>Items to Return:</strong> {selectedReturnItems.filter(item => item.returnQuantity > 0).length}
+                          <strong>Items to Return:</strong> {selectedReturnItems.filter(item => item.included && item.returnQuantity > 0).length}
                         </div>
                         <div>
                           <strong>Total Return Value:</strong> Rs {selectedReturnItems
+                            .filter(item => item.included)
                             .reduce((total, item) => total + (item.returnQuantity * item.unitPrice), 0)
                             .toLocaleString()}
                         </div>
@@ -2032,11 +2078,31 @@ export function Returns() {
                   </div>
                 )}
                 <div className="flex justify-between font-bold border-t pt-1 mt-1">
-                  <span>Net {returnSuccessData.netAmount >= 0 ? "Payable" : "Refund"}</span>
+                  <span>
+                    {returnSuccessData.exchangeTotal > 0
+                      ? returnSuccessData.netAmount >= 0
+                        ? "Net Payable"
+                        : "Net Refund"
+                      : "Refund Amount"}
+                  </span>
                   <span className={returnSuccessData.netAmount < 0 ? "text-red-600" : ""}>
                     Rs {Math.abs(returnSuccessData.netAmount).toLocaleString()}
                   </span>
                 </div>
+                {!!returnSuccessData.customerName && (
+                  <>
+                    <div className="flex justify-between text-gray-600 border-t pt-1 mt-1">
+                      <span>Previous Balance</span>
+                      <span>Rs {(returnSuccessData.previousBalance || 0).toLocaleString()}</span>
+                    </div>
+                    <div className="flex justify-between font-bold">
+                      <span>Updated Balance</span>
+                      <span className={((returnSuccessData.previousBalance || 0) + returnSuccessData.netAmount) < 0 ? "text-emerald-600" : "text-red-600"}>
+                        Rs {((returnSuccessData.previousBalance || 0) + returnSuccessData.netAmount).toLocaleString()}
+                      </span>
+                    </div>
+                  </>
+                )}
               </div>
 
               <div className="mt-4">

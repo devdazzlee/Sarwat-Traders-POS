@@ -572,6 +572,11 @@ class SaleService {
       ? creditPaidAmount >= finalTotal ? 'PAID' : creditPaidAmount > 0 ? 'PARTIAL' : 'PENDING'
       : 'PAID';
 
+    // Snapshot the customer's unpaid balance BEFORE this sale settles
+    const previousBalanceSnapshot = customer
+      ? new Prisma.Decimal(customer.outstanding_balance)
+      : new Prisma.Decimal(0);
+
     // (a) Sale + items
     ops.push(
       prisma.sale.create({
@@ -585,6 +590,7 @@ class SaleService {
           payment_method: dbPaymentMethod,
           payment_status: dbPaymentStatus,
           payment_received: new Prisma.Decimal(creditPaidAmount),
+          previous_balance: previousBalanceSnapshot,
           status: 'COMPLETED',
           created_by: createdBy,
           sale_items: {
@@ -1064,13 +1070,32 @@ class SaleService {
       });
     }
 
-    const ops: Prisma.PrismaPromise<any>[] = [];
     const resolvedCustomerId = customerId ?? originalSale.customer_id ?? undefined;
+    const returnSaleNumber = `SALE-${Date.now()}`;
+
+    // Settle the refund/exchange against the customer's account (registered customers only).
+    // `total` = exchangeTotal - refundTotal  →  negative = net refund, positive = net amount owed.
+    let returnPreviousBalance = new Prisma.Decimal(0);
+    let returnUpdatedBalance = new Prisma.Decimal(0);
+    let returnAdjustsAccount = false;
+    if (resolvedCustomerId) {
+      const acctCustomer = await prisma.customer.findUnique({
+        where: { id: resolvedCustomerId },
+        select: { outstanding_balance: true },
+      });
+      if (acctCustomer) {
+        returnAdjustsAccount = true;
+        returnPreviousBalance = new Prisma.Decimal(acctCustomer.outstanding_balance);
+        returnUpdatedBalance = returnPreviousBalance.plus(total);
+      }
+    }
+
+    const ops: Prisma.PrismaPromise<any>[] = [];
 
     ops.push(
       prisma.sale.create({
         data: {
-          sale_number: `SALE-${Date.now()}`,
+          sale_number: returnSaleNumber,
           branch_id: branchId,
           customer_id: resolvedCustomerId,
           original_sale_id: originalSaleId,
@@ -1079,6 +1104,7 @@ class SaleService {
           total_amount: total,
           payment_method: 'CASH',
           payment_status: 'PAID',
+          previous_balance: returnPreviousBalance,
           status:
             hasReturn && hasExchange
               ? SaleStatus.EXCHANGED
@@ -1095,6 +1121,32 @@ class SaleService {
         },
       }),
     );
+
+    // Credit the net refund (or debit a net exchange) to the customer's account
+    if (returnAdjustsAccount && resolvedCustomerId && !total.isZero()) {
+      const isNetRefund = total.isNegative();
+      ops.push(
+        prisma.customer.update({
+          where: { id: resolvedCustomerId },
+          data: { outstanding_balance: returnUpdatedBalance },
+        }),
+      );
+      ops.push(
+        prisma.customerLedger.create({
+          data: {
+            customer_id: resolvedCustomerId,
+            entry_type: isNetRefund ? LedgerEntryType.REFUND : LedgerEntryType.ADJUSTMENT,
+            amount: total.abs(),
+            description: isNetRefund
+              ? `Return refund credited to account - ${returnSaleNumber}`
+              : `Exchange balance adjustment - ${returnSaleNumber}`,
+            sale_id: returnSaleNumber,
+            balance_after: returnUpdatedBalance,
+            created_by: createdBy,
+          },
+        }),
+      );
+    }
 
     for (const [productId, quantityChange] of stockNetChanges.entries()) {
       ops.push(

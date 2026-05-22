@@ -1308,6 +1308,8 @@ export function NewSale() {
           paymentMethod: method === "Cash" ? "CASH" : method === "Credit" ? "CREDIT" : "CARD",
           balanceDue: method === "Credit" ? Math.max(0, total - amountPaid) : 0,
           amountPaid: method === "Credit" ? amountPaid : total,
+          // Customer's unpaid balance from prior transactions (snapshot before this sale settled)
+          previousBalance: Number(selectedCustomerObj?.outstanding_balance || 0),
         };
       } catch (error: unknown) {
         console.error("Payment error:", error);
