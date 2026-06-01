@@ -22,6 +22,7 @@ import { Plus, Search, Eye, RotateCcw, CreditCard, DollarSign, CheckCircle, XCir
 import { useToast } from "@/hooks/use-toast"
 import { PageLoader } from "@/components/ui/page-loader"
 import { StatCardSkeleton } from "@/components/ui/stat-card-skeleton"
+import { Skeleton } from "@/components/ui/skeleton"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import apiClient from "@/lib/apiClient"
@@ -38,6 +39,8 @@ import {
   type InventoryDisposition,
   type ReturnReason,
 } from "@/components/returns-exchanges/constants"
+import { ExchangeProductPicker } from "@/components/returns-exchanges/exchange-product-picker"
+import { cn } from "@/lib/utils"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -139,6 +142,8 @@ interface Product {
   id: string
   name: string
   sku: string
+  category_id?: string
+  categoryId?: string
   sales_rate_exc_dis_and_tax: number
   sales_rate_inc_dis_and_tax: number
   purchase_rate: number
@@ -335,17 +340,13 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
   const [salesLoading, setSalesLoading] = useState(false)
   const [processingReturn, setProcessingReturn] = useState(false) // Separate loading state for process return button
   const [selectedSale, setSelectedSale] = useState<Sale | null>(null)
+  const [saleDetailsLoading, setSaleDetailsLoading] = useState(false)
   const [selectedReturnItems, setSelectedReturnItems] = useState<SelectedReturnItem[]>([])
   // Track return quantity input values as strings to allow decimal point typing
   const [returnQuantityInputs, setReturnQuantityInputs] = useState<Record<string, string>>({})
   const [products, setProducts] = useState<Product[]>([])
   const [productsLoading, setProductsLoading] = useState(false)
   const [exchangeItems, setExchangeItems] = useState<ExchangeItem[]>([])
-  const [exchangeProductSearch, setExchangeProductSearch] = useState("")
-  const [exchangeProductDropdownOpen, setExchangeProductDropdownOpen] = useState(false)
-  const exchangeProductSearchRef = useRef<HTMLInputElement | null>(null)
-  const exchangeProductDropdownRef = useRef<HTMLDivElement | null>(null)
-
   const [returnSuccessData, setReturnSuccessData] = useState<null | ReturnNoteData>(null)
   const [isAskingWhatsApp, setIsAskingWhatsApp] = useState(false)
   const [isAskingEmail, setIsAskingEmail] = useState(false)
@@ -407,7 +408,13 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
       }
       
       const response = await apiClient.get("/products", { params })
-      setProducts(response.data?.data || [])
+      const list = response.data?.data || []
+      setProducts(
+        list.map((p: Product & { category_id?: string }) => ({
+          ...p,
+          category_id: p.category_id || p.categoryId,
+        }))
+      )
     } catch (error: any) {
       console.error("Error fetching products:", error)
     } finally {
@@ -532,23 +539,6 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
     return () => document.removeEventListener("mousedown", handleClickOutside)
   }, [])
 
-  // Close exchange product dropdown when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (
-        exchangeProductDropdownRef.current &&
-        !exchangeProductDropdownRef.current.contains(event.target as Node) &&
-        exchangeProductSearchRef.current &&
-        !exchangeProductSearchRef.current.contains(event.target as Node)
-      ) {
-        setExchangeProductDropdownOpen(false)
-      }
-    }
-
-    document.addEventListener("mousedown", handleClickOutside)
-    return () => document.removeEventListener("mousedown", handleClickOutside)
-  }, [])
-
   useEffect(() => {
     fetchReturns()
     fetchSales()
@@ -560,8 +550,6 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
       setSaleSearch("")
       setSaleSearchPending(false)
       setSaleDropdownOpen(false)
-      setExchangeProductSearch("")
-      setExchangeProductDropdownOpen(false)
       setExchangeItems([])
       setSelectedReturnItems([])
       setReturnQuantityInputs({})
@@ -579,6 +567,7 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
       setSelectedSale(null)
       setConfirmOpen(false)
       setLineItemSearch("")
+      setSaleDetailsLoading(false)
     }
   }, [isProcessOpen])
 
@@ -826,8 +815,6 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
       exchangedItems: updatedExchangeItems,
     }))
 
-    setExchangeProductSearch("")
-    setExchangeProductDropdownOpen(false)
   }
 
   // Handle exchange item quantity change
@@ -854,18 +841,6 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
       }))
     }
   }
-
-  // Filter products for exchange
-  const filteredExchangeProducts = useMemo(() => {
-    if (!exchangeProductSearch) return products
-    const searchLower = exchangeProductSearch.toLowerCase()
-    return products
-      .filter(
-        (product) =>
-          product.name.toLowerCase().includes(searchLower) ||
-          product.sku.toLowerCase().includes(searchLower)
-      )
-  }, [products, exchangeProductSearch])
 
   const validateBeforeSubmit = (): boolean => {
     const validReturnedItems = newReturn.returnedItems.filter((item) => item.quantity > 0)
@@ -1045,7 +1020,6 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
       setConfirmOpen(false)
       setSelectedReturnItems([])
       setExchangeItems([])
-      setExchangeProductSearch("")
       setSelectedSale(null)
       
       // Refresh data after closing modal (don't await to avoid blocking)
@@ -1100,10 +1074,14 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
     const cached =
       processReturnSales.find((s) => s.id === saleId) || searchableSales.find((s) => s.id === saleId)
     setSaleSearch(cached?.sale_number || "")
+    setSaleDetailsLoading(true)
+    setSelectedSale(null)
+    setSelectedReturnItems([])
     setNewReturn((prev) => ({
       ...prev,
       saleId,
       customerId: cached?.customer?.id ? String(cached.customer.id) : prev.customerId,
+      returnedItems: [],
     }))
 
     try {
@@ -1176,6 +1154,8 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
       } else {
         setSelectedReturnItems([])
       }
+    } finally {
+      setSaleDetailsLoading(false)
     }
 
     requestAnimationFrame(() => {
@@ -1638,7 +1618,30 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
                 </div>
               </div>
 
-              {selectedSale && (
+              {saleDetailsLoading && newReturn.saleId && (
+                <div className="space-y-3" aria-busy="true" aria-label="Loading sale details">
+                  <div className="bg-gray-50 p-3 rounded-md border border-dashed">
+                    <Skeleton className="h-4 w-40 mb-3" />
+                    <div className="space-y-2">
+                      <Skeleton className="h-3 w-full max-w-sm" />
+                      <Skeleton className="h-3 w-full max-w-xs" />
+                      <Skeleton className="h-3 w-2/3" />
+                      <Skeleton className="h-3 w-1/2" />
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-3 flex items-center gap-2">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+                      Loading sale details and line items…
+                    </p>
+                  </div>
+                  <div className="rounded-md border p-3 space-y-2">
+                    <Skeleton className="h-4 w-48" />
+                    <Skeleton className="h-9 w-full" />
+                    <Skeleton className="h-24 w-full" />
+                  </div>
+                </div>
+              )}
+
+              {selectedSale && !saleDetailsLoading && (
                 <div className="bg-gray-50 p-3 rounded-md">
                   <h4 className="font-medium mb-2">Selected Sale Details</h4>
                   <div className="text-sm space-y-1">
@@ -1650,7 +1653,12 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
                 </div>
               )}
 
-              <div className="space-y-2">
+              <div
+                className={cn(
+                  "space-y-2",
+                  saleDetailsLoading && "pointer-events-none opacity-50"
+                )}
+              >
                 <Label>
                   {processMode === "returns" ? "Return type" : "Exchange type"} *
                 </Label>
@@ -1677,7 +1685,12 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
                 </p>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div
+                className={cn(
+                  "grid grid-cols-1 md:grid-cols-2 gap-4",
+                  saleDetailsLoading && "pointer-events-none opacity-50"
+                )}
+              >
                 <div className="space-y-2">
                   <Label htmlFor="return-reason">Return reason *</Label>
                   <Select
@@ -1963,57 +1976,18 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
 
               {/* Exchange Items Section (only for Exchange) */}
               {processMode === "exchanges" && (
-                <div className="space-y-2" ref={exchangeProductDropdownRef}>
-                  <Label htmlFor="exchange-product-search">
-                    Add Exchange Items ({filteredExchangeProducts.length} available)
-                  </Label>
-                  <div className="relative">
-                    <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                    <Input
-                      ref={exchangeProductSearchRef}
-                      id="exchange-product-search"
-                      placeholder="Search products by name or SKU..."
-                      value={exchangeProductSearch}
-                      onFocus={() => setExchangeProductDropdownOpen(true)}
-                      autoComplete="off"
-                      onChange={(e) => {
-                        setExchangeProductSearch(e.target.value)
-                        setExchangeProductDropdownOpen(true)
-                      }}
-                      className="pl-9"
-                    />
-                    {exchangeProductDropdownOpen && (
-                      <div className="absolute left-0 right-0 z-20 mt-1 max-h-60 overflow-y-auto rounded-md border border-gray-200 bg-white shadow-lg">
-                        {productsLoading ? (
-                          <PageLoader message="Loading products..." size="sm" />
-                        ) : filteredExchangeProducts.length === 0 ? (
-                          <div className="px-3 py-2 text-sm text-gray-500">
-                            {exchangeProductSearch ? "No matching products found" : "No products available"}
-                          </div>
-                        ) : (
-                          filteredExchangeProducts.map((product) => (
-                            <button
-                              key={product.id}
-                              type="button"
-                              className="w-full px-3 py-2 text-left text-sm transition hover:bg-blue-50 text-gray-800"
-                              onMouseDown={(event) => event.preventDefault()}
-                              onClick={() => handleExchangeProductSelect(product.id)}
-                            >
-                              <div className="flex flex-col">
-                                <span className="font-medium">{product.name}</span>
-                                <span className="text-xs text-gray-500">
-                                  SKU: {product.sku || "N/A"} | Rs{" "}
-                                  {product.sales_rate_inc_dis_and_tax || product.sales_rate_exc_dis_and_tax || product.purchase_rate || 0}
-                                </span>
-                              </div>
-                            </button>
-                          ))
-                        )}
-                      </div>
-                    )}
-                  </div>
+                <div className="space-y-3">
+                  <ExchangeProductPicker
+                    products={products}
+                    productsLoading={productsLoading}
+                    selectedLines={exchangeItems.map((item) => ({
+                      productId: item.productId,
+                      quantity: item.quantity,
+                    }))}
+                    onAddProduct={handleExchangeProductSelect}
+                    onQuantityChange={handleExchangeQuantityChange}
+                  />
 
-                  {/* Exchange Items List */}
                   {exchangeItems.length > 0 && (
                     <div className="border rounded-lg p-4 space-y-3 mt-4">
                       <Label>Exchange Items</Label>
