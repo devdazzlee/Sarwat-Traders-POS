@@ -14,7 +14,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog"
 import { Textarea } from "@/components/ui/textarea"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -23,13 +22,32 @@ import { Plus, Search, Eye, RotateCcw, CreditCard, DollarSign, CheckCircle, XCir
 import { useToast } from "@/hooks/use-toast"
 import { PageLoader } from "@/components/ui/page-loader"
 import { StatCardSkeleton } from "@/components/ui/stat-card-skeleton"
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import apiClient from "@/lib/apiClient"
 import { offlineDB } from "@/lib/offline-db"
 import { downloadReturnNote, printReturnNote, shareReturnNoteOnWhatsApp, shareReturnNoteOnEmail, type ReturnNoteData } from "@/lib/pdf-generator"
-import { Share2, Mail } from "lucide-react"
+import { Share2, Mail, ArrowLeftRight, Package } from "lucide-react"
+import {
+  RETURN_REASONS,
+  REFUND_METHODS,
+  INVENTORY_DISPOSITIONS,
+  RETURN_REASON_LABEL,
+  REFUND_METHOD_LABEL,
+  formatSaleStatusLabel,
+  type InventoryDisposition,
+  type ReturnReason,
+} from "@/components/returns-exchanges/constants"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 
 interface Sale {
   id: string
@@ -69,6 +87,8 @@ interface Sale {
 interface ReturnItem {
   id: string
   sale_number: string
+  original_sale_id?: string | null
+  original_sale?: { id: string; sale_number: string } | null
   customer?: {
     id?: string
     name: string
@@ -100,9 +120,12 @@ interface NewReturn {
   customerId?: string
   returnType: "REFUND" | "EXCHANGE"
   refundMethod?: string
+  returnReason?: ReturnReason | ""
+  orderScope: "FULL" | "PARTIAL"
   returnedItems: Array<{
     productId: string
     quantity: number
+    disposition?: InventoryDisposition
   }>
   exchangedItems: Array<{
     productId: string
@@ -144,10 +167,56 @@ interface SelectedReturnItem {
   unitPrice: number
   /** Whether this product is included in the return (unchecked = excluded) */
   included: boolean
+  disposition: InventoryDisposition
 }
 
 const normalizeSaleSearchTerm = (value?: string) =>
   (value || "").replace(/\s+/g, " ").trim()
+
+const normalizeReturnDetail = (sale: any): ReturnItem => ({
+  id: String(sale?.id || ""),
+  sale_number: String(sale?.sale_number || ""),
+  original_sale_id: sale?.original_sale_id ? String(sale.original_sale_id) : null,
+  original_sale: sale?.original_sale
+    ? {
+        id: String(sale.original_sale.id),
+        sale_number: String(sale.original_sale.sale_number || ""),
+      }
+    : null,
+  customer: sale?.customer
+    ? {
+        id: sale.customer.id != null ? String(sale.customer.id) : undefined,
+        name: String(sale.customer.name || ""),
+        email: String(sale.customer.email || ""),
+        phone_number: sale.customer.phone_number ? String(sale.customer.phone_number) : undefined,
+        whatsapp_number: sale.customer.whatsapp_number
+          ? String(sale.customer.whatsapp_number)
+          : undefined,
+      }
+    : undefined,
+  sale_date:
+    typeof sale?.sale_date === "string"
+      ? sale.sale_date
+      : new Date(sale?.sale_date || Date.now()).toISOString(),
+  total_amount: Number(sale?.total_amount || 0),
+  status: sale?.status || "REFUNDED",
+  payment_method: String(sale?.payment_method || ""),
+  notes: sale?.notes ? String(sale.notes) : undefined,
+  sale_items: Array.isArray(sale?.sale_items)
+    ? sale.sale_items.map((item: any) => ({
+        id: String(item?.id || ""),
+        product: {
+          id: String(item?.product?.id || item?.product_id || ""),
+          name: String(item?.product?.name || "Unnamed Product"),
+          sku: String(item?.product?.sku || ""),
+        },
+        quantity: Number(item?.quantity || 0),
+        unit_price: Number(item?.unit_price || 0),
+        line_total: Number(item?.line_total || 0),
+        item_type: item?.item_type || "RETURN",
+      }))
+    : [],
+})
 
 const normalizeSaleRecord = (sale: any): Sale => ({
   id: String(sale?.id || ""),
@@ -216,9 +285,9 @@ const matchesSaleSearch = (sale: any, term: string) => {
 const getIneligibleSaleReason = (status?: string) => {
   switch (status) {
     case "REFUNDED":
-      return "This sale is already refunded and cannot be processed again."
+      return "This sale already has a return and cannot be processed again."
     case "EXCHANGED":
-      return "This sale is already exchanged and cannot be processed again."
+      return "This sale already has an exchange and cannot be processed again."
     case "CANCELLED":
       return "Cancelled sales cannot be returned."
     case "PENDING":
@@ -254,7 +323,9 @@ const findIneligibleSaleMatch = (sales: any[], searchTerm: string) => {
   }
 }
 
-export function Returns() {
+export type ReturnsModule = "returns" | "exchanges"
+
+export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
   const { toast } = useToast()
 
   const [returns, setReturns] = useState<ReturnItem[]>([])
@@ -283,6 +354,7 @@ export function Returns() {
   const [isProcessOpen, setIsProcessOpen] = useState(false)
   const [saleDropdownOpen, setSaleDropdownOpen] = useState(false)
   const [selectedReturn, setSelectedReturn] = useState<ReturnItem | null>(null)
+  const [viewDetailLoading, setViewDetailLoading] = useState(false)
   const [isViewOpen, setIsViewOpen] = useState(false)
   const [searchTerm, setSearchTerm] = useState("")
   const [saleSearch, setSaleSearch] = useState("")
@@ -295,11 +367,16 @@ export function Returns() {
   const saleDropdownRef = useRef<HTMLDivElement | null>(null)
   const latestSalesRequestRef = useRef(0)
   const saleSearchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [processMode, setProcessMode] = useState<ReturnsModule>(module)
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [lineItemSearch, setLineItemSearch] = useState("")
   const [newReturn, setNewReturn] = useState<NewReturn>({
     saleId: "",
     customerId: "",
     returnType: "REFUND",
     refundMethod: "",
+    returnReason: "",
+    orderScope: "PARTIAL",
     returnedItems: [],
     exchangedItems: [],
     notes: "",
@@ -493,13 +570,62 @@ export function Returns() {
         customerId: "",
         returnType: "REFUND",
         refundMethod: "",
+        returnReason: "",
+        orderScope: "PARTIAL",
         returnedItems: [],
         exchangedItems: [],
         notes: "",
       })
       setSelectedSale(null)
+      setConfirmOpen(false)
+      setLineItemSearch("")
     }
   }, [isProcessOpen])
+
+  const applyOrderScope = (scope: "FULL" | "PARTIAL", items: SelectedReturnItem[]) => {
+    if (scope === "FULL") {
+      return items.map((i) => ({
+        ...i,
+        included: i.originalQuantity > 0,
+        returnQuantity: i.originalQuantity,
+      }))
+    }
+    return items.map((i) => ({ ...i, included: false, returnQuantity: 0 }))
+  }
+
+  const filteredReturnLineItems = useMemo(() => {
+    const term = lineItemSearch.trim().toLowerCase()
+    if (!term) return selectedReturnItems
+    return selectedReturnItems.filter(
+      (item) =>
+        item.productName.toLowerCase().includes(term) ||
+        item.sku.toLowerCase().includes(term)
+    )
+  }, [selectedReturnItems, lineItemSearch])
+
+  const returnSubtotal = useMemo(
+    () =>
+      selectedReturnItems
+        .filter((i) => i.included && i.returnQuantity > 0)
+        .reduce((sum, i) => sum + i.returnQuantity * i.unitPrice, 0),
+    [selectedReturnItems]
+  )
+
+  const exchangeSubtotal = useMemo(
+    () => exchangeItems.reduce((sum, i) => sum + i.quantity * i.price, 0),
+    [exchangeItems]
+  )
+
+  const balanceSummary = useMemo(() => {
+    const diff = exchangeSubtotal - returnSubtotal
+    return {
+      returnSubtotal,
+      exchangeSubtotal,
+      additionalDue: diff > 0 ? diff : 0,
+      refundDue: diff < 0 ? Math.abs(diff) : 0,
+      net: diff,
+    }
+  }, [returnSubtotal, exchangeSubtotal])
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -531,6 +657,35 @@ export function Returns() {
       return matchesSearch
     })
   }, [returns, searchTerm])
+
+  const refundHistory = useMemo(
+    () => filteredReturns.filter((r) => r.status === "REFUNDED"),
+    [filteredReturns]
+  )
+
+  const exchangeHistory = useMemo(
+    () => filteredReturns.filter((r) => r.status === "EXCHANGED"),
+    [filteredReturns]
+  )
+
+  const reportingStats = useMemo(() => {
+    const damagedNotes = returns.filter((r) =>
+      (r.notes || "").toLowerCase().includes("damaged")
+    ).length
+    const totalRefund = returns
+      .filter((r) => r.status === "REFUNDED")
+      .reduce((sum, r) => sum + Math.abs(Number(r.total_amount)), 0)
+    const totalExchange = returns
+      .filter((r) => r.status === "EXCHANGED")
+      .reduce((sum, r) => sum + Math.abs(Number(r.total_amount)), 0)
+    return {
+      totalReturns: refundHistory.length,
+      totalExchanges: exchangeHistory.length,
+      totalRefund,
+      totalExchange,
+      damagedNotes,
+    }
+  }, [returns, refundHistory.length, exchangeHistory.length])
 
   const searchableSales = useMemo(() => {
     const eligibleSalesFromCache = allSalesForMetrics
@@ -712,36 +867,44 @@ export function Returns() {
       )
   }, [products, exchangeProductSearch])
 
-  const handleProcessReturn = async () => {
-    // Filter out items with quantity 0 before validation
-    const validReturnedItems = newReturn.returnedItems.filter(item => item.quantity > 0)
-    
+  const validateBeforeSubmit = (): boolean => {
+    const validReturnedItems = newReturn.returnedItems.filter((item) => item.quantity > 0)
+    const isExchangeFlow = processMode === "exchanges"
+
     if (!newReturn.saleId || (validReturnedItems.length === 0 && newReturn.exchangedItems.length === 0)) {
       toast({
         title: "Missing Information",
         description: "Please select a sale and add items to return or exchange.",
         variant: "destructive",
       })
-      return
+      return false
     }
 
-    // Validate return type specific requirements
-    if (newReturn.returnType === "REFUND" && !newReturn.refundMethod) {
+    if (!newReturn.returnReason) {
+      toast({
+        title: "Missing Information",
+        description: "Please select a return reason.",
+        variant: "destructive",
+      })
+      return false
+    }
+
+    if (!isExchangeFlow && !newReturn.refundMethod) {
       toast({
         title: "Missing Information",
         description: "Please select a refund method.",
         variant: "destructive",
       })
-      return
+      return false
     }
 
-    if (newReturn.returnType === "EXCHANGE" && newReturn.exchangedItems.length === 0) {
+    if (isExchangeFlow && newReturn.exchangedItems.length === 0) {
       toast({
         title: "Missing Information",
-        description: "Please add items for exchange.",
+        description: "Please add replacement products for the exchange.",
         variant: "destructive",
       })
-      return
+      return false
     }
 
     // Validate return quantities (only items included in the return)
@@ -755,41 +918,55 @@ export function Returns() {
         description: "Return quantity cannot exceed original sale quantity.",
         variant: "destructive",
       })
-      return
+      return false
     }
 
-    // Validate that we have at least one item to return or exchange
     if (validReturnedItems.length === 0 && newReturn.exchangedItems.length === 0) {
       toast({
         title: "Missing Information",
         description: "Please select at least one item to return or add items for exchange.",
         variant: "destructive",
       })
-      return
+      return false
     }
 
-    setProcessingReturn(true) // Set processing state for button
+    return true
+  }
+
+  const handleProcessReturn = async () => {
+    if (!validateBeforeSubmit()) return
+
+    const validReturnedItems = newReturn.returnedItems.filter((item) => item.quantity > 0)
+
+    setProcessingReturn(true)
     try {
       // Prepare the request payload - ensure all quantities are numbers
+      const dispositionByProduct = Object.fromEntries(
+        selectedReturnItems
+          .filter((i) => i.included && i.returnQuantity > 0)
+          .map((i) => [i.productId, i.disposition])
+      )
+
       const payload: any = {
-        returnedItems: validReturnedItems.map(item => ({
+        returnedItems: validReturnedItems.map((item) => ({
           productId: item.productId,
-          quantity: Number(item.quantity) // Ensure quantity is a number, not a string
+          quantity: Number(item.quantity),
+          disposition: dispositionByProduct[item.productId] || "RESTOCK",
         })),
         notes: newReturn.notes || "",
+        returnReason: newReturn.returnReason,
+        orderScope: newReturn.orderScope,
       }
 
-      // Add exchange items if return type is EXCHANGE - ensure quantities and prices are numbers
-      if (newReturn.returnType === "EXCHANGE" && newReturn.exchangedItems.length > 0) {
-        payload.exchangedItems = newReturn.exchangedItems.map(item => ({
+      if (processMode === "exchanges" && newReturn.exchangedItems.length > 0) {
+        payload.exchangedItems = newReturn.exchangedItems.map((item) => ({
           productId: item.productId,
-          quantity: Number(item.quantity), // Ensure quantity is a number
-          price: Number(item.price) // Ensure price is a number
+          quantity: Number(item.quantity),
+          price: Number(item.price),
         }))
       }
 
-      // Add refund method if return type is REFUND
-      if (newReturn.returnType === "REFUND" && newReturn.refundMethod) {
+      if (processMode === "returns" && newReturn.refundMethod) {
         payload.refundMethod = newReturn.refundMethod
       }
 
@@ -859,10 +1036,13 @@ export function Returns() {
         customerId: "",
         returnType: "REFUND",
         refundMethod: "",
+        returnReason: "",
+        orderScope: "PARTIAL",
         returnedItems: [],
         exchangedItems: [],
         notes: "",
       })
+      setConfirmOpen(false)
       setSelectedReturnItems([])
       setExchangeItems([])
       setExchangeProductSearch("")
@@ -946,15 +1126,19 @@ export function Returns() {
           returnQuantity: maxReturnable,
           unitPrice: item.unit_price,
           included: true,
+          disposition: "RESTOCK" as InventoryDisposition,
         }
       })
-      setSelectedReturnItems(items)
+      const scoped = applyOrderScope(newReturn.orderScope, items)
+      setSelectedReturnItems(scoped)
       setNewReturn((prev) => ({
         ...prev,
         customerId: fresh.customer?.id ? String(fresh.customer.id) : "",
-        returnedItems: items.map((i) => ({ productId: i.productId, quantity: i.returnQuantity })),
+        returnedItems: scoped
+          .filter((i) => i.included && i.returnQuantity > 0)
+          .map((i) => ({ productId: i.productId, quantity: i.returnQuantity, disposition: i.disposition })),
       }))
-      if (items.length > 0 && items.every((i) => i.originalQuantity <= 0)) {
+      if (scoped.length > 0 && scoped.every((i) => i.originalQuantity <= 0)) {
         toast({
           title: "Nothing left to return",
           description: "This sale has already been fully returned.",
@@ -977,13 +1161,17 @@ export function Returns() {
             returnQuantity: maxReturnable,
             unitPrice: item.unit_price,
             included: true,
+            disposition: "RESTOCK" as InventoryDisposition,
           }
         })
-        setSelectedReturnItems(items)
+        const scoped = applyOrderScope(newReturn.orderScope, items)
+        setSelectedReturnItems(scoped)
         setNewReturn((prev) => ({
           ...prev,
           customerId: cached.customer?.id ? String(cached.customer.id) : prev.customerId,
-          returnedItems: items.map((i) => ({ productId: i.productId, quantity: i.returnQuantity })),
+          returnedItems: scoped
+            .filter((i) => i.included && i.returnQuantity > 0)
+            .map((i) => ({ productId: i.productId, quantity: i.returnQuantity, disposition: i.disposition })),
         }))
       } else {
         setSelectedReturnItems([])
@@ -1005,8 +1193,51 @@ export function Returns() {
     triggerSaleSearch(pastedValue, { immediate: true })
   }
 
-  const handleStartReturnForSale = (saleId: string) => {
+  const handleStartReturnForSale = (saleId: string, mode: ReturnsModule = module) => {
+    setProcessMode(mode)
+    setNewReturn((prev) => ({
+      ...prev,
+      returnType: mode === "exchanges" ? "EXCHANGE" : "REFUND",
+    }))
     handleSaleSelect(saleId)
+    setIsProcessOpen(true)
+  }
+
+  const handleDispositionChange = (productId: string, disposition: InventoryDisposition) => {
+    setSelectedReturnItems((prev) =>
+      prev.map((i) => (i.productId === productId ? { ...i, disposition } : i))
+    )
+  }
+
+  const handleOrderScopeChange = (scope: "FULL" | "PARTIAL") => {
+    setNewReturn((prev) => ({ ...prev, orderScope: scope }))
+    setSelectedReturnItems((prev) => {
+      const scoped = applyOrderScope(scope, prev)
+      setNewReturn((p) => ({
+        ...p,
+        returnedItems: scoped
+          .filter((i) => i.included && i.returnQuantity > 0)
+          .map((i) => ({ productId: i.productId, quantity: i.returnQuantity, disposition: i.disposition })),
+      }))
+      return scoped
+    })
+  }
+
+  useEffect(() => {
+    setProcessMode(module)
+  }, [module])
+
+  const openProcessDialog = (mode: ReturnsModule = module) => {
+    setProcessMode(mode)
+    setNewReturn((prev) => ({
+      ...prev,
+      returnType: mode === "exchanges" ? "EXCHANGE" : "REFUND",
+      refundMethod: mode === "exchanges" ? "" : prev.refundMethod,
+      exchangedItems: mode === "returns" ? [] : prev.exchangedItems,
+    }))
+    if (mode === "returns") {
+      setExchangeItems([])
+    }
     setIsProcessOpen(true)
   }
 
@@ -1029,7 +1260,8 @@ export function Returns() {
         .filter((i) => i.included && i.returnQuantity > 0)
         .map((i) => ({
           productId: i.productId,
-          quantity: i.returnQuantity
+          quantity: i.returnQuantity,
+          disposition: i.disposition,
         }))
 
       setNewReturn((prev) => ({
@@ -1062,9 +1294,23 @@ export function Returns() {
     })
   }
 
-  const handleViewReturn = (returnItem: ReturnItem) => {
-    setSelectedReturn(returnItem)
+  const handleViewReturn = async (returnItem: ReturnItem) => {
     setIsViewOpen(true)
+    setSelectedReturn(returnItem)
+    setViewDetailLoading(true)
+    try {
+      const response = await apiClient.get(`/sale/${returnItem.id}`)
+      const payload = response.data?.data || response.data
+      setSelectedReturn(normalizeReturnDetail(payload))
+    } catch {
+      toast({
+        variant: "destructive",
+        title: "Could not load return details",
+        description: "Showing summary only. Try again in a moment.",
+      })
+    } finally {
+      setViewDetailLoading(false)
+    }
   }
 
   const renderReturnsTable = (returnsData: ReturnItem[]) => {
@@ -1118,7 +1364,9 @@ export function Returns() {
               <TableCell>Rs {Math.abs(Number(returnItem.total_amount)).toLocaleString()}</TableCell>
               <TableCell className="capitalize">{returnItem.payment_method}</TableCell>
               <TableCell>
-                <Badge className={getStatusColor(returnItem.status)}>{returnItem.status}</Badge>
+                <Badge className={getStatusColor(returnItem.status)}>
+                  {formatSaleStatusLabel(returnItem.status)}
+                </Badge>
               </TableCell>
               <TableCell>
                 <div className="flex gap-2">
@@ -1235,36 +1483,58 @@ export function Returns() {
   }
 
   if (loading) {
-    return <PageLoader message="Loading returns..." />
+    return (
+      <PageLoader
+        message={module === "exchanges" ? "Loading exchanges..." : "Loading returns..."}
+      />
+    )
   }
 
   return (
     <div className="p-4 md:p-6 space-y-4 md:space-y-6">
       <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
         <div>
-          <h1 className="text-2xl md:text-3xl font-bold">Returns & Exchange</h1>
-          <p className="text-sm md:text-base text-gray-600">Process customer returns and refunds</p>
+          <h1 className="text-2xl md:text-3xl font-bold">
+            {module === "exchanges" ? "Exchanges" : "Returns"}
+          </h1>
+          <p className="text-sm md:text-base text-gray-600">
+            {module === "exchanges"
+              ? "Exchange products from an original sale with replacement items and automatic price balancing."
+              : "Process full or partial returns with refund options and inventory disposition."}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {module === "returns" ? (
+            <Button onClick={() => openProcessDialog("returns")}>
+              <RotateCcw className="w-4 h-4 mr-2" />
+              Process Return
+            </Button>
+          ) : (
+            <Button onClick={() => openProcessDialog("exchanges")}>
+              <ArrowLeftRight className="w-4 h-4 mr-2" />
+              Process Exchange
+            </Button>
+          )}
         </div>
         <Dialog 
           open={isProcessOpen} 
           onOpenChange={(open) => {
-            // Prevent closing modal while processing
             if (!open && processingReturn) {
               return
             }
             setIsProcessOpen(open)
           }}
         >
-          <DialogTrigger asChild>
-            <Button>
-              <Plus className="w-4 h-4 mr-2" />
-              Process Return
-            </Button>
-          </DialogTrigger>
           <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>Process Return</DialogTitle>
-              <DialogDescription>Process a customer return or refund</DialogDescription>
+              <DialogTitle>
+                {processMode === "exchanges" ? "Process Exchange" : "Process Return"}
+              </DialogTitle>
+              <DialogDescription>
+                {processMode === "exchanges"
+                  ? "Return selected items and issue replacement products. Price difference is calculated automatically."
+                  : "Return items from an original sale and issue a refund."}
+              </DialogDescription>
             </DialogHeader>
             <div className="space-y-4">
               <div className="space-y-2" ref={saleDropdownRef}>
@@ -1298,7 +1568,8 @@ export function Returns() {
                         <div className="px-3 py-6 text-center">
                           <XCircle className="mx-auto mb-2 h-8 w-8 text-amber-400" />
                           <p className="text-sm font-medium text-gray-700">
-                            {ineligibleSaleMatch.saleNumber} is {ineligibleSaleMatch.status}
+                            {ineligibleSaleMatch.saleNumber} is{" "}
+                            {formatSaleStatusLabel(ineligibleSaleMatch.status)}
                           </p>
                           <p className="mt-1 text-xs text-gray-500">
                             {ineligibleSaleMatch.reason}
@@ -1379,102 +1650,126 @@ export function Returns() {
                 </div>
               )}
 
-              {/* Return Type Selection */}
               <div className="space-y-2">
-                <Label>Return Type *</Label>
-                <RadioGroup
-                  value={newReturn.returnType}
-                  onValueChange={(value: "REFUND" | "EXCHANGE") => {
-                    setNewReturn((prev) => ({
-                      ...prev,
-                      returnType: value,
-                      refundMethod: value === "EXCHANGE" ? "" : prev.refundMethod,
-                    }))
-                    if (value === "EXCHANGE") {
-                      setExchangeItems([])
-                      setNewReturn((prev) => ({ ...prev, exchangedItems: [] }))
-                    }
-                  }}
-                  className="flex gap-6"
+                <Label>
+                  {processMode === "returns" ? "Return type" : "Exchange type"} *
+                </Label>
+                <Tabs
+                  value={newReturn.orderScope}
+                  onValueChange={(value) =>
+                    handleOrderScopeChange(value as "FULL" | "PARTIAL")
+                  }
+                  className="w-full"
                 >
-                  <div className="flex items-center space-x-2">
-                    <RadioGroupItem value="REFUND" id="refund" />
-                    <Label htmlFor="refund" className="font-normal cursor-pointer">
-                      Refund
-                    </Label>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <RadioGroupItem value="EXCHANGE" id="exchange" />
-                    <Label htmlFor="exchange" className="font-normal cursor-pointer">
-                      Exchange
-                    </Label>
-                  </div>
-                </RadioGroup>
+                  <TabsList className="grid w-full grid-cols-2 h-10">
+                    <TabsTrigger value="FULL" className="text-sm">
+                      Full order {processMode === "returns" ? "return" : "exchange"}
+                    </TabsTrigger>
+                    <TabsTrigger value="PARTIAL" className="text-sm">
+                      Partial {processMode === "returns" ? "return" : "exchange"}
+                    </TabsTrigger>
+                  </TabsList>
+                </Tabs>
+                <p className="text-xs text-muted-foreground">
+                  {newReturn.orderScope === "FULL"
+                    ? "All returnable units on this sale are included automatically."
+                    : "Select products and quantities to return below."}
+                </p>
               </div>
 
-              {/* Refund Method Selection (only for Refund) */}
-              {newReturn.returnType === "REFUND" && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="refund-method">Refund Method *</Label>
+                  <Label htmlFor="return-reason">Return reason *</Label>
                   <Select
-                    value={newReturn.refundMethod || ""}
+                    value={newReturn.returnReason || ""}
                     onValueChange={(value) =>
-                      setNewReturn((prev) => ({ ...prev, refundMethod: value }))
+                      setNewReturn((prev) => ({ ...prev, returnReason: value as ReturnReason }))
                     }
                   >
-                    <SelectTrigger id="refund-method">
-                      <SelectValue placeholder="Select refund method" />
+                    <SelectTrigger id="return-reason">
+                      <SelectValue placeholder="Select reason" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="cash">Cash</SelectItem>
-                      <SelectItem value="card">Card</SelectItem>
-                      <SelectItem value="bank_transfer">Bank Transfer</SelectItem>
-                      <SelectItem value="store_credit">Store Credit</SelectItem>
-                      <SelectItem value="original_payment">Original Payment Method</SelectItem>
+                      {RETURN_REASONS.map((r) => (
+                        <SelectItem key={r.value} value={r.value}>
+                          {r.label}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
-              )}
+                {processMode === "returns" && (
+                  <div className="space-y-2">
+                    <Label htmlFor="refund-method">Refund option *</Label>
+                    <Select
+                      value={newReturn.refundMethod || ""}
+                      onValueChange={(value) =>
+                        setNewReturn((prev) => ({ ...prev, refundMethod: value }))
+                      }
+                    >
+                      <SelectTrigger id="refund-method">
+                        <SelectValue placeholder="Select refund method" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {REFUND_METHODS.map((m) => (
+                          <SelectItem key={m.value} value={m.value}>
+                            {m.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+              </div>
 
               {selectedReturnItems.length > 0 && (
                 <div className="space-y-2">
-                  <Label>Select Items to Return</Label>
-                  <div className="border rounded-lg p-4 space-y-3">
-                    {selectedReturnItems.map((item) => (
-                      <div
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                    <Label>Products from original order</Label>
+                    <div className="relative w-full sm:max-w-xs">
+                      <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                      <Input
+                        placeholder="Filter by name or SKU"
+                        value={lineItemSearch}
+                        onChange={(e) => setLineItemSearch(e.target.value)}
+                        className="pl-9 h-9"
+                      />
+                    </div>
+                  </div>
+                  <div className="border rounded-lg overflow-hidden">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-10" />
+                          <TableHead>Product</TableHead>
+                          <TableHead>SKU</TableHead>
+                          <TableHead className="text-right">Purchased</TableHead>
+                          <TableHead className="text-right">Returnable</TableHead>
+                          <TableHead className="text-right">Qty</TableHead>
+                          <TableHead>Inventory</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                    {filteredReturnLineItems.map((item) => (
+                      <TableRow
                         key={item.productId}
-                        className={`flex items-center gap-3 p-3 rounded border transition-colors ${
-                          item.included ? "bg-white" : "bg-gray-50 opacity-60"
-                        }`}
+                        className={item.included ? "" : "opacity-60 bg-gray-50"}
                       >
+                        <TableCell>
                         <Checkbox
                           checked={item.included}
                           onCheckedChange={(checked) =>
                             handleToggleReturnItem(item.productId, checked === true)
                           }
-                          aria-label={`Include ${item.productName} in return`}
-                          className="shrink-0"
+                          aria-label={`Include ${item.productName}`}
                         />
-                        <div className="flex-1 min-w-0">
-                          <div className="font-medium">{item.productName}</div>
-                          <div className="text-sm text-gray-500">
-                            SKU: {item.sku} • Sold: {item.soldQuantity} • Returnable now: {item.originalQuantity}
-                            {item.alreadyReturned != null && item.alreadyReturned > 0
-                              ? ` (${item.alreadyReturned} already returned)`
-                              : ""}{" "}
-                            • Price: Rs {Number(item.unitPrice).toLocaleString()}
-                          </div>
-                          <div className="text-sm font-semibold mt-0.5">
-                            {item.included ? (
-                              <span className="text-gray-800">
-                                Refund: Rs {(item.returnQuantity * item.unitPrice).toLocaleString()}
-                              </span>
-                            ) : (
-                              <span className="text-gray-400">Excluded from refund</span>
-                            )}
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2">
+                        </TableCell>
+                        <TableCell className="font-medium">{item.productName}</TableCell>
+                        <TableCell className="text-sm text-gray-500">{item.sku}</TableCell>
+                        <TableCell className="text-right">{item.soldQuantity}</TableCell>
+                        <TableCell className="text-right">{item.originalQuantity}</TableCell>
+                        <TableCell>
+                        <div className="flex items-center justify-end gap-1">
                           <Button
                             variant="outline"
                             size="sm"
@@ -1619,8 +1914,31 @@ export function Returns() {
                             <Plus className="w-3 h-3" />
                           </Button>
                         </div>
-                      </div>
+                        </TableCell>
+                        <TableCell>
+                          <Select
+                            value={item.disposition}
+                            disabled={!item.included}
+                            onValueChange={(v) =>
+                              handleDispositionChange(item.productId, v as InventoryDisposition)
+                            }
+                          >
+                            <SelectTrigger className="h-8 text-xs">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {INVENTORY_DISPOSITIONS.map((d) => (
+                                <SelectItem key={d.value} value={d.value}>
+                                  {d.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </TableCell>
+                      </TableRow>
                     ))}
+                      </TableBody>
+                    </Table>
                   </div>
                   
                   {/* Return Summary */}
@@ -1644,7 +1962,7 @@ export function Returns() {
               )}
 
               {/* Exchange Items Section (only for Exchange) */}
-              {newReturn.returnType === "EXCHANGE" && (
+              {processMode === "exchanges" && (
                 <div className="space-y-2" ref={exchangeProductDropdownRef}>
                   <Label htmlFor="exchange-product-search">
                     Add Exchange Items ({filteredExchangeProducts.length} available)
@@ -1765,6 +2083,42 @@ export function Returns() {
                 />
               </div>
             </div>
+
+              {(returnSubtotal > 0 || exchangeSubtotal > 0) && (
+                <Card className="border-dashed">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <Package className="h-4 w-4" />
+                      Balance summary
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="text-sm space-y-2">
+                    <div className="flex justify-between">
+                      <span>Returned products value</span>
+                      <span className="text-red-600 font-medium">Rs {returnSubtotal.toLocaleString()}</span>
+                    </div>
+                    {processMode === "exchanges" && (
+                      <div className="flex justify-between">
+                        <span>Replacement products value</span>
+                        <span className="font-medium">Rs {exchangeSubtotal.toLocaleString()}</span>
+                      </div>
+                    )}
+                    {balanceSummary.additionalDue > 0 && (
+                      <div className="flex justify-between font-semibold text-amber-700">
+                        <span>Additional amount due</span>
+                        <span>Rs {balanceSummary.additionalDue.toLocaleString()}</span>
+                      </div>
+                    )}
+                    {balanceSummary.refundDue > 0 && (
+                      <div className="flex justify-between font-semibold text-emerald-700">
+                        <span>Refund / store credit</span>
+                        <span>Rs {balanceSummary.refundDue.toLocaleString()}</span>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
+
             <DialogFooter>
               <Button 
                 variant="outline" 
@@ -1773,15 +2127,65 @@ export function Returns() {
               >
                 Cancel
               </Button>
-              <Button onClick={handleProcessReturn} disabled={processingReturn}>
-                {processingReturn && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                {processingReturn ? "Processing..." : "Process Return"}
+              <Button
+                onClick={() => validateBeforeSubmit() && setConfirmOpen(true)}
+                disabled={processingReturn}
+              >
+                Review &amp; confirm
               </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                Confirm {processMode === "exchanges" ? "exchange" : "return"}?
+              </AlertDialogTitle>
+              <AlertDialogDescription asChild>
+                <div className="space-y-2 text-sm text-left">
+                  <p>
+                    Sale <strong>{selectedSale?.sale_number}</strong> · Reason:{" "}
+                    {RETURN_REASON_LABEL[newReturn.returnReason || ""] || newReturn.returnReason}
+                  </p>
+                  {processMode === "returns" && newReturn.refundMethod && (
+                    <p>
+                      Refund: {REFUND_METHOD_LABEL[newReturn.refundMethod] || newReturn.refundMethod}
+                    </p>
+                  )}
+                  <p>Return value: Rs {returnSubtotal.toLocaleString()}</p>
+                  {processMode === "exchanges" && (
+                    <p>Replacement value: Rs {exchangeSubtotal.toLocaleString()}</p>
+                  )}
+                  <p className="font-medium">
+                    {balanceSummary.additionalDue > 0
+                      ? `Customer pays Rs ${balanceSummary.additionalDue.toLocaleString()}`
+                      : balanceSummary.refundDue > 0
+                        ? `Refund Rs ${balanceSummary.refundDue.toLocaleString()}`
+                        : "No balance due"}
+                  </p>
+                </div>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={processingReturn}>Back</AlertDialogCancel>
+              <AlertDialogAction
+                disabled={processingReturn}
+                onClick={(e) => {
+                  e.preventDefault()
+                  handleProcessReturn()
+                }}
+              >
+                {processingReturn ? "Processing…" : "Complete"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
 
+      <Tabs value={module} className="space-y-4">
+        <TabsContent value="returns" className="space-y-4 mt-0">
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
         {loading ? (
           <>
@@ -1836,14 +2240,7 @@ export function Returns() {
         )}
       </div>
 
-      <Tabs defaultValue="all" className="space-y-4">
-        <TabsList>
-          <TabsTrigger value="all">All Returns ({filteredReturns.length})</TabsTrigger>
-          <TabsTrigger value="REFUNDED">Refunded ({getFilteredReturnsByStatus("REFUNDED").length})</TabsTrigger>
-          <TabsTrigger value="EXCHANGED">Exchanged ({getFilteredReturnsByStatus("EXCHANGED").length})</TabsTrigger>
-        </TabsList>
-
-        <div className="flex gap-4">
+      <div className="flex gap-4">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
             <Input
@@ -1880,8 +2277,8 @@ export function Returns() {
                       {new Date(sale.sale_date).toLocaleDateString()} | Rs {Math.abs(Number(sale.total_amount)).toLocaleString()}
                     </div>
                   </div>
-                  <Button onClick={() => handleStartReturnForSale(sale.id)}>
-                    Process Return
+                  <Button onClick={() => handleStartReturnForSale(sale.id, module)}>
+                    {module === "exchanges" ? "Process Exchange" : "Process Return"}
                   </Button>
                 </div>
               ))}
@@ -1896,39 +2293,36 @@ export function Returns() {
             <Alert className="border-amber-200 bg-amber-50 text-amber-950">
               <XCircle className="h-4 w-4 text-amber-700" />
               <AlertTitle>
-                {pageSearchIneligibleSaleMatch.saleNumber} is {pageSearchIneligibleSaleMatch.status}
+                {pageSearchIneligibleSaleMatch.saleNumber} is{" "}
+                {formatSaleStatusLabel(pageSearchIneligibleSaleMatch.status)}
               </AlertTitle>
               <AlertDescription>{pageSearchIneligibleSaleMatch.reason}</AlertDescription>
             </Alert>
           )}
 
-        <TabsContent value="all">
-          <Card>
-            <CardHeader>
-              <CardTitle>All Returns & Exchange</CardTitle>
-              <CardDescription>Manage all customer returns and refunds</CardDescription>
-            </CardHeader>
-            <CardContent>{renderReturnsTable(getFilteredReturnsByStatus("all"))}</CardContent>
-          </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Return history</CardTitle>
+          <CardDescription>
+            Completed return transactions ({refundHistory.length}) — click the eye icon for line-item details
+          </CardDescription>
+        </CardHeader>
+        <CardContent>{renderReturnsTable(refundHistory)}</CardContent>
+      </Card>
         </TabsContent>
 
-        <TabsContent value="REFUNDED">
+        <TabsContent value="exchanges" className="space-y-4 mt-0">
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
+            <Card><CardContent className="pt-4"><div className="text-muted-foreground">Total exchanges</div><div className="text-xl font-bold">{reportingStats.totalExchanges}</div></CardContent></Card>
+            <Card><CardContent className="pt-4"><div className="text-muted-foreground">Exchange value</div><div className="text-xl font-bold">Rs {reportingStats.totalExchange.toLocaleString()}</div></CardContent></Card>
+            <Card><CardContent className="pt-4"><div className="text-muted-foreground">Today&apos;s returns</div><div className="text-xl font-bold">{todayReturns}</div></CardContent></Card>
+          </div>
           <Card>
             <CardHeader>
-              <CardTitle>Refunded Sales</CardTitle>
-              <CardDescription>Sales that have been refunded to customers</CardDescription>
+              <CardTitle>Exchange history</CardTitle>
+              <CardDescription>Completed exchanges with replacement products</CardDescription>
             </CardHeader>
-            <CardContent>{renderReturnsTable(getFilteredReturnsByStatus("REFUNDED"))}</CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="EXCHANGED">
-          <Card>
-            <CardHeader>
-              <CardTitle>Exchanged Sales</CardTitle>
-              <CardDescription>Sales that have been exchanged for other products</CardDescription>
-            </CardHeader>
-            <CardContent>{renderReturnsTable(getFilteredReturnsByStatus("EXCHANGED"))}</CardContent>
+            <CardContent>{renderReturnsTable(exchangeHistory)}</CardContent>
           </Card>
         </TabsContent>
       </Tabs>
@@ -1938,13 +2332,17 @@ export function Returns() {
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-2xl font-bold">
-              Return Details - {selectedReturn?.sale_number || selectedReturn?.id}
+              {selectedReturn?.status === "EXCHANGED" ? "Exchange" : "Return"} Details —{" "}
+              {selectedReturn?.sale_number || selectedReturn?.id}
             </DialogTitle>
             <DialogDescription>
-              Review return/refund transaction details and item-level impact.
+              Line items, original sale reference, and notes for this{" "}
+              {selectedReturn?.status === "EXCHANGED" ? "exchange" : "return"}.
             </DialogDescription>
           </DialogHeader>
-          {selectedReturn && (
+          {viewDetailLoading ? (
+            <PageLoader message="Loading return details..." size="sm" />
+          ) : selectedReturn ? (
             <div className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <Card>
@@ -1956,14 +2354,21 @@ export function Returns() {
                       <strong>Sale ID:</strong> {selectedReturn.id}
                     </div>
                     <div>
-                      <strong>Sale Number:</strong> {selectedReturn.sale_number}
+                      <strong>Return #:</strong> {selectedReturn.sale_number}
                     </div>
+                    {selectedReturn.original_sale?.sale_number && (
+                      <div>
+                        <strong>Original sale:</strong> {selectedReturn.original_sale.sale_number}
+                      </div>
+                    )}
                     <div>
                       <strong>Date:</strong> {new Date(selectedReturn.sale_date).toLocaleDateString()}
                     </div>
                     <div>
                       <strong>Status:</strong>{" "}
-                      <Badge className={getStatusColor(selectedReturn.status)}>{selectedReturn.status}</Badge>
+                      <Badge className={getStatusColor(selectedReturn.status)}>
+                        {formatSaleStatusLabel(selectedReturn.status)}
+                      </Badge>
                     </div>
                   </CardContent>
                 </Card>
@@ -1979,31 +2384,44 @@ export function Returns() {
                       <strong>Payment Method:</strong> {selectedReturn.payment_method}
                     </div>
                     <div>
-                      <strong>Total Amount:</strong> Rs {Math.abs(Number(selectedReturn.total_amount)).toLocaleString()}
+                      <strong>Return value:</strong> Rs{" "}
+                      {Math.abs(Number(selectedReturn.total_amount)).toLocaleString()}
                     </div>
                   </CardContent>
                 </Card>
               </div>
 
-              {selectedReturn.sale_items && selectedReturn.sale_items.length > 0 && (
+              {selectedReturn.sale_items && selectedReturn.sale_items.length > 0 ? (
                 <Card>
                   <CardHeader className="pb-2">
-                    <CardTitle className="text-lg">Sale Items ({selectedReturn.sale_items.length})</CardTitle>
+                    <CardTitle className="text-lg">
+                      Returned products ({selectedReturn.sale_items.length})
+                    </CardTitle>
                   </CardHeader>
                   <CardContent className="border rounded-lg p-4">
                     {selectedReturn.sale_items.map((item, index) => (
-                      <div key={index} className="flex justify-between items-center py-2 border-b last:border-b-0">
+                      <div key={item.id || index} className="flex justify-between items-center py-2 border-b last:border-b-0">
                         <div>
-                          <div className="font-medium">{item.product.name}</div>
+                          <div className="font-medium">{item.product?.name || "Product"}</div>
                           <div className="text-sm text-gray-500">
-                            Qty: {item.quantity} • SKU: {item.product.sku} • Type: {item.item_type}
+                            Qty: {Math.abs(Number(item.quantity))} • SKU: {item.product?.sku || "—"}
+                            {item.item_type ? ` • ${item.item_type}` : ""}
                           </div>
                         </div>
-                        <div className="font-semibold text-red-700">Rs {Number(item.line_total).toLocaleString()}</div>
+                        <div className="font-semibold text-red-700">
+                          Rs {Math.abs(Number(item.line_total)).toLocaleString()}
+                        </div>
                       </div>
                     ))}
                   </CardContent>
                 </Card>
+              ) : (
+                <Alert>
+                  <AlertTitle>No line items on this record</AlertTitle>
+                  <AlertDescription>
+                    This return has no product lines stored. It may be an older record created before item tracking.
+                  </AlertDescription>
+                </Alert>
               )}
 
               {selectedReturn.notes && (
@@ -2013,7 +2431,7 @@ export function Returns() {
                 </div>
               )}
             </div>
-          )}
+          ) : null}
         </DialogContent>
       </Dialog>
 
@@ -2374,4 +2792,9 @@ function buildReturnNoteHtml(d: {
       </body>
     </html>
   `
+}
+
+/** Sidebar route: dedicated Exchanges screen (same engine, exchanges-only UI). */
+export function Exchanges() {
+  return <Returns module="exchanges" />
 }

@@ -24,6 +24,7 @@ import {
   ChevronDown,
   ChevronRight,
   RotateCcw,
+  ArrowLeftRight,
   CreditCard,
   Clock,
   Shield,
@@ -122,8 +123,14 @@ const menuSections: SidebarMenuSection[] = [
       },
       {
         id: "returns",
-        label: "Returns & Exchange",
+        label: "Returns",
         icon: RotateCcw,
+        roles: SALES_ROLES,
+      },
+      {
+        id: "exchanges",
+        label: "Exchanges",
+        icon: ArrowLeftRight,
         roles: SALES_ROLES,
       },
       {

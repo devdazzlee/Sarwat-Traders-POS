@@ -121,7 +121,15 @@ const createSaleController = asyncHandler(async (req: Request, res: Response) =>
 });
 
 const refundSaleController = asyncHandler(async (req: Request, res: Response) => {
-    const { customerId, returnedItems = [], exchangedItems = [], notes } = req.body;
+    const {
+        customerId,
+        returnedItems = [],
+        exchangedItems = [],
+        notes,
+        returnReason,
+        refundMethod,
+        orderScope,
+    } = req.body;
     const originalSaleId = req.params.saleId;
     const createdBy = req.user!.id;
 
@@ -141,6 +149,9 @@ const refundSaleController = asyncHandler(async (req: Request, res: Response) =>
         exchangedItems,
         notes,
         createdBy,
+        returnReason,
+        refundMethod,
+        orderScope,
     });
 
     new ApiResponse(sale, "Sale refunded/exchanged successfully").send(res);
@@ -199,6 +210,18 @@ const deleteHoldSaleController = asyncHandler(async (req: Request, res: Response
     new ApiResponse(null, "Held sale deleted successfully").send(res);
 });
 
+const deleteSaleController = asyncHandler(async (req: Request, res: Response) => {
+    const isAdmin = req.user?.role === "SUPER_ADMIN" || req.user?.role === "ADMIN";
+    const restrictToBranchId = isAdmin ? undefined : resolveBranchId(req);
+
+    const result = await saleService.deleteSale(req.params.saleId, {
+        deletedBy: req.user!.id,
+        restrictToBranchId,
+    });
+
+    new ApiResponse(result, "Sale deleted successfully").send(res);
+});
+
 export {
     getSalesController,
     getSalesForReturnsController,
@@ -212,4 +235,5 @@ export {
     createHoldSaleController,
     retrieveHoldSaleController,
     deleteHoldSaleController,
+    deleteSaleController,
 };

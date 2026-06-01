@@ -1,26 +1,28 @@
 import { z } from 'zod';
 
+const REQUIRED = 'this is required';
+
 export const createEmployeeSchema = z.object({
   body: z.object({
-    name: z.string(),
-    email: z.string().email().optional(),
-    phone_number: z.string().optional(),
-    cnic: z.string().optional(),
-    gender: z.string().optional(),
-    join_date: z.string().datetime(),
-    employee_type_id: z.string().uuid(),
-  }),
-});
-
-export const updateEmployeeSchema = z.object({
-  body: z.object({
-    name: z.string().optional(),
-    email: z.string().email().optional(),
+    name: z.string().trim().min(1, REQUIRED),
+    email: z.string().trim().min(1, REQUIRED).email('Invalid email address'),
     phone_number: z.string().optional(),
     cnic: z.string().optional(),
     gender: z.string().optional(),
     join_date: z.string().datetime().optional(),
     employee_type_id: z.string().uuid().optional(),
+  }),
+});
+
+export const updateEmployeeSchema = z.object({
+  body: z.object({
+    name: z.string().trim().min(1, REQUIRED).optional(),
+    email: z.string().trim().min(1, REQUIRED).email('Invalid email address').optional(),
+    phone_number: z.string().optional().nullable(),
+    cnic: z.string().optional().nullable(),
+    gender: z.string().optional().nullable(),
+    join_date: z.string().datetime().optional().nullable(),
+    employee_type_id: z.string().uuid().optional().nullable(),
   }),
   params: z.object({
     id: z.string().uuid(),

@@ -144,18 +144,43 @@ export function Customers({ onViewLedger }: CustomersProps) {
     loadData();
   }, []);
 
+  const buildCustomerPayload = (data: Partial<Customer & { billing_address?: string }>) => {
+    const name = data.name?.trim() || "";
+    const phone_number = data.phone_number?.trim() || "";
+    return {
+      name,
+      phone_number,
+      ...(data.email?.trim() && { email: data.email.trim().toLowerCase() }),
+      ...(data.address?.trim() && { address: data.address.trim() }),
+      ...((data as { billing_address?: string }).billing_address?.trim() && {
+        billing_address: (data as { billing_address?: string }).billing_address!.trim(),
+      }),
+      credit_limit: data.credit_limit ? Number(data.credit_limit) : 0,
+      outstanding_balance:
+        data.outstanding_balance !== undefined &&
+        data.outstanding_balance !== null &&
+        String(data.outstanding_balance).trim() !== ""
+          ? Math.max(0, Number(data.outstanding_balance))
+          : 0,
+    };
+  };
+
+  const canSubmitCustomer = (data: Partial<Customer & { billing_address?: string }>) =>
+    Boolean(data.name?.trim() && data.phone_number?.trim());
+
   // 2) Create customer
   const handleAddCustomer = async () => {
+    if (!canSubmitCustomer(newCustomer)) {
+      toast({
+        title: "Required fields",
+        description: "Name and phone number are required.",
+        variant: "destructive",
+      });
+      return;
+    }
     setIsAdding(true);
     try {
-      const payload = {
-        email: newCustomer.email,
-        name: newCustomer.name || "",
-        phone_number: newCustomer.phone_number || "",
-        address: newCustomer.address || "",
-        billing_address: (newCustomer as any).billing_address || "",
-        credit_limit: newCustomer.credit_limit ? Number(newCustomer.credit_limit) : 0,
-      };
+      const payload = buildCustomerPayload(newCustomer);
       const { queued } = await queueMutation('POST', '/customer', payload, 'customer');
       setNewCustomer({});
       setIsAddDialogOpen(false);
@@ -175,16 +200,17 @@ export function Customers({ onViewLedger }: CustomersProps) {
   // Edit customer
   const handleEditCustomer = async () => {
     if (!editingCustomer) return;
+    if (!canSubmitCustomer(editingCustomer)) {
+      toast({
+        title: "Required fields",
+        description: "Name and phone number are required.",
+        variant: "destructive",
+      });
+      return;
+    }
     setIsEditing(true);
     try {
-      const payload = {
-        email: editingCustomer.email,
-        name: editingCustomer.name || "",
-        phone_number: editingCustomer.phone_number || "",
-        address: editingCustomer.address || "",
-        billing_address: (editingCustomer as any).billing_address || "",
-        credit_limit: editingCustomer.credit_limit ? Number(editingCustomer.credit_limit) : 0,
-      };
+      const payload = buildCustomerPayload(editingCustomer);
       const { queued } = await queueMutation('PUT', `/customer/${editingCustomer.id}`, payload, 'customer');
       setEditingCustomer(null);
       if (queued) {
@@ -265,23 +291,7 @@ export function Customers({ onViewLedger }: CustomersProps) {
             </DialogHeader>
             <div className="space-y-4">
               <div>
-                <Label htmlFor="email">Email</Label>
-                <Input
-                  id="email"
-                  type="email"
-                  value={newCustomer.email || ""}
-                  onChange={(e) =>
-                    setNewCustomer({
-                      ...newCustomer,
-                      email: e.target.value,
-                    })
-                  }
-                  placeholder="Enter customer email"
-                  required
-                />
-              </div>
-              <div>
-                <Label htmlFor="name">Name</Label>
+                <Label htmlFor="name">Name *</Label>
                 <Input
                   id="name"
                   type="text"
@@ -296,7 +306,7 @@ export function Customers({ onViewLedger }: CustomersProps) {
                 />
               </div>
               <div>
-                <Label htmlFor="phone_number">Phone Number</Label>
+                <Label htmlFor="phone_number">Phone Number *</Label>
                 <Input
                   id="phone_number"
                   type="tel"
@@ -311,7 +321,26 @@ export function Customers({ onViewLedger }: CustomersProps) {
                 />
               </div>
               <div>
-                <Label htmlFor="address">Address</Label>
+                <Label htmlFor="email">
+                  Email <span className="text-gray-400 font-normal">(optional)</span>
+                </Label>
+                <Input
+                  id="email"
+                  type="email"
+                  value={newCustomer.email || ""}
+                  onChange={(e) =>
+                    setNewCustomer({
+                      ...newCustomer,
+                      email: e.target.value,
+                    })
+                  }
+                  placeholder="customer@example.com"
+                />
+              </div>
+              <div>
+                <Label htmlFor="address">
+                  Address <span className="text-gray-400 font-normal">(optional)</span>
+                </Label>
                 <Input
                   id="address"
                   type="text"
@@ -326,7 +355,9 @@ export function Customers({ onViewLedger }: CustomersProps) {
                 />
               </div>
               <div>
-                <Label htmlFor="billing_address">Billing Address</Label>
+                <Label htmlFor="billing_address">
+                  Billing Address <span className="text-gray-400 font-normal">(optional)</span>
+                </Label>
                 <Input
                   id="billing_address"
                   type="text"
@@ -340,25 +371,60 @@ export function Customers({ onViewLedger }: CustomersProps) {
                   placeholder="Enter billing address"
                 />
               </div>
-              <div>
-                <Label htmlFor="credit_limit">Credit Limit (Rs)</Label>
-                <Input
-                  id="credit_limit"
-                  type="number"
-                  value={newCustomer.credit_limit || ""}
-                  onChange={(e) =>
-                    setNewCustomer({
-                      ...newCustomer,
-                      credit_limit: e.target.value,
-                    })
-                  }
-                  placeholder="Enter credit limit (0 for unlimited)"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="credit_limit">
+                    Credit limit (Rs){" "}
+                    <span className="text-gray-400 font-normal">(empty = unlimited)</span>
+                  </Label>
+                  <Input
+                    id="credit_limit"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={newCustomer.credit_limit || ""}
+                    onChange={(e) =>
+                      setNewCustomer({
+                        ...newCustomer,
+                        credit_limit: e.target.value,
+                      })
+                    }
+                    placeholder="Leave empty for unlimited"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="previous_balance">
+                    Previous credit balance (Rs){" "}
+                    <span className="text-gray-400 font-normal">(optional)</span>
+                  </Label>
+                  <Input
+                    id="previous_balance"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={
+                      newCustomer.outstanding_balance !== undefined &&
+                      newCustomer.outstanding_balance !== null
+                        ? String(newCustomer.outstanding_balance)
+                        : ""
+                    }
+                    onChange={(e) =>
+                      setNewCustomer({
+                        ...newCustomer,
+                        outstanding_balance: e.target.value,
+                      })
+                    }
+                    placeholder="Amount owed before POS"
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Use for existing customers who already owed you money before using this software.
+                  </p>
+                </div>
               </div>
               <Button
                 onClick={handleAddCustomer}
                 className="w-full"
-                disabled={isAdding || !newCustomer.email}
+                disabled={isAdding || !canSubmitCustomer(newCustomer)}
               >
                 {isAdding ? (
                   <>
@@ -568,22 +634,7 @@ export function Customers({ onViewLedger }: CustomersProps) {
           {editingCustomer && (
             <div className="space-y-4">
               <div>
-                <Label htmlFor="edit-email">Email</Label>
-                <Input
-                  id="edit-email"
-                  type="email"
-                  value={editingCustomer.email}
-                  onChange={(e) =>
-                    setEditingCustomer({
-                      ...editingCustomer,
-                      email: e.target.value,
-                    })
-                  }
-                  required
-                />
-              </div>
-              <div>
-                <Label htmlFor="edit-name">Name</Label>
+                <Label htmlFor="edit-name">Name *</Label>
                 <Input
                   id="edit-name"
                   type="text"
@@ -598,7 +649,7 @@ export function Customers({ onViewLedger }: CustomersProps) {
                 />
               </div>
               <div>
-                <Label htmlFor="edit-phone">Phone Number</Label>
+                <Label htmlFor="edit-phone">Phone Number *</Label>
                 <Input
                   id="edit-phone"
                   type="tel"
@@ -613,7 +664,26 @@ export function Customers({ onViewLedger }: CustomersProps) {
                 />
               </div>
               <div>
-                <Label htmlFor="edit-address">Address</Label>
+                <Label htmlFor="edit-email">
+                  Email <span className="text-gray-400 font-normal">(optional)</span>
+                </Label>
+                <Input
+                  id="edit-email"
+                  type="email"
+                  value={editingCustomer.email || ""}
+                  onChange={(e) =>
+                    setEditingCustomer({
+                      ...editingCustomer,
+                      email: e.target.value,
+                    })
+                  }
+                  placeholder="customer@example.com"
+                />
+              </div>
+              <div>
+                <Label htmlFor="edit-address">
+                  Address <span className="text-gray-400 font-normal">(optional)</span>
+                </Label>
                 <Input
                   id="edit-address"
                   type="text"
@@ -628,7 +698,9 @@ export function Customers({ onViewLedger }: CustomersProps) {
                 />
               </div>
               <div>
-                <Label htmlFor="edit-billing-address">Billing Address</Label>
+                <Label htmlFor="edit-billing-address">
+                  Billing Address <span className="text-gray-400 font-normal">(optional)</span>
+                </Label>
                 <Input
                   id="edit-billing-address"
                   type="text"
@@ -642,25 +714,60 @@ export function Customers({ onViewLedger }: CustomersProps) {
                   placeholder="Enter billing address"
                 />
               </div>
-              <div>
-                <Label htmlFor="edit-credit-limit">Credit Limit (Rs)</Label>
-                <Input
-                  id="edit-credit-limit"
-                  type="number"
-                  value={editingCustomer.credit_limit || ""}
-                  onChange={(e) =>
-                    setEditingCustomer({
-                      ...editingCustomer,
-                      credit_limit: e.target.value,
-                    })
-                  }
-                  placeholder="Enter credit limit"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="edit-credit-limit">
+                    Credit limit (Rs){" "}
+                    <span className="text-gray-400 font-normal">(empty = unlimited)</span>
+                  </Label>
+                  <Input
+                    id="edit-credit-limit"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={editingCustomer.credit_limit || ""}
+                    onChange={(e) =>
+                      setEditingCustomer({
+                        ...editingCustomer,
+                        credit_limit: e.target.value,
+                      })
+                    }
+                    placeholder="Leave empty for unlimited"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="edit-outstanding-balance">
+                    Credit balance (Rs){" "}
+                    <span className="text-gray-400 font-normal">(amount owed)</span>
+                  </Label>
+                  <Input
+                    id="edit-outstanding-balance"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={
+                      editingCustomer.outstanding_balance !== undefined &&
+                      editingCustomer.outstanding_balance !== null
+                        ? String(editingCustomer.outstanding_balance)
+                        : ""
+                    }
+                    onChange={(e) =>
+                      setEditingCustomer({
+                        ...editingCustomer,
+                        outstanding_balance: e.target.value,
+                      })
+                    }
+                    placeholder="0"
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Adjust only if correcting balance; use Customer Ledger for payments.
+                  </p>
+                </div>
               </div>
               <Button
                 onClick={handleEditCustomer}
                 className="w-full"
-                disabled={isEditing}
+                disabled={isEditing || !canSubmitCustomer(editingCustomer)}
               >
                 {isEditing ? (
                   <>

@@ -14,6 +14,7 @@ import {
     createHoldSaleController,
     retrieveHoldSaleController,
     deleteHoldSaleController,
+    deleteSaleController,
     updateSaleController,
 } from "../controllers/sale.controller";
 import { createSaleSchema, refundSaleSchema } from "../validations/sale.validation";
@@ -47,6 +48,7 @@ router.get("/", getSalesController);
 router.get("/:saleId", getSaleByIdController);
 router.post("/", idempotency, validate(createSaleSchema), createSaleController);
 router.patch("/:saleId", updateSaleController);
+router.delete("/:saleId", deleteSaleController);
 router.patch("/:saleId/refund", validate(refundSaleSchema), refundSaleController);
 
 export default router;

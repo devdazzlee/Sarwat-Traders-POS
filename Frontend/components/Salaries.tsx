@@ -4,11 +4,12 @@ import React, { useEffect, useState } from "react";
 import apiClient from "@/lib/apiClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Switch } from "@/components/ui/switch";
+import { cn } from "@/lib/utils";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Loader2, Edit, Trash2, Plus, CalendarIcon } from "lucide-react";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
@@ -42,6 +43,176 @@ const months = [
     "July", "August", "September", "October", "November", "December"
 ];
 
+const SALARY_DIALOG_CLASS =
+    "sm:max-w-2xl w-[calc(100vw-2rem)] max-h-[min(90vh,640px)] flex flex-col gap-0 p-0 overflow-hidden";
+
+function SalaryFormFields({
+    form,
+    setForm,
+    employees,
+    idPrefix = "",
+}: {
+    form: Partial<Salary>;
+    setForm: React.Dispatch<React.SetStateAction<Partial<Salary>>>;
+    employees: Employee[];
+    idPrefix?: string;
+}) {
+    const paidCheckboxId = `${idPrefix}is_paid`;
+
+    const handlePaidToggle = (checked: boolean) => {
+        setForm((f) => ({
+            ...f,
+            is_paid: checked,
+            paid_date: checked
+                ? f.paid_date || new Date().toISOString()
+                : undefined,
+        }));
+    };
+
+    return (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3">
+            <div className="space-y-1.5 sm:col-span-2">
+                <Label htmlFor={`${idPrefix}employee`} className="text-sm">Employee</Label>
+                <Select
+                    value={form.employee_id || ""}
+                    onValueChange={(val) => setForm((f) => ({ ...f, employee_id: val }))}
+                >
+                    <SelectTrigger id={`${idPrefix}employee`} className="h-9">
+                        <SelectValue placeholder="Select employee" />
+                    </SelectTrigger>
+                    <SelectContent>
+                        {employees.map((emp) => (
+                            <SelectItem key={emp.id} value={emp.id}>{emp.name}</SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+            </div>
+            <div className="space-y-1.5">
+                <Label htmlFor={`${idPrefix}month`} className="text-sm">Month</Label>
+                <Select
+                    value={form.month ? String(form.month) : ""}
+                    onValueChange={(val) => setForm((f) => ({ ...f, month: Number(val) }))}
+                >
+                    <SelectTrigger id={`${idPrefix}month`} className="h-9">
+                        <SelectValue placeholder="Select month" />
+                    </SelectTrigger>
+                    <SelectContent>
+                        {months.map((m, idx) => (
+                            <SelectItem key={m} value={String(idx + 1)}>{m}</SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+            </div>
+            <div className="space-y-1.5">
+                <Label htmlFor={`${idPrefix}year`} className="text-sm">Year</Label>
+                <Select
+                    value={form.year ? String(form.year) : ""}
+                    onValueChange={(val) => setForm((f) => ({ ...f, year: Number(val) }))}
+                >
+                    <SelectTrigger id={`${idPrefix}year`} className="h-9">
+                        <SelectValue placeholder="Select year" />
+                    </SelectTrigger>
+                    <SelectContent>
+                        {Array.from(
+                            { length: new Date().getFullYear() + 2 - 2020 + 1 },
+                            (_, i) => 2020 + i
+                        ).map((y) => (
+                            <SelectItem key={y} value={String(y)}>{y}</SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+            </div>
+            <div className="space-y-1.5">
+                <Label htmlFor={`${idPrefix}amount`} className="text-sm">Amount (Rs)</Label>
+                <Input
+                    id={`${idPrefix}amount`}
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    className="h-9"
+                    value={form.amount ?? ""}
+                    onChange={(e) =>
+                        setForm((f) => ({
+                            ...f,
+                            amount: e.target.value === "" ? undefined : Number(e.target.value),
+                        }))
+                    }
+                    placeholder="0"
+                />
+            </div>
+            <div
+                className={cn(
+                    "flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5 sm:col-span-2",
+                    form.is_paid ? "border-green-200 bg-green-50/80" : "border-border bg-muted/30"
+                )}
+            >
+                <div className="min-w-0">
+                    <Label htmlFor={paidCheckboxId} className="text-sm font-medium cursor-pointer">
+                        Mark as paid
+                    </Label>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                        {form.is_paid ? "Salary recorded as paid" : "Leave off if not paid yet"}
+                    </p>
+                </div>
+                <Switch
+                    id={paidCheckboxId}
+                    checked={!!form.is_paid}
+                    onCheckedChange={handlePaidToggle}
+                    className="shrink-0"
+                />
+            </div>
+            <div className={cn("space-y-1.5 sm:col-span-2", !form.is_paid && "opacity-50 pointer-events-none")}>
+                <Label className="text-sm">Paid date</Label>
+                <Popover>
+                    <PopoverTrigger asChild>
+                        <Button
+                            type="button"
+                            variant="outline"
+                            disabled={!form.is_paid}
+                            className={cn(
+                                "w-full h-9 justify-start text-left font-normal",
+                                !form.paid_date && "text-muted-foreground"
+                            )}
+                        >
+                            <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                            {form.paid_date
+                                ? format(new Date(form.paid_date), "dd MMM yyyy")
+                                : "Pick a date"}
+                        </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0" align="start">
+                        <Calendar
+                            mode="single"
+                            selected={form.paid_date ? new Date(form.paid_date) : undefined}
+                            onSelect={(date) =>
+                                setForm((f) => ({
+                                    ...f,
+                                    paid_date: date
+                                        ? new Date(date.setHours(0, 0, 0, 0)).toISOString()
+                                        : undefined,
+                                }))
+                            }
+                            initialFocus
+                        />
+                    </PopoverContent>
+                </Popover>
+            </div>
+            <div className="space-y-1.5 sm:col-span-2">
+                <Label htmlFor={`${idPrefix}notes`} className="text-sm">
+                    Notes <span className="text-muted-foreground font-normal">(optional)</span>
+                </Label>
+                <Input
+                    id={`${idPrefix}notes`}
+                    className="h-9"
+                    value={form.notes || ""}
+                    onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+                    placeholder="Optional notes"
+                />
+            </div>
+        </div>
+    );
+}
+
 export function Salaries() {
     const [salaries, setSalaries] = useState<Salary[]>([]);
     const [employees, setEmployees] = useState<Employee[]>([]);
@@ -55,13 +226,9 @@ export function Salaries() {
     const [error, setError] = useState<string | null>(null);
     const [deleteId, setDeleteId] = useState<string | null>(null);
     
-    // Calculate years inside component to avoid hydration issues
-    const [currentYear] = useState(() => new Date().getFullYear());
-    const years = Array.from({ length: (currentYear + 2) - 2020 + 1 }, (_, i) => 2020 + i);
-
     // Fetch employees for dropdown
     useEffect(() => {
-        apiClient.get("/employee")
+        apiClient.get("/employee", { params: { page: 1, limit: 500 } })
             .then(res => setEmployees(res.data.data))
             .catch(() => setEmployees([]));
     }, []);
@@ -198,113 +365,42 @@ export function Salaries() {
                             <Plus className="h-4 w-4 mr-2" /> Add Salary
                         </Button>
                     </DialogTrigger>
-                    <DialogContent>
-                        <DialogHeader>
+                    <DialogContent className={SALARY_DIALOG_CLASS}>
+                        <DialogHeader className="shrink-0 px-6 pt-6 pb-4 border-b">
                             <DialogTitle>Add Salary</DialogTitle>
                         </DialogHeader>
-                        <div className="space-y-4 pt-4">
-                            <div className="space-y-2">
-                                <Label>Employee</Label>
-                                <Select
-                                    value={form.employee_id || ""}
-                                    onValueChange={val => setForm(f => ({ ...f, employee_id: val }))}
-                                >
-                                    <SelectTrigger>
-                                        <SelectValue placeholder="Select employee" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {employees.map(emp => (
-                                            <SelectItem key={emp.id} value={emp.id}>{emp.name}</SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                            <div className="space-y-2">
-                                <Label>Month</Label>
-                                <Select
-                                    value={form.month ? String(form.month) : ""}
-                                    onValueChange={val => setForm(f => ({ ...f, month: Number(val) }))}
-                                >
-                                    <SelectTrigger>
-                                        <SelectValue placeholder="Select month" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {months.map((m, idx) => (
-                                            <SelectItem key={m} value={String(idx + 1)}>{m}</SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                            <div className="space-y-2">
-                                <Label>Year</Label>
-                                <Select
-                                    value={form.year ? String(form.year) : ""}
-                                    onValueChange={val => setForm(f => ({ ...f, year: Number(val) }))}
-                                >
-                                    <SelectTrigger>
-                                        <SelectValue placeholder="Select year" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {years.map((y) => (
-                                            <SelectItem key={y} value={String(y)}>{y}</SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                            <div className="space-y-2">
-                                <Label>Amount</Label>
-                                <Input
-                                    type="number"
-                                    value={form.amount || ""}
-                                    onChange={e => setForm(f => ({ ...f, amount: Number(e.target.value) }))}
-                                    placeholder="Amount"
-                                />
-                            </div>
-                             <div className="flex items-center space-x-2 py-2">
-                                <Checkbox
-                                    id="is_paid"
-                                    checked={!!form.is_paid}
-                                    onCheckedChange={checked => setForm(f => ({ ...f, is_paid: !!checked }))}
-                                />
-                                <Label htmlFor="is_paid" className="cursor-pointer font-medium">Mark as Paid</Label>
-                            </div>
-                            <div className="space-y-2">
-                                <Label className="block font-medium">Paid Date</Label>
-                                <Popover>
-                                    <PopoverTrigger asChild>
-                                        <Button
-                                            variant={form.paid_date ? "default" : "outline"}
-                                            className="w-full justify-start text-left font-normal"
-                                        >
-                                            <CalendarIcon className="mr-2 h-4 w-4" />
-                                            {form.paid_date ? format(new Date(form.paid_date), "yyyy-MM-dd") : "Pick a date"}
-                                        </Button>
-                                    </PopoverTrigger>
-                                    <PopoverContent className="w-auto p-0">
-                                        <Calendar
-                                            mode="single"
-                                            selected={form.paid_date ? new Date(form.paid_date) : undefined}
-                                            onSelect={date => setForm(f => ({ ...f, paid_date: date ? new Date(date.setHours(0,0,0,0)).toISOString() : undefined }))}
-                                            initialFocus
-                                        />
-                                    </PopoverContent>
-                                </Popover>
-                            </div>
-                            <div className="space-y-2">
-                                <Label>Notes</Label>
-                                <Input
-                                    type="text"
-                                    value={form.notes || ""}
-                                    onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
-                                    placeholder="Notes"
-                                />
-                            </div>
-                            {error && <div className="text-red-600 text-sm">{error}</div>}
-                            <Button onClick={handleAddSalary} disabled={isSubmitting || !form.employee_id || !form.month || !form.year || !form.amount}>
+                        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 py-4">
+                            <SalaryFormFields form={form} setForm={setForm} employees={employees} />
+                            {error && <p className="text-red-600 text-sm mt-3">{error}</p>}
+                        </div>
+                        <DialogFooter className="shrink-0 px-6 py-4 border-t bg-background gap-2 sm:gap-0">
+                            <Button
+                                type="button"
+                                variant="outline"
+                                onClick={() => {
+                                    setIsDialogOpen(false);
+                                    setForm({});
+                                    setError(null);
+                                }}
+                                disabled={isSubmitting}
+                            >
+                                Cancel
+                            </Button>
+                            <Button
+                                onClick={handleAddSalary}
+                                disabled={
+                                    isSubmitting ||
+                                    !form.employee_id ||
+                                    !form.month ||
+                                    !form.year ||
+                                    form.amount == null ||
+                                    Number.isNaN(Number(form.amount))
+                                }
+                            >
                                 {isSubmitting ? <Loader2 className="animate-spin h-4 w-4 mr-2" /> : null}
                                 Add Salary
                             </Button>
-                        </div>
+                        </DialogFooter>
                     </DialogContent>
                 </Dialog>
             </div>
@@ -431,113 +527,48 @@ export function Salaries() {
 
             {/* Edit Salary Dialog */}
             <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
-                <DialogContent>
-                    <DialogHeader>
+                <DialogContent className={SALARY_DIALOG_CLASS}>
+                    <DialogHeader className="shrink-0 px-6 pt-6 pb-4 border-b">
                         <DialogTitle>Edit Salary</DialogTitle>
                     </DialogHeader>
-                    <div className="space-y-4 pt-4">
-                        <div className="space-y-2">
-                            <Label>Employee</Label>
-                            <Select
-                                value={form.employee_id || ""}
-                                onValueChange={val => setForm(f => ({ ...f, employee_id: val }))}
-                            >
-                                <SelectTrigger>
-                                    <SelectValue placeholder="Select employee" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {employees.map(emp => (
-                                        <SelectItem key={emp.id} value={emp.id}>{emp.name}</SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-                        <div className="space-y-2">
-                            <Label>Month</Label>
-                            <Select
-                                value={form.month ? String(form.month) : ""}
-                                onValueChange={val => setForm(f => ({ ...f, month: Number(val) }))}
-                            >
-                                <SelectTrigger>
-                                    <SelectValue placeholder="Select month" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {months.map((m, idx) => (
-                                        <SelectItem key={m} value={String(idx + 1)}>{m}</SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-                        <div className="space-y-2">
-                            <Label>Year</Label>
-                            <Select
-                                value={form.year ? String(form.year) : ""}
-                                onValueChange={val => setForm(f => ({ ...f, year: Number(val) }))}
-                            >
-                                <SelectTrigger>
-                                    <SelectValue placeholder="Select year" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {years.map((y) => (
-                                        <SelectItem key={y} value={String(y)}>{y}</SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-                        <div className="space-y-2">
-                            <Label>Amount</Label>
-                            <Input
-                                type="number"
-                                value={form.amount || ""}
-                                onChange={e => setForm(f => ({ ...f, amount: Number(e.target.value) }))}
-                                placeholder="Amount"
-                            />
-                        </div>
-                         <div className="flex items-center space-x-2 py-2">
-                            <Checkbox
-                                id="edit_is_paid"
-                                checked={!!form.is_paid}
-                                onCheckedChange={checked => setForm(f => ({ ...f, is_paid: !!checked }))}
-                            />
-                            <Label htmlFor="edit_is_paid" className="cursor-pointer font-medium">Mark as Paid</Label>
-                        </div>
-                        <div className="space-y-2">
-                            <Label className="block font-medium">Paid Date</Label>
-                            <Popover>
-                                <PopoverTrigger asChild>
-                                    <Button
-                                        variant={form.paid_date ? "default" : "outline"}
-                                        className="w-full justify-start text-left font-normal"
-                                    >
-                                        <CalendarIcon className="mr-2 h-4 w-4" />
-                                        {form.paid_date ? format(new Date(form.paid_date), "yyyy-MM-dd") : "Pick a date"}
-                                    </Button>
-                                </PopoverTrigger>
-                                <PopoverContent className="w-auto p-0">
-                                    <Calendar
-                                        mode="single"
-                                        selected={form.paid_date ? new Date(form.paid_date) : undefined}
-                                        onSelect={date => setForm(f => ({ ...f, paid_date: date ? new Date(date.setHours(0,0,0,0)).toISOString() : undefined }))}
-                                        initialFocus
-                                    />
-                                </PopoverContent>
-                            </Popover>
-                        </div>
-                        <div className="space-y-2">
-                            <Label>Notes</Label>
-                            <Input
-                                type="text"
-                                value={form.notes || ""}
-                                onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
-                                placeholder="Notes"
-                            />
-                        </div>
-                        {error && <div className="text-red-600 text-sm">{error}</div>}
-                        <Button onClick={handleEditSalary} disabled={isSubmitting || !form.employee_id || !form.month || !form.year || !form.amount}>
+                    <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 py-4">
+                        <SalaryFormFields
+                            form={form}
+                            setForm={setForm}
+                            employees={employees}
+                            idPrefix="edit-"
+                        />
+                        {error && <p className="text-red-600 text-sm mt-3">{error}</p>}
+                    </div>
+                    <DialogFooter className="shrink-0 px-6 py-4 border-t bg-background gap-2 sm:gap-0">
+                        <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => {
+                                setIsEditDialogOpen(false);
+                                setForm({});
+                                setEditId(null);
+                                setError(null);
+                            }}
+                            disabled={isSubmitting}
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            onClick={handleEditSalary}
+                            disabled={
+                                isSubmitting ||
+                                !form.employee_id ||
+                                !form.month ||
+                                !form.year ||
+                                form.amount == null ||
+                                Number.isNaN(Number(form.amount))
+                            }
+                        >
                             {isSubmitting ? <Loader2 className="animate-spin h-4 w-4 mr-2" /> : null}
                             Update Salary
                         </Button>
-                    </div>
+                    </DialogFooter>
                 </DialogContent>
             </Dialog>
         </div>

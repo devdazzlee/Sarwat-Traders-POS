@@ -241,6 +241,7 @@ export function NewSale() {
     phone_number: "",
     whatsapp_number: "",
     credit_limit: "",
+    previous_balance: "",
   });
   const [isAddingCustomer, setIsAddingCustomer] = useState(false);
   // Global printer settings (configured in Printer Settings page)
@@ -2745,16 +2746,33 @@ export function NewSale() {
                 />
               </div>
             </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-gray-700">Credit Limit (Rs) <span className="text-gray-400 font-normal">(leave empty for unlimited)</span></label>
-              <Input
-                type="number"
-                placeholder="Leave empty for unlimited"
-                value={newCustomerData.credit_limit}
-                onChange={(e) =>
-                  setNewCustomerData({ ...newCustomerData, credit_limit: e.target.value })
-                }
-              />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-700">Credit limit (Rs) <span className="text-gray-400 font-normal">(empty = unlimited)</span></label>
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="Leave empty for unlimited"
+                  value={newCustomerData.credit_limit}
+                  onChange={(e) =>
+                    setNewCustomerData({ ...newCustomerData, credit_limit: e.target.value })
+                  }
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-700">Previous credit balance (Rs) <span className="text-gray-400 font-normal">(optional)</span></label>
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="Owed before POS"
+                  value={newCustomerData.previous_balance}
+                  onChange={(e) =>
+                    setNewCustomerData({ ...newCustomerData, previous_balance: e.target.value })
+                  }
+                />
+              </div>
             </div>
           </div>
           <DialogFooter>
@@ -2772,7 +2790,9 @@ export function NewSale() {
                     phone_number: newCustomerData.phone_number,
                     whatsapp_number: newCustomerData.whatsapp_number,
                     credit_limit: newCustomerData.credit_limit ? Number(newCustomerData.credit_limit) : 0,
-                    outstanding_balance: 0,
+                    outstanding_balance: newCustomerData.previous_balance
+                      ? Math.max(0, Number(newCustomerData.previous_balance))
+                      : 0,
                   };
 
                   if (!navigator.onLine) {
@@ -2820,7 +2840,14 @@ export function NewSale() {
                   }
 
                   setIsAddCustomerOpen(false);
-                  setNewCustomerData({ name: "", email: "", phone_number: "", whatsapp_number: "", credit_limit: "" });
+                  setNewCustomerData({
+                    name: "",
+                    email: "",
+                    phone_number: "",
+                    whatsapp_number: "",
+                    credit_limit: "",
+                    previous_balance: "",
+                  });
                 } catch (error: any) {
                   console.error("Customer Add Error:", error);
                   const errMsg = error.response?.data?.message || error.response?.data?.errors?.[0]?.message || "Failed to create customer";

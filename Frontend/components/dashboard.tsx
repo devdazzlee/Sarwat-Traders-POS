@@ -18,7 +18,7 @@ import { Promotions } from "@/components/promotions";
 import { Expenses } from "@/components/expenses";
 import { TaxManagement } from "@/components/tax-management";
 import { PurchaseOrders } from "@/components/purchase-orders";
-import { Returns } from "@/components/returns";
+import { Returns, Exchanges } from "@/components/returns";
 import { GiftCards } from "@/components/gift-cards";
 import { Loyalty } from "@/components/loyalty";
 import { Shifts } from "@/components/shifts";
@@ -101,7 +101,9 @@ export function Dashboard({ onLogout }: DashboardProps) {
       case "sizes":
         return <Sizes />;
       case "returns":
-        return <Returns />;
+        return <Returns module="returns" />;
+      case "exchanges":
+        return <Exchanges />;
       case "reservations":
         return <Reservations />;
       case "layaway-holds":

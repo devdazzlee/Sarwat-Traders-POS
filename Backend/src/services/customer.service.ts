@@ -1,4 +1,4 @@
-import { Customer } from '@prisma/client';
+import { Customer, LedgerEntryType, Prisma } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { AppError } from '../utils/apiError';
 import jwt from 'jsonwebtoken';
@@ -40,13 +40,44 @@ class CustomerService {
         return { email: customer.email, token };
     }
 
-    public async createShopCustomer(data: Customer) {
+    public async createShopCustomer(
+        data: Customer,
+        createdBy?: string,
+    ) {
         const customerExists = await this.verifyCustomerExistance(data.email);
         if (customerExists) {
             throw new AppError(400, 'Customer already exists');
         }
 
-        const customer = await prisma.customer.create({ data });
+        const openingBalance = new Prisma.Decimal(data.outstanding_balance ?? 0);
+        if (openingBalance.lt(0)) {
+            throw new AppError(400, 'Outstanding balance cannot be negative');
+        }
+
+        const customer = await prisma.$transaction(async (tx) => {
+            const created = await tx.customer.create({
+                data: {
+                    ...data,
+                    outstanding_balance: openingBalance,
+                },
+            });
+
+            if (openingBalance.gt(0)) {
+                await tx.customerLedger.create({
+                    data: {
+                        customer_id: created.id,
+                        entry_type: LedgerEntryType.ADJUSTMENT,
+                        amount: openingBalance,
+                        description: 'Opening balance (existing credit before POS)',
+                        balance_after: openingBalance,
+                        created_by: createdBy ?? undefined,
+                    },
+                });
+            }
+
+            return created;
+        });
+
         return { customer };
     }
 
@@ -108,9 +139,32 @@ class CustomerService {
         const existingCustomer = await prisma.customer.findUnique({ where: { id: customerId } });
         if (!existingCustomer) throw new AppError(404, 'Customer not found');
 
-        // Remove session before deleting customer (FK constraint)
-        await prisma.customerSession.deleteMany({ where: { customer_id: customerId } });
-        await prisma.customer.delete({ where: { id: customerId } });
+        await prisma.$transaction(
+            async (tx) => {
+                // Credit ledger blocks customer delete (no ON DELETE CASCADE in DB)
+                await tx.customerLedger.deleteMany({ where: { customer_id: customerId } });
+
+                await tx.customerSession.deleteMany({ where: { customer_id: customerId } });
+                await tx.deviceIdentity.deleteMany({ where: { customer_id: customerId } });
+
+                // Keep sale/order history; detach customer so FK constraints pass
+                await tx.sale.updateMany({
+                    where: { customer_id: customerId },
+                    data: { customer_id: null },
+                });
+                await tx.order.updateMany({
+                    where: { customer_id: customerId },
+                    data: { customer_id: null },
+                });
+                await tx.holdSale.updateMany({
+                    where: { customer_id: customerId },
+                    data: { customer_id: null },
+                });
+
+                await tx.customer.delete({ where: { id: customerId } });
+            },
+            { maxWait: 15_000, timeout: 60_000 },
+        );
 
         return { message: 'Customer deleted successfully' };
     }

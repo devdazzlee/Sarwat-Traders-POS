@@ -543,7 +543,11 @@ interface Sale {
                             ? 'bg-red-100 text-red-800'
                             : 'bg-yellow-100 text-yellow-800'
                         }`}>
-                          {s.status}
+                          {s.status === 'REFUNDED'
+                            ? 'Return'
+                            : s.status === 'EXCHANGED'
+                              ? 'Exchange'
+                              : s.status}
                         </span>
                       </TableCell>
                       <TableCell>
@@ -555,7 +559,7 @@ interface Sale {
                           className={s.status === 'REFUNDED' ? 'opacity-50 cursor-not-allowed' : ''}
                         >
                           <RefreshCcw className="h-4 w-4 mr-1" />
-                          {s.status === 'REFUNDED' ? 'Refunded' : 'Refund'}
+                          {s.status === 'REFUNDED' ? 'Returned' : 'Return'}
                         </Button>
                       </TableCell>
                     </TableRow>

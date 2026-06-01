@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import apiClient from "@/lib/apiClient";
+import { formatSaleStatusLabel } from "@/components/returns-exchanges/constants";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -35,6 +36,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Mail,
+  Trash2,
 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
@@ -55,6 +57,16 @@ import { printReceiptViaServer, type ReceiptData } from "@/lib/print-server";
 import { usePrinterSettings } from "@/hooks/use-printer-settings";
 import { downloadA4Invoice, generateA4InvoicePDF, printA4Invoice, shareOnEmail, shareOnWhatsApp, type InvoiceData } from "@/lib/pdf-generator";
 import { SaleEditor } from "./sale-editor";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 interface SaleItem {
   id: string;
@@ -149,6 +161,8 @@ export function SalesHistory() {
   const [saleEditorOpen, setSaleEditorOpen] = useState(false);
   const [saleEditorData, setSaleEditorData] = useState<Sale | null>(null);
   const [saleEditorLoading, setSaleEditorLoading] = useState(false);
+  const [deleteTargetSale, setDeleteTargetSale] = useState<Sale | null>(null);
+  const [isDeletingSale, setIsDeletingSale] = useState(false);
   const [viewLoading, setViewLoading] = useState(false);
   const [branchInfo, setBranchInfo] = useState<BranchInfo>({
     name: "SARWAT TRADER",
@@ -199,10 +213,49 @@ export function SalesHistory() {
   };
 
   // Helper function to get sale type based on total amount
-  const getSaleType = (totalAmount: string): "sale" | "refund" | "return" => {
-    const amount = parseFloat(totalAmount);
-    if (isNaN(amount)) return "sale";
-    return amount < 0 ? "refund" : "sale";
+  const getSaleType = (
+    sale: Sale
+  ): "sale" | "return" | "exchange" => {
+    if (sale.status === "REFUNDED") return "return";
+    if (sale.status === "EXCHANGED") return "exchange";
+    const amount = parseFloat(sale.total_amount);
+    if (!isNaN(amount) && amount < 0) return "return";
+    return "sale";
+  };
+
+  const canDeleteSale = (sale: Sale) =>
+    sale.status === "COMPLETED" ||
+    sale.status === "REFUNDED" ||
+    sale.status === "EXCHANGED";
+
+  const handleConfirmDeleteSale = async () => {
+    if (!deleteTargetSale) return;
+    setIsDeletingSale(true);
+    try {
+      await apiClient.delete(`/sale/${deleteTargetSale.id}`);
+      toast({
+        title: "Sale deleted",
+        description: `${deleteTargetSale.sale_number} was removed. Stock and customer balance were updated.`,
+      });
+      if (viewSale?.id === deleteTargetSale.id) {
+        setViewSale(null);
+        setReceiptHtml("");
+        setReceiptData(null);
+      }
+      setDeleteTargetSale(null);
+      await fetchSales();
+    } catch (err: any) {
+      toast({
+        title: "Could not delete sale",
+        description:
+          err?.response?.data?.message ||
+          err?.message ||
+          "Failed to delete sale. It may have linked returns or exchanges.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsDeletingSale(false);
+    }
   };
 
   // Fetch sales
@@ -366,8 +419,8 @@ export function SalesHistory() {
       s.customer?.email || "—",
       s.payment_method,
       formatCurrency(s.total_amount, true), // Include negative symbol in export
-      s.status,
-      getSaleType(s.total_amount).toUpperCase(),
+      formatSaleStatusLabel(s.status),
+      getSaleType(s).toUpperCase(),
     ]);
     const csv = [header, ...rows].map((r) => r.join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
@@ -1099,7 +1152,7 @@ export function SalesHistory() {
                   </TableRow>
                 ) : (
                   sales.map((s) => {
-                    const saleType = getSaleType(s.total_amount);
+                    const saleType = getSaleType(s);
                     const isNegative = parseFloat(s.total_amount) < 0;
 
                     return (
@@ -1125,7 +1178,9 @@ export function SalesHistory() {
                         <TableCell>
                           <Badge
                             variant={
-                              saleType === "refund" ? "destructive" : "default"
+                              saleType === "return" || saleType === "exchange"
+                                ? "destructive"
+                                : "default"
                             }
                           >
                             {saleType.toUpperCase()}
@@ -1137,7 +1192,7 @@ export function SalesHistory() {
                               s.status === "COMPLETED" ? "default" : "outline"
                             }
                           >
-                            {s.status}
+                            {formatSaleStatusLabel(s.status)}
                           </Badge>
                         </TableCell>
                         <TableCell className="flex gap-1">
@@ -1158,6 +1213,17 @@ export function SalesHistory() {
                           >
                             <Edit3 className="h-4 w-4" />
                           </Button>
+                          {canDeleteSale(s) && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => setDeleteTargetSale(s)}
+                              title="Delete Sale"
+                              className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          )}
                         </TableCell>
                       </TableRow>
                     );
@@ -1414,6 +1480,47 @@ export function SalesHistory() {
         }}
         onSuccess={fetchSales}
       />
+
+      <AlertDialog
+        open={deleteTargetSale !== null}
+        onOpenChange={(open) => !open && !isDeletingSale && setDeleteTargetSale(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete sale?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleteTargetSale ? (
+                <>
+                  This will permanently remove sale{" "}
+                  <strong>{deleteTargetSale.sale_number}</strong>, undo its stock
+                  changes, and reverse any customer ledger entries. This cannot be
+                  undone.
+                </>
+              ) : null}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeletingSale}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={isDeletingSale}
+              className="bg-red-600 hover:bg-red-700"
+              onClick={(e) => {
+                e.preventDefault();
+                handleConfirmDeleteSale();
+              }}
+            >
+              {isDeletingSale ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                "Delete Sale"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -25,6 +25,7 @@ const customerUpdateSchema = z.object({
         address: z.string().optional().nullish(),
         billing_address: z.string().optional().nullish(),
         credit_limit: z.number().optional().nullish(),
+        outstanding_balance: z.number().nonnegative('Balance cannot be negative').optional().nullish(),
     }),
 });
 

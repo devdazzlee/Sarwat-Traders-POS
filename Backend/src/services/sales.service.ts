@@ -5,6 +5,7 @@ import { AppError } from '../utils/apiError';
 interface ReturnItem {
   productId: string;
   quantity: number;
+  disposition?: 'RESTOCK' | 'DAMAGED' | 'UNSELLABLE';
 }
 
 interface ExchangeItem {
@@ -328,8 +329,17 @@ class SaleService {
     });
     if (!sale) throw new AppError(404, 'Sale not found');
 
+    let original_sale: { id: string; sale_number: string } | null = null;
+    if (sale.original_sale_id) {
+      const orig = await prisma.sale.findUnique({
+        where: { id: sale.original_sale_id },
+        select: { id: true, sale_number: true },
+      });
+      if (orig) original_sale = orig;
+    }
+
     if (sale.status !== SaleStatus.COMPLETED) {
-      return sale;
+      return { ...sale, original_sale };
     }
 
     const returnedMap = await this.getReturnedQtyByOriginalSaleLineIds(saleId);
@@ -343,7 +353,7 @@ class SaleService {
       };
     });
 
-    return { ...sale, sale_items: saleItems };
+    return { ...sale, sale_items: saleItems, original_sale };
   }
 
   async getHoldSales() {
@@ -877,6 +887,9 @@ class SaleService {
     exchangedItems,
     notes,
     createdBy,
+    returnReason,
+    refundMethod,
+    orderScope,
   }: {
     originalSaleId: string;
     branchId: string;
@@ -885,6 +898,9 @@ class SaleService {
     exchangedItems: ExchangeItem[];
     notes?: string;
     createdBy: string;
+    returnReason?: string;
+    refundMethod?: string;
+    orderScope?: string;
   }) {
     if (!returnedItems.length && !exchangedItems.length) {
       throw new AppError(400, 'No return or exchange items provided');
@@ -1021,13 +1037,20 @@ class SaleService {
       const lineTotal = new Prisma.Decimal(originalItem.unit_price).mul(returnQuantity).mul(-1);
       total = total.plus(lineTotal);
 
-      recordMovement({
-        productId: ret.productId,
-        change: returnQuantity,
-        movementType: StockMovementType.RETURN,
-        referenceType: 'return',
-        notes: 'Returned by customer',
-      });
+      const disposition = ret.disposition ?? 'RESTOCK';
+      if (disposition !== 'UNSELLABLE') {
+        recordMovement({
+          productId: ret.productId,
+          change: returnQuantity,
+          movementType:
+            disposition === 'DAMAGED' ? StockMovementType.DAMAGE : StockMovementType.RETURN,
+          referenceType: 'return',
+          notes:
+            disposition === 'DAMAGED'
+              ? 'Returned — marked damaged'
+              : 'Returned by customer',
+        });
+      }
 
       saleItems.push({
         product_id: ret.productId,
@@ -1045,6 +1068,14 @@ class SaleService {
 
     for (const item of exchangedItems) {
       const exchangeQuantity = new Prisma.Decimal(item.quantity);
+      const available = stockQuantityMap.get(item.productId) ?? new Prisma.Decimal(0);
+      if (available.lt(exchangeQuantity)) {
+        throw new AppError(
+          400,
+          `Insufficient stock for exchange. Product ${item.productId}: available ${available.toNumber()}, requested ${exchangeQuantity.toNumber()}`,
+        );
+      }
+
       const unitPrice = new Prisma.Decimal(item.price);
       const lineTotal = unitPrice.mul(exchangeQuantity);
       total = total.plus(lineTotal);
@@ -1073,6 +1104,17 @@ class SaleService {
     const resolvedCustomerId = customerId ?? originalSale.customer_id ?? undefined;
     const returnSaleNumber = `SALE-${Date.now()}`;
 
+    const metaParts: string[] = [];
+    if (returnReason) metaParts.push(`Reason: ${returnReason}`);
+    if (refundMethod) metaParts.push(`Refund: ${refundMethod}`);
+    if (orderScope) metaParts.push(`Scope: ${orderScope}`);
+    const dispositionSummary = returnedItems
+      .filter((r) => r.disposition && r.disposition !== 'RESTOCK')
+      .map((r) => `${r.productId}=${r.disposition}`)
+      .join(', ');
+    if (dispositionSummary) metaParts.push(`Disposition: ${dispositionSummary}`);
+    const composedNotes = [metaParts.join(' | '), notes?.trim()].filter(Boolean).join('\n');
+
     // Settle the refund/exchange against the customer's account (registered customers only).
     // `total` = exchangeTotal - refundTotal  →  negative = net refund, positive = net amount owed.
     let returnPreviousBalance = new Prisma.Decimal(0);
@@ -1099,7 +1141,7 @@ class SaleService {
           branch_id: branchId,
           customer_id: resolvedCustomerId,
           original_sale_id: originalSaleId,
-          notes,
+          notes: composedNotes || undefined,
           subtotal: total,
           total_amount: total,
           payment_method: 'CASH',
@@ -1320,6 +1362,122 @@ class SaleService {
       maxWait: 20000,
       timeout: 15000 
     });
+  }
+
+  async deleteSale(
+    saleId: string,
+    options?: { deletedBy?: string; restrictToBranchId?: string },
+  ) {
+    return prisma.$transaction(
+      async (tx) => {
+        const sale = await tx.sale.findUnique({
+          where: { id: saleId },
+          include: { sale_items: true },
+        });
+
+        if (!sale) throw new AppError(404, 'Sale not found');
+
+        if (
+          options?.restrictToBranchId &&
+          sale.branch_id &&
+          sale.branch_id !== options.restrictToBranchId
+        ) {
+          throw new AppError(403, 'You cannot delete sales from another branch');
+        }
+
+        const deletableStatuses: SaleStatus[] = [
+          SaleStatus.COMPLETED,
+          SaleStatus.REFUNDED,
+          SaleStatus.EXCHANGED,
+        ];
+        if (!deletableStatuses.includes(sale.status)) {
+          throw new AppError(400, 'This sale cannot be deleted');
+        }
+
+        const isReturnOrExchangeRecord = Boolean(
+          sale.original_sale_id ||
+            sale.status === SaleStatus.REFUNDED ||
+            sale.status === SaleStatus.EXCHANGED,
+        );
+
+        if (!isReturnOrExchangeRecord) {
+          const linkedReturnCount = await tx.sale.count({
+            where: { original_sale_id: saleId },
+          });
+          if (linkedReturnCount > 0) {
+            throw new AppError(
+              400,
+              'Cannot delete a sale that has returns or exchanges recorded against it. Delete those records first.',
+            );
+          }
+        }
+
+        const branchId = sale.branch_id;
+        if (branchId) {
+          for (const item of sale.sale_items) {
+            // RETURN lines store negative qty; EXCHANGE/SALE lines positive — increment reverses both.
+            await tx.stock.upsert({
+              where: {
+                product_id_branch_id: {
+                  product_id: item.product_id,
+                  branch_id: branchId,
+                },
+              },
+              update: { current_quantity: { increment: item.quantity } },
+              create: {
+                product_id: item.product_id,
+                branch_id: branchId,
+                current_quantity: item.quantity,
+                minimum_quantity: new Prisma.Decimal(0),
+                maximum_quantity: new Prisma.Decimal(1000),
+                reserved_quantity: new Prisma.Decimal(0),
+              },
+            });
+          }
+        }
+
+        if (sale.customer_id) {
+          const customer = await tx.customer.findUnique({
+            where: { id: sale.customer_id },
+          });
+          if (customer) {
+            const total = new Prisma.Decimal(sale.total_amount);
+            const paid = new Prisma.Decimal(sale.payment_received);
+            let newBalance: Prisma.Decimal;
+
+            if (isReturnOrExchangeRecord) {
+              // createExchangeOrReturnSale: balance += total (total may be negative)
+              newBalance = new Prisma.Decimal(customer.outstanding_balance).minus(total);
+            } else if (sale.payment_method === 'CREDIT') {
+              const creditOwed = total.minus(paid);
+              newBalance = new Prisma.Decimal(customer.outstanding_balance)
+                .minus(creditOwed)
+                .plus(paid);
+            } else {
+              newBalance = new Prisma.Decimal(customer.outstanding_balance);
+            }
+
+            if (!newBalance.equals(customer.outstanding_balance)) {
+              await tx.customer.update({
+                where: { id: sale.customer_id },
+                data: { outstanding_balance: newBalance },
+              });
+            }
+          }
+          await tx.customerLedger.deleteMany({
+            where: {
+              customer_id: sale.customer_id,
+              sale_id: sale.sale_number,
+            },
+          });
+        }
+
+        await tx.sale.delete({ where: { id: saleId } });
+
+        return { success: true, saleNumber: sale.sale_number };
+      },
+      { maxWait: 15_000, timeout: 60_000 },
+    );
   }
 }
 

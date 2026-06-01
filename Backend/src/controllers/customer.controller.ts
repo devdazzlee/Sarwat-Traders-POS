@@ -11,7 +11,7 @@ export const createCustomer = asyncHandler(async (req: Request, res: Response) =
 });
 
 export const createShopCustomer = asyncHandler(async (req: Request, res: Response) => {
-    const customer = await customerService.createShopCustomer(req.body);
+    const customer = await customerService.createShopCustomer(req.body, req.user?.id);
     new ApiResponse(customer, 'Customer successfully created', 200).send(res);
 });
 

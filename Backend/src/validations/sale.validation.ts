@@ -23,10 +23,14 @@ const refundSaleSchema = z.object({
                 z.object({
                     productId: z.string().min(1, "Product ID is required"),
                     quantity: z.number().positive("Quantity must be positive"),
+                    disposition: z.enum(["RESTOCK", "DAMAGED", "UNSELLABLE"]).optional(),
                 })
             )
             .optional()
             .default([]),
+        returnReason: z.string().optional(),
+        refundMethod: z.string().optional(),
+        orderScope: z.enum(["FULL", "PARTIAL"]).optional(),
         exchangedItems: z
             .array(
                 z.object({

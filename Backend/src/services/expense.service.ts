@@ -45,23 +45,59 @@ export class ExpenseService {
     }
 
     async delete(id: string) {
+        const DEFAULT_DESIGNATION = 'General';
+
         const employeeType = await prisma.employeeType.findUnique({
             where: { id },
             include: {
                 _count: {
-                    select: { employees: true }
-                }
-            }
+                    select: { employees: true },
+                },
+            },
         });
 
         if (!employeeType) {
             throw new AppError(404, 'Designation not found');
         }
 
-        if (employeeType._count.employees > 0) {
-            throw new AppError(400, 'Cannot delete this designation because it is currently assigned to one or more employees. Please reassign the employees first.');
-        }
+        await prisma.$transaction(async (tx) => {
+            if (employeeType._count.employees > 0) {
+                let fallbackId: string;
 
-        return prisma.employeeType.delete({ where: { id } });
+                if (employeeType.name !== DEFAULT_DESIGNATION) {
+                    let general = await tx.employeeType.findFirst({
+                        where: { name: DEFAULT_DESIGNATION, id: { not: id } },
+                    });
+                    if (!general) {
+                        general = await tx.employeeType.create({
+                            data: { name: DEFAULT_DESIGNATION },
+                        });
+                    }
+                    fallbackId = general.id;
+                } else {
+                    const other = await tx.employeeType.findFirst({
+                        where: { id: { not: id } },
+                        orderBy: { name: 'asc' },
+                    });
+                    if (other) {
+                        fallbackId = other.id;
+                    } else {
+                        const staff = await tx.employeeType.create({
+                            data: { name: 'Staff' },
+                        });
+                        fallbackId = staff.id;
+                    }
+                }
+
+                await tx.employee.updateMany({
+                    where: { employee_type_id: id },
+                    data: { employee_type_id: fallbackId },
+                });
+            }
+
+            await tx.employeeType.delete({ where: { id } });
+        });
+
+        return { message: 'Designation deleted successfully' };
     }
 }
