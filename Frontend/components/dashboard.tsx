@@ -67,17 +67,20 @@ interface DashboardProps {
 }
 
 export function Dashboard({ onLogout }: DashboardProps) {
-  const [activeTab, setActiveTab] = useState("dashboard");
+  const DASHBOARD_TAB_STORAGE_KEY = "dashboard_active_tab";
+  const [activeTab, setActiveTab] = useState<string>(() => {
+    if (typeof window === "undefined") return "dashboard";
+    const savedTab = localStorage.getItem(DASHBOARD_TAB_STORAGE_KEY);
+    if (savedTab && savedTab.trim()) return savedTab;
+    const preferredTab = getDefaultDashboardTab(localStorage.getItem("role"));
+    return preferredTab || "dashboard";
+  });
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
 
   useEffect(() => {
-    const preferredTab = getDefaultDashboardTab(localStorage.getItem("role"));
-
-    if (preferredTab !== "dashboard") {
-      setActiveTab(preferredTab);
-    }
-  }, []);
+    localStorage.setItem(DASHBOARD_TAB_STORAGE_KEY, activeTab);
+  }, [activeTab]);
 
   const renderContent = () => {
     switch (activeTab) {
@@ -146,7 +149,12 @@ export function Dashboard({ onLogout }: DashboardProps) {
             }} 
           />
         ) : (
-          <DashboardHome onNavigate={setActiveTab} />
+          <Customers 
+            onViewLedger={(id) => {
+              setSelectedCustomerId(id);
+              setActiveTab("customer-ledger");
+            }} 
+          />
         );
       case "loyalty":
         return <Stocks />;

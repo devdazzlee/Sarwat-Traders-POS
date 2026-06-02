@@ -1,461 +1,347 @@
-"use client"
+"use client";
 
-import { useState, useEffect } from "react"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
-import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Search, Plus, Edit, Trash2, DollarSign, Calendar } from "lucide-react"
-import { StatCardSkeleton } from "@/components/ui/stat-card-skeleton"
+import { useEffect, useMemo, useState } from "react";
+import { Calendar, Plus, Receipt, RefreshCw, Search, Wallet } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { StatCardSkeleton } from "@/components/ui/stat-card-skeleton";
+import { PageLoader } from "@/components/ui/page-loader";
+import { useToast } from "@/hooks/use-toast";
+import apiClient from "@/lib/apiClient";
 
-interface Expense {
-  id: string
-  description: string
-  category: string
-  amount: number
-  date: string
-  paymentMethod: string
-  vendor: string
-  receipt?: string
-  status: "paid" | "pending" | "overdue"
+interface ExpenseRow {
+  id: string;
+  particular: string;
+  amount: number | string;
+  created_at: string;
 }
 
+interface ExpenseMeta {
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
+const money = (n: number) =>
+  `Rs ${Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+
 export function Expenses() {
+  const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(true);
-  const [expenses, setExpenses] = useState<Expense[]>([
-    {
-      id: "1",
-      description: "Monthly rent payment",
-      category: "Rent",
-      amount: 2500.0,
-      date: "2024-01-01",
-      paymentMethod: "Bank Transfer",
-      vendor: "Property Management Co.",
-      status: "paid",
-    },
-    {
-      id: "2",
-      description: "Electricity bill - December",
-      category: "Utilities",
-      amount: 245.75,
-      date: "2024-01-05",
-      paymentMethod: "Online Payment",
-      vendor: "City Electric Company",
-      status: "paid",
-    },
-    {
-      id: "3",
-      description: "Fresh produce delivery",
-      category: "Inventory",
-      amount: 1250.5,
-      date: "2024-01-10",
-      paymentMethod: "Cash",
-      vendor: "Fresh Farms Co.",
-      status: "paid",
-    },
-    {
-      id: "4",
-      description: "POS system maintenance",
-      category: "Technology",
-      amount: 150.0,
-      date: "2024-01-15",
-      paymentMethod: "Credit Card",
-      vendor: "Tech Solutions Inc.",
-      status: "pending",
-    },
-    {
-      id: "5",
-      description: "Insurance premium",
-      category: "Insurance",
-      amount: 450.0,
-      date: "2024-01-20",
-      paymentMethod: "Bank Transfer",
-      vendor: "Business Insurance Corp.",
-      status: "overdue",
-    },
-  ])
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(20);
+  const [expenses, setExpenses] = useState<ExpenseRow[]>([]);
+  const [meta, setMeta] = useState<ExpenseMeta>({ total: 0, page: 1, limit: 20, totalPages: 1 });
+  const [form, setForm] = useState({ particular: "", amount: "" });
 
-  const [searchTerm, setSearchTerm] = useState("")
-  const [categoryFilter, setCategoryFilter] = useState("all")
-  const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
-  const [editingExpense, setEditingExpense] = useState<Expense | null>(null)
-  const [newExpense, setNewExpense] = useState<Partial<Expense>>({})
+  const fetchExpenses = async () => {
+    setIsLoading(true);
+    try {
+      const params: Record<string, unknown> = {
+        page,
+        limit,
+      };
+      if (searchTerm.trim()) params.search = searchTerm.trim();
+      if (dateFrom) params.startDate = dateFrom;
+      if (dateTo) params.endDate = dateTo;
 
-  const categories = ["Rent", "Utilities", "Inventory", "Technology", "Insurance", "Marketing", "Maintenance", "Other"]
-
-  const filteredExpenses = expenses.filter((expense) => {
-    const matchesSearch =
-      expense.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      expense.vendor.toLowerCase().includes(searchTerm.toLowerCase())
-    const matchesCategory = categoryFilter === "all" || expense.category === categoryFilter
-    return matchesSearch && matchesCategory
-  })
-
-  const handleAddExpense = () => {
-    if (newExpense.description && newExpense.amount && newExpense.category) {
-      const expense: Expense = {
-        id: Date.now().toString(),
-        description: newExpense.description,
-        category: newExpense.category,
-        amount: newExpense.amount,
-        date: newExpense.date || new Date().toISOString().split("T")[0],
-        paymentMethod: newExpense.paymentMethod || "Cash",
-        vendor: newExpense.vendor || "",
-        status: "pending",
-      }
-      setExpenses([...expenses, expense])
-      setNewExpense({})
-      setIsAddDialogOpen(false)
+      const res = await apiClient.get("/expenses", { params });
+      const rows = Array.isArray(res.data?.data) ? res.data.data : [];
+      setExpenses(rows);
+      const m = res.data?.meta || {};
+      setMeta({
+        total: Number(m.total || rows.length || 0),
+        page: Number(m.page || page),
+        limit: Number(m.limit || limit),
+        totalPages: Math.max(1, Number(m.totalPages || 1)),
+      });
+    } catch (error: any) {
+      setExpenses([]);
+      setMeta({ total: 0, page: 1, limit, totalPages: 1 });
+      toast({
+        variant: "destructive",
+        title: "Failed to load expenses",
+        description: error?.response?.data?.message || "Could not fetch expenses from server.",
+      });
+    } finally {
+      setIsLoading(false);
     }
-  }
+  };
 
-  const handleEditExpense = () => {
-    if (editingExpense) {
-      setExpenses(expenses.map((e) => (e.id === editingExpense.id ? editingExpense : e)))
-      setEditingExpense(null)
-    }
-  }
-
-  const handleDeleteExpense = (id: string) => {
-    setExpenses(expenses.filter((e) => e.id !== id))
-  }
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case "paid":
-        return "bg-green-100 text-green-800"
-      case "pending":
-        return "bg-yellow-100 text-yellow-800"
-      case "overdue":
-        return "bg-red-100 text-red-800"
-      default:
-        return "bg-gray-100 text-gray-800"
-    }
-  }
-
-  // Simulate loading
   useEffect(() => {
-    const timer = setTimeout(() => setIsLoading(false), 500);
-    return () => clearTimeout(timer);
-  }, []);
+    void fetchExpenses();
+  }, [page, limit, searchTerm, dateFrom, dateTo]);
 
-  const totalExpenses = filteredExpenses.reduce((sum, expense) => sum + expense.amount, 0)
-  const paidExpenses = filteredExpenses.filter((e) => e.status === "paid").reduce((sum, e) => sum + e.amount, 0)
-  const pendingExpenses = filteredExpenses.filter((e) => e.status === "pending").reduce((sum, e) => sum + e.amount, 0)
-  const overdueExpenses = filteredExpenses.filter((e) => e.status === "overdue").reduce((sum, e) => sum + e.amount, 0)
+  const totals = useMemo(() => {
+    const now = new Date();
+    const startOfToday = new Date(now);
+    startOfToday.setHours(0, 0, 0, 0);
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    let todayTotal = 0;
+    let monthTotal = 0;
+    for (const e of expenses) {
+      const amount = Number(e.amount || 0);
+      const created = new Date(e.created_at);
+      if (created >= startOfMonth) monthTotal += amount;
+      if (created >= startOfToday) todayTotal += amount;
+    }
+
+    return {
+      count: meta.total,
+      todayTotal,
+      monthTotal,
+    };
+  }, [expenses, meta.total]);
+
+  const submitNewExpense = async () => {
+    const particular = form.particular.trim();
+    const amount = Number(form.amount);
+
+    if (!particular) {
+      toast({ variant: "destructive", title: "Validation", description: "Particular is required." });
+      return;
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast({ variant: "destructive", title: "Validation", description: "Amount must be greater than 0." });
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      await apiClient.post("/expenses", { particular, amount });
+      toast({ variant: "success", title: "Expense added", description: "Expense saved successfully." });
+      setForm({ particular: "", amount: "" });
+      setIsAddDialogOpen(false);
+      setPage(1);
+      await fetchExpenses();
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Failed to add expense",
+        description: error?.response?.data?.message || "Could not save expense.",
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <div className="p-4 md:p-6 space-y-4 md:space-y-6">
+        <PageLoader message="Loading expenses..." />
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <StatCardSkeleton />
+          <StatCardSkeleton />
+          <StatCardSkeleton />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-4 md:p-6 space-y-4 md:space-y-6">
       <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
         <div>
-          <h1 className="text-2xl md:text-3xl font-bold text-gray-900">Expense Management</h1>
-          <p className="text-sm md:text-base text-gray-600">Track and manage business expenses</p>
+          <h1 className="text-2xl md:text-3xl font-bold text-gray-900">Expenses</h1>
+          <p className="text-sm md:text-base text-gray-600">Track daily expenses with backend-connected records.</p>
         </div>
-        <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
-          <DialogTrigger asChild>
-            <Button>
-              <Plus className="h-4 w-4 mr-2" />
-              Add Expense
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Add New Expense</DialogTitle>
-            </DialogHeader>
-            <div className="space-y-4">
-              <div>
-                <Label htmlFor="description">Description</Label>
-                <Input
-                  id="description"
-                  value={newExpense.description || ""}
-                  onChange={(e) => setNewExpense({ ...newExpense, description: e.target.value })}
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="category">Category</Label>
-                  <Select onValueChange={(value) => setNewExpense({ ...newExpense, category: value })}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select category" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {categories.map((category) => (
-                        <SelectItem key={category} value={category}>
-                          {category}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label htmlFor="amount">Amount</Label>
-                  <Input
-                    id="amount"
-                    type="number"
-                    step="0.01"
-                    value={newExpense.amount || ""}
-                    onChange={(e) => setNewExpense({ ...newExpense, amount: Number.parseFloat(e.target.value) })}
-                  />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="date">Date</Label>
-                  <Input
-                    id="date"
-                    type="date"
-                    value={newExpense.date || ""}
-                    onChange={(e) => setNewExpense({ ...newExpense, date: e.target.value })}
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="paymentMethod">Payment Method</Label>
-                  <Select onValueChange={(value) => setNewExpense({ ...newExpense, paymentMethod: value })}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select method" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="Cash">Cash</SelectItem>
-                      <SelectItem value="Credit Card">Credit Card</SelectItem>
-                      <SelectItem value="Bank Transfer">Bank Transfer</SelectItem>
-                      <SelectItem value="Online Payment">Online Payment</SelectItem>
-                      <SelectItem value="Check">Check</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-              <div>
-                <Label htmlFor="vendor">Vendor</Label>
-                <Input
-                  id="vendor"
-                  value={newExpense.vendor || ""}
-                  onChange={(e) => setNewExpense({ ...newExpense, vendor: e.target.value })}
-                />
-              </div>
-              <Button onClick={handleAddExpense} className="w-full">
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => void fetchExpenses()}>
+            <RefreshCw className="h-4 w-4 mr-2" />
+            Refresh
+          </Button>
+          <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
+            <DialogTrigger asChild>
+              <Button>
+                <Plus className="h-4 w-4 mr-2" />
                 Add Expense
               </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
-      </div>
-
-      {/* Stats Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
-        {isLoading ? (
-          <>
-            <StatCardSkeleton />
-            <StatCardSkeleton />
-            <StatCardSkeleton />
-            <StatCardSkeleton />
-          </>
-        ) : (
-          <>
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Total Expenses</CardTitle>
-                <DollarSign className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">Rs {totalExpenses.toFixed(2)}</div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Paid</CardTitle>
-                <DollarSign className="h-4 w-4 text-green-600" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-green-600">Rs {paidExpenses.toFixed(2)}</div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Pending</CardTitle>
-                <DollarSign className="h-4 w-4 text-yellow-600" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-yellow-600">Rs {pendingExpenses.toFixed(2)}</div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Overdue</CardTitle>
-                <DollarSign className="h-4 w-4 text-red-600" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-red-600">Rs {overdueExpenses.toFixed(2)}</div>
-              </CardContent>
-            </Card>
-          </>
-        )}
-      </div>
-
-      {/* Filters */}
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4">
-        <div className="relative flex-1 sm:max-w-md">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
-          <Input
-            placeholder="Search expenses..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="pl-10"
-          />
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Add Expense</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="expense-particular">Particular *</Label>
+                  <Input
+                    id="expense-particular"
+                    placeholder="e.g. Office stationery"
+                    value={form.particular}
+                    onChange={(e) => setForm((p) => ({ ...p, particular: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="expense-amount">Amount *</Label>
+                  <Input
+                    id="expense-amount"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    placeholder="0.00"
+                    value={form.amount}
+                    onChange={(e) => setForm((p) => ({ ...p, amount: e.target.value }))}
+                  />
+                </div>
+                <Button className="w-full" onClick={() => void submitNewExpense()} disabled={isSubmitting}>
+                  {isSubmitting ? "Saving..." : "Save Expense"}
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
         </div>
-        <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-          <SelectTrigger className="w-full sm:w-48">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Categories</SelectItem>
-            {categories.map((category) => (
-              <SelectItem key={category} value={category}>
-                {category}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
       </div>
 
-      {/* Expenses Table */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <Card>
+          <CardHeader className="pb-2 flex flex-row justify-between items-center">
+            <CardTitle className="text-sm font-medium">Today</CardTitle>
+            <Wallet className="h-4 w-4 text-emerald-600" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-emerald-700">{money(totals.todayTotal)}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2 flex flex-row justify-between items-center">
+            <CardTitle className="text-sm font-medium">This Month</CardTitle>
+            <Calendar className="h-4 w-4 text-blue-600" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-blue-700">{money(totals.monthTotal)}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2 flex flex-row justify-between items-center">
+            <CardTitle className="text-sm font-medium">Entries</CardTitle>
+            <Receipt className="h-4 w-4 text-amber-600" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-amber-700">{totals.count}</div>
+          </CardContent>
+        </Card>
+      </div>
+
       <Card>
-        <CardHeader>
-          <CardTitle>Expenses</CardTitle>
+        <CardHeader className="pb-3">
+          <CardTitle>Expense Records</CardTitle>
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-2 mt-2">
+            <div className="relative lg:col-span-2">
+              <Search className="h-4 w-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <Input
+                placeholder="Search by particular..."
+                className="pl-9"
+                value={searchTerm}
+                onChange={(e) => {
+                  setPage(1);
+                  setSearchTerm(e.target.value);
+                }}
+              />
+            </div>
+            <Input
+              type="date"
+              value={dateFrom}
+              onChange={(e) => {
+                setPage(1);
+                setDateFrom(e.target.value);
+              }}
+            />
+            <Input
+              type="date"
+              value={dateTo}
+              onChange={(e) => {
+                setPage(1);
+                setDateTo(e.target.value);
+              }}
+            />
+          </div>
         </CardHeader>
         <CardContent>
-          <div className="overflow-x-auto -mx-4 md:mx-0">
-            <div className="inline-block min-w-full align-middle">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="min-w-[200px]">Description</TableHead>
-                    <TableHead className="min-w-[120px]">Category</TableHead>
-                    <TableHead className="min-w-[100px]">Amount</TableHead>
-                    <TableHead className="min-w-[120px]">Date</TableHead>
-                    <TableHead className="min-w-[150px]">Vendor</TableHead>
-                    <TableHead className="min-w-[120px]">Payment</TableHead>
-                    <TableHead className="min-w-[100px]">Status</TableHead>
-                    <TableHead className="min-w-[120px]">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-            <TableBody>
-              {filteredExpenses.map((expense) => (
-                <TableRow key={expense.id}>
-                  <TableCell className="font-medium">{expense.description}</TableCell>
-                  <TableCell>
-                    <Badge variant="secondary">{expense.category}</Badge>
-                  </TableCell>
-                  <TableCell className="font-medium">Rs {expense.amount.toFixed(2)}</TableCell>
-                  <TableCell>
-                    <div className="flex items-center space-x-1">
-                      <Calendar className="h-3 w-3" />
-                      <span>{expense.date}</span>
-                    </div>
-                  </TableCell>
-                  <TableCell>{expense.vendor}</TableCell>
-                  <TableCell>{expense.paymentMethod}</TableCell>
-                  <TableCell>
-                    <Badge className={getStatusColor(expense.status)}>{expense.status}</Badge>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex space-x-2">
-                      <Button size="sm" variant="outline" onClick={() => setEditingExpense(expense)}>
-                        <Edit className="h-3 w-3" />
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => handleDeleteExpense(expense.id)}
-                        className="text-red-600 hover:text-red-700"
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </Button>
-                    </div>
-                  </TableCell>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Particular</TableHead>
+                  <TableHead>Date</TableHead>
+                  <TableHead className="text-right">Amount</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {expenses.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={3} className="text-center text-muted-foreground py-8">
+                      No expense records found.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  expenses.map((expense) => (
+                    <TableRow key={expense.id}>
+                      <TableCell className="font-medium">{expense.particular}</TableCell>
+                      <TableCell>{new Date(expense.created_at).toLocaleString()}</TableCell>
+                      <TableCell className="text-right font-semibold">
+                        {money(Number(expense.amount || 0))}
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </div>
+          <div className="mt-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <p className="text-sm text-muted-foreground">
+              Showing page {meta.page} of {meta.totalPages} • {meta.total} total entries
+            </p>
+            <div className="flex items-center gap-2">
+              <Select
+                value={String(limit)}
+                onValueChange={(value) => {
+                  setPage(1);
+                  setLimit(Number(value));
+                }}
+              >
+                <SelectTrigger className="w-[120px] h-9">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="10">10 / page</SelectItem>
+                  <SelectItem value="20">20 / page</SelectItem>
+                  <SelectItem value="50">50 / page</SelectItem>
+                  <SelectItem value="100">100 / page</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page <= 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+              >
+                Previous
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page >= meta.totalPages}
+                onClick={() => setPage((p) => Math.min(meta.totalPages, p + 1))}
+              >
+                Next
+              </Button>
             </div>
           </div>
         </CardContent>
       </Card>
-
-      {/* Edit Expense Dialog */}
-      <Dialog open={!!editingExpense} onOpenChange={() => setEditingExpense(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Edit Expense</DialogTitle>
-          </DialogHeader>
-          {editingExpense && (
-            <div className="space-y-4">
-              <div>
-                <Label htmlFor="edit-description">Description</Label>
-                <Input
-                  id="edit-description"
-                  value={editingExpense.description}
-                  onChange={(e) => setEditingExpense({ ...editingExpense, description: e.target.value })}
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="edit-category">Category</Label>
-                  <Select
-                    value={editingExpense.category}
-                    onValueChange={(value) => setEditingExpense({ ...editingExpense, category: value })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {categories.map((category) => (
-                        <SelectItem key={category} value={category}>
-                          {category}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label htmlFor="edit-amount">Amount</Label>
-                  <Input
-                    id="edit-amount"
-                    type="number"
-                    step="0.01"
-                    value={editingExpense.amount}
-                    onChange={(e) =>
-                      setEditingExpense({ ...editingExpense, amount: Number.parseFloat(e.target.value) })
-                    }
-                  />
-                </div>
-              </div>
-              <div>
-                <Label htmlFor="edit-status">Status</Label>
-                <Select
-                  value={editingExpense.status}
-                  onValueChange={(value: any) => setEditingExpense({ ...editingExpense, status: value })}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="paid">Paid</SelectItem>
-                    <SelectItem value="pending">Pending</SelectItem>
-                    <SelectItem value="overdue">Overdue</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <Button onClick={handleEditExpense} className="w-full">
-                Update Expense
-              </Button>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
     </div>
-  )
+  );
 }
+

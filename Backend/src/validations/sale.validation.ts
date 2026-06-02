@@ -30,6 +30,7 @@ const refundSaleSchema = z.object({
             .default([]),
         returnReason: z.string().optional(),
         refundMethod: z.string().optional(),
+        exchangePaymentMethod: z.enum(["CASH", "CREDIT"]).optional(),
         orderScope: z.enum(["FULL", "PARTIAL"]).optional(),
         exchangedItems: z
             .array(

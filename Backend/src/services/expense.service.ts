@@ -1,20 +1,53 @@
 import { prisma } from '../prisma/client';
 import { CreateExpenseInput } from '../validations/expense.validation';
 import { AppError } from '../utils/apiError';
+import { Prisma } from '@prisma/client';
 
 export class ExpenseService {
     async createExpense(data: CreateExpenseInput) {
         return await prisma.expense.create({ data });
     }
 
-    async listExpenses({ page = 1, limit = 10 }: { page?: number; limit?: number }) {
+    async listExpenses({
+        page = 1,
+        limit = 10,
+        search,
+        startDate,
+        endDate,
+    }: {
+        page?: number;
+        limit?: number;
+        search?: string;
+        startDate?: string;
+        endDate?: string;
+    }) {
+        const where: Prisma.ExpenseWhereInput = {
+            ...(search?.trim()
+                ? {
+                      particular: {
+                          contains: search.trim(),
+                          mode: 'insensitive',
+                      },
+                  }
+                : {}),
+            ...(startDate || endDate
+                ? {
+                      created_at: {
+                          ...(startDate ? { gte: new Date(`${startDate}T00:00:00.000Z`) } : {}),
+                          ...(endDate ? { lte: new Date(`${endDate}T23:59:59.999Z`) } : {}),
+                      },
+                  }
+                : {}),
+        };
+
         const [expenses, total] = await Promise.all([
             prisma.expense.findMany({
+                where,
                 skip: (page - 1) * limit,
                 take: limit,
                 orderBy: { created_at: 'desc' },
             }),
-            prisma.expense.count(),
+            prisma.expense.count({ where }),
         ]);
 
         return {

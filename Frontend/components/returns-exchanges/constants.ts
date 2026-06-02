@@ -16,6 +16,11 @@ export const REFUND_METHODS = [
   { value: "no_refund", label: "No Refund" },
 ] as const
 
+export const EXCHANGE_PAYMENT_METHODS = [
+  { value: "CASH", label: "Cash (customer pays now)" },
+  { value: "CREDIT", label: "Credit (add to customer ledger)" },
+] as const
+
 export const INVENTORY_DISPOSITIONS = [
   { value: "RESTOCK", label: "Restock Item" },
   { value: "DAMAGED", label: "Mark as Damaged" },
@@ -24,6 +29,7 @@ export const INVENTORY_DISPOSITIONS = [
 
 export type ReturnReason = (typeof RETURN_REASONS)[number]["value"]
 export type RefundMethod = (typeof REFUND_METHODS)[number]["value"]
+export type ExchangePaymentMethod = (typeof EXCHANGE_PAYMENT_METHODS)[number]["value"]
 export type InventoryDisposition = (typeof INVENTORY_DISPOSITIONS)[number]["value"]
 
 export const RETURN_REASON_LABEL: Record<string, string> = Object.fromEntries(
@@ -32,6 +38,10 @@ export const RETURN_REASON_LABEL: Record<string, string> = Object.fromEntries(
 
 export const REFUND_METHOD_LABEL: Record<string, string> = Object.fromEntries(
   REFUND_METHODS.map((r) => [r.value, r.label])
+)
+
+export const EXCHANGE_PAYMENT_METHOD_LABEL: Record<string, string> = Object.fromEntries(
+  EXCHANGE_PAYMENT_METHODS.map((r) => [r.value, r.label])
 )
 
 /** User-facing sale status (DB enum stays REFUNDED / EXCHANGED). */

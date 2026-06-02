@@ -11,6 +11,9 @@ export const listExpensesSchema = z.object({
     query: z.object({
         page: z.coerce.number().optional(),
         limit: z.coerce.number().optional(),
+        search: z.string().optional(),
+        startDate: z.string().optional(),
+        endDate: z.string().optional(),
     }),
 });
 

@@ -11,12 +11,15 @@ export const createExpense = asyncHandler(async (req: Request, res: Response) =>
 });
 
 export const listExpenses = asyncHandler(async (req: Request, res: Response) => {
-    const { page = 1, limit = 10 } = req.query;
+    const { page = 1, limit = 10, search, startDate, endDate } = req.query;
     const result = await expenseService.listExpenses({
         page: Number(page),
         limit: Number(limit),
+        search: search ? String(search) : undefined,
+        startDate: startDate ? String(startDate) : undefined,
+        endDate: endDate ? String(endDate) : undefined,
     });
-    new ApiResponse(result.data, 'Expenses retrieved successfully', 200).send(res);
+    new ApiResponse(result.data, 'Expenses retrieved successfully', 200, true, result.meta).send(res);
 });
 
 export const createEmployeeType = asyncHandler(async (req: Request, res: Response) => {

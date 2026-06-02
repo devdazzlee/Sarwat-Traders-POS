@@ -293,6 +293,12 @@ const menuSections: SidebarMenuSection[] = [
         roles: ADMIN_ROLES,
       },
       {
+        id: "expenses",
+        label: "Expenses",
+        icon: Receipt,
+        roles: ADMIN_ROLES,
+      },
+      {
         id: "product-export",
         label: "Product Export",
         icon: Download,

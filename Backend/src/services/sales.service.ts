@@ -894,6 +894,7 @@ class SaleService {
     createdBy,
     returnReason,
     refundMethod,
+    exchangePaymentMethod,
     orderScope,
   }: {
     originalSaleId: string;
@@ -905,6 +906,7 @@ class SaleService {
     createdBy: string;
     returnReason?: string;
     refundMethod?: string;
+    exchangePaymentMethod?: 'CASH' | 'CREDIT';
     orderScope?: string;
   }) {
     if (!returnedItems.length && !exchangedItems.length) {
@@ -1002,6 +1004,7 @@ class SaleService {
     let total = new Prisma.Decimal(0);
     const hasReturn = returnedItems.length > 0;
     const hasExchange = exchangedItems.length > 0;
+    const resolvedExchangePaymentMethod = (exchangePaymentMethod ?? 'CASH').toUpperCase() as 'CASH' | 'CREDIT';
 
     const recordMovement = ({
       productId,
@@ -1112,6 +1115,7 @@ class SaleService {
     const metaParts: string[] = [];
     if (returnReason) metaParts.push(`Reason: ${returnReason}`);
     if (refundMethod) metaParts.push(`Refund: ${refundMethod}`);
+    if (hasExchange) metaParts.push(`ExchangePayment: ${resolvedExchangePaymentMethod}`);
     if (orderScope) metaParts.push(`Scope: ${orderScope}`);
     const dispositionSummary = returnedItems
       .filter((r) => r.disposition && r.disposition !== 'RESTOCK')
@@ -1120,12 +1124,22 @@ class SaleService {
     if (dispositionSummary) metaParts.push(`Disposition: ${dispositionSummary}`);
     const composedNotes = [metaParts.join(' | '), notes?.trim()].filter(Boolean).join('\n');
 
-    // Settle the refund/exchange against the customer's account (registered customers only).
-    // `total` = exchangeTotal - refundTotal  →  negative = net refund, positive = net amount owed.
+    // Settlement note:
+    // total = exchangeTotal - refundTotal
+    // total > 0 => customer owes
+    // total < 0 => store owes/refund
     let returnPreviousBalance = new Prisma.Decimal(0);
     let returnUpdatedBalance = new Prisma.Decimal(0);
     let returnAdjustsAccount = false;
-    if (resolvedCustomerId) {
+    const shouldPostToLedger =
+      !!resolvedCustomerId &&
+      !total.isZero() &&
+      (
+        total.isNegative() || // net refund still credits customer account
+        (total.isPositive() && resolvedExchangePaymentMethod === 'CREDIT') // net payable only on credit mode
+      );
+
+    if (shouldPostToLedger && resolvedCustomerId) {
       const acctCustomer = await prisma.customer.findUnique({
         where: { id: resolvedCustomerId },
         select: { outstanding_balance: true },
@@ -1136,6 +1150,15 @@ class SaleService {
         returnUpdatedBalance = returnPreviousBalance.plus(total);
       }
     }
+
+    if (hasExchange && total.isPositive() && resolvedExchangePaymentMethod === 'CREDIT' && !resolvedCustomerId) {
+      throw new AppError(400, 'Customer is required when exchange payment option is CREDIT');
+    }
+
+    const salePaymentMethod: 'CASH' | 'CREDIT' =
+      hasExchange ? resolvedExchangePaymentMethod : 'CASH';
+    const salePaymentStatus: 'PAID' | 'PENDING' =
+      salePaymentMethod === 'CREDIT' && total.isPositive() ? 'PENDING' : 'PAID';
 
     const ops: Prisma.PrismaPromise<any>[] = [];
 
@@ -1149,8 +1172,8 @@ class SaleService {
           notes: composedNotes || undefined,
           subtotal: total,
           total_amount: total,
-          payment_method: 'CASH',
-          payment_status: 'PAID',
+          payment_method: salePaymentMethod,
+          payment_status: salePaymentStatus,
           previous_balance: returnPreviousBalance,
           status:
             hasReturn && hasExchange
@@ -1169,7 +1192,7 @@ class SaleService {
       }),
     );
 
-    // Credit the net refund (or debit a net exchange) to the customer's account
+    // Adjust customer ledger based on settlement mode.
     if (returnAdjustsAccount && resolvedCustomerId && !total.isZero()) {
       const isNetRefund = total.isNegative();
       ops.push(

@@ -32,12 +32,15 @@ import { Share2, Mail, ArrowLeftRight, Package } from "lucide-react"
 import {
   RETURN_REASONS,
   REFUND_METHODS,
+  EXCHANGE_PAYMENT_METHODS,
   INVENTORY_DISPOSITIONS,
   RETURN_REASON_LABEL,
   REFUND_METHOD_LABEL,
+  EXCHANGE_PAYMENT_METHOD_LABEL,
   formatSaleStatusLabel,
   type InventoryDisposition,
   type ReturnReason,
+  type ExchangePaymentMethod,
 } from "@/components/returns-exchanges/constants"
 import { ExchangeProductPicker } from "@/components/returns-exchanges/exchange-product-picker"
 import { cn } from "@/lib/utils"
@@ -123,6 +126,7 @@ interface NewReturn {
   customerId?: string
   returnType: "REFUND" | "EXCHANGE"
   refundMethod?: string
+  exchangePaymentMethod?: ExchangePaymentMethod
   returnReason?: ReturnReason | ""
   orderScope: "FULL" | "PARTIAL"
   returnedItems: Array<{
@@ -376,6 +380,7 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
     customerId: "",
     returnType: "REFUND",
     refundMethod: "",
+    exchangePaymentMethod: "CASH",
     returnReason: "",
     orderScope: "PARTIAL",
     returnedItems: [],
@@ -558,6 +563,7 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
         customerId: "",
         returnType: "REFUND",
         refundMethod: "",
+        exchangePaymentMethod: "CASH",
         returnReason: "",
         orderScope: "PARTIAL",
         returnedItems: [],
@@ -873,6 +879,15 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
       return false
     }
 
+    if (isExchangeFlow && (newReturn.exchangePaymentMethod || "CASH") === "CREDIT" && !newReturn.customerId) {
+      toast({
+        title: "Customer required",
+        description: "Select a customer before choosing credit for exchange balance.",
+        variant: "destructive",
+      })
+      return false
+    }
+
     // Validate return quantities (only items included in the return)
     const hasInvalidQuantity = selectedReturnItems.some(item =>
       item.included && item.returnQuantity > item.originalQuantity
@@ -922,6 +937,7 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
         notes: newReturn.notes || "",
         returnReason: newReturn.returnReason,
         orderScope: newReturn.orderScope,
+        exchangePaymentMethod: newReturn.exchangePaymentMethod || "CASH",
       }
 
       if (processMode === "exchanges" && newReturn.exchangedItems.length > 0) {
@@ -1002,6 +1018,7 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
         customerId: "",
         returnType: "REFUND",
         refundMethod: "",
+        exchangePaymentMethod: "CASH",
         returnReason: "",
         orderScope: "PARTIAL",
         returnedItems: [],
@@ -1204,6 +1221,7 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
       ...prev,
       returnType: mode === "exchanges" ? "EXCHANGE" : "REFUND",
       refundMethod: mode === "exchanges" ? "" : prev.refundMethod,
+      exchangePaymentMethod: mode === "exchanges" ? (prev.exchangePaymentMethod || "CASH") : "CASH",
       exchangedItems: mode === "returns" ? [] : prev.exchangedItems,
     }))
     if (mode === "returns") {
@@ -1724,6 +1742,28 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
                     </Select>
                   </div>
                 )}
+                {processMode === "exchanges" && (
+                  <div className="space-y-2">
+                    <Label htmlFor="exchange-payment-method">Exchange payment option *</Label>
+                    <Select
+                      value={newReturn.exchangePaymentMethod || "CASH"}
+                      onValueChange={(value) =>
+                        setNewReturn((prev) => ({ ...prev, exchangePaymentMethod: value as ExchangePaymentMethod }))
+                      }
+                    >
+                      <SelectTrigger id="exchange-payment-method">
+                        <SelectValue placeholder="Select payment option" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {EXCHANGE_PAYMENT_METHODS.map((m) => (
+                          <SelectItem key={m.value} value={m.value}>
+                            {m.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
               </div>
 
               {selectedReturnItems.length > 0 && (
@@ -2138,6 +2178,14 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
                   {processMode === "returns" && newReturn.refundMethod && (
                     <p>
                       Refund: {REFUND_METHOD_LABEL[newReturn.refundMethod] || newReturn.refundMethod}
+                    </p>
+                  )}
+                  {processMode === "exchanges" && (
+                    <p>
+                      Payment:{" "}
+                      {EXCHANGE_PAYMENT_METHOD_LABEL[newReturn.exchangePaymentMethod || "CASH"] ||
+                        newReturn.exchangePaymentMethod ||
+                        "CASH"}
                     </p>
                   )}
                   <p>Return value: Rs {returnSubtotal.toLocaleString()}</p>

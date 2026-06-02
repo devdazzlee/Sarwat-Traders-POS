@@ -74,7 +74,7 @@ export function DashboardFinancialDetails({ mode, onBack }: DashboardFinancialDe
         });
 
         if (mode === "expenses") {
-          const res = await apiClient.get("/expense", { params: { page: 1, limit: 200 } });
+          const res = await apiClient.get("/expenses", { params: { page: 1, limit: 200 } });
           const rows = Array.isArray(res.data?.data) ? res.data.data : [];
           const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
           const windowRows = rows.filter((e: any) => {
