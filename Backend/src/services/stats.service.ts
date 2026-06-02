@@ -48,7 +48,15 @@ export class StatsService {
                 total_amount: true,
                 sale_number: true,
                 status: true,
+                payment_method: true,
+                sale_date: true,
                 created_at: true,
+                customer: {
+                    select: {
+                        name: true,
+                        email: true,
+                    },
+                },
             },
             orderBy: {
                 created_at: "desc",

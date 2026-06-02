@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import { Search, Minus, Plus, Package } from "lucide-react"
+import { Search, Package, Minus, Plus } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -188,23 +188,42 @@ export function ExchangeProductPicker({
                       </div>
                       {qty > 0 ? (
                         <div
-                          className="flex items-center justify-between pt-1 border-t border-blue-100"
+                          className="pt-1 border-t border-blue-100 flex items-center gap-1"
                           onClick={(e) => e.stopPropagation()}
                         >
                           <Button
                             type="button"
                             variant="ghost"
                             size="icon"
-                            className="h-6 w-6"
-                            onClick={() => onQuantityChange(product.id, qty - 1)}
+                            className="h-6 w-6 shrink-0"
+                            onClick={() => onQuantityChange(product.id, Math.max(1, qty - 1))}
                           >
                             <Minus className="h-3 w-3" />
                           </Button>
+                          <Input
+                            type="number"
+                            min={1}
+                            step={1}
+                            className="h-7 w-full text-center text-xs px-1"
+                            value={qty}
+                            onChange={(e) => {
+                              const raw = e.target.value
+                              if (raw === "") return
+                              const next = Number.parseInt(raw, 10)
+                              if (Number.isFinite(next) && next >= 1) {
+                                onQuantityChange(product.id, next)
+                              }
+                            }}
+                            onBlur={(e) => {
+                              const next = Math.max(1, Number.parseInt(e.target.value, 10) || 1)
+                              onQuantityChange(product.id, next)
+                            }}
+                          />
                           <Button
                             type="button"
                             variant="ghost"
                             size="icon"
-                            className="h-6 w-6"
+                            className="h-6 w-6 shrink-0"
                             onClick={() => onQuantityChange(product.id, qty + 1)}
                           >
                             <Plus className="h-3 w-3" />

@@ -855,15 +855,6 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
       return false
     }
 
-    if (!newReturn.returnReason) {
-      toast({
-        title: "Missing Information",
-        description: "Please select a return reason.",
-        variant: "destructive",
-      })
-      return false
-    }
-
     if (!isExchangeFlow && !newReturn.refundMethod) {
       toast({
         title: "Missing Information",
@@ -1692,7 +1683,7 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
                 )}
               >
                 <div className="space-y-2">
-                  <Label htmlFor="return-reason">Return reason *</Label>
+                  <Label htmlFor="return-reason">Return reason (optional)</Label>
                   <Select
                     value={newReturn.returnReason || ""}
                     onValueChange={(value) =>
@@ -2008,7 +1999,27 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
                             >
                               <Minus className="w-3 h-3" />
                             </Button>
-                            <span className="w-12 text-center font-medium">{item.quantity}</span>
+                            <div>
+                              <Input
+                                type="number"
+                                min={1}
+                                step={1}
+                                className="w-20 h-9 text-center"
+                                value={item.quantity}
+                                onChange={(e) => {
+                                  const raw = e.target.value
+                                  if (raw === "") return
+                                  const next = Number.parseInt(raw, 10)
+                                  if (Number.isFinite(next) && next >= 1) {
+                                    handleExchangeQuantityChange(item.productId, next)
+                                  }
+                                }}
+                                onBlur={(e) => {
+                                  const next = Math.max(1, Number.parseInt(e.target.value, 10) || 1)
+                                  handleExchangeQuantityChange(item.productId, next)
+                                }}
+                              />
+                            </div>
                             <Button
                               variant="outline"
                               size="sm"
@@ -2020,7 +2031,8 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
                               variant="outline"
                               size="sm"
                               onClick={() => handleExchangeQuantityChange(item.productId, 0)}
-                              className="ml-2 text-red-600 hover:text-red-700"
+                              className="text-red-600 hover:text-red-700"
+                              title="Remove item"
                             >
                               <X className="w-3 h-3" />
                             </Button>
@@ -2419,7 +2431,7 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
           setManualEmail("")
         }
       }}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="w-[95vw] max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <div className="flex items-center justify-center mb-2">
               <div className="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center">
@@ -2761,7 +2773,7 @@ function buildReturnNoteHtml(d: {
         </div>
 
         <div class="footer">
-          Powered by ACE STUDIOS | Support: +92 336 2500357 | www.acestudios.pk
+          Powered by ACE STUDIOS | Support: +92 336 2500357 | www.acestudiosus.com
         </div>
       </body>
     </html>

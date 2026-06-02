@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, type ReactNode } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { LoadingButton } from "@/components/ui/loading-button"
@@ -8,7 +8,23 @@ import { Button } from "@/components/ui/button"
 import { PageLoader } from "@/components/ui/page-loader"
 import { useLoading } from "@/hooks/use-loading"
 import { useToast } from "@/hooks/use-toast"
-import { DollarSign, ShoppingCart, Users, Package, TrendingUp, TrendingDown, RefreshCw, Download, Truck, Plus, CreditCard, Banknote, Receipt } from "lucide-react"
+import {
+  DollarSign,
+  ShoppingCart,
+  Users,
+  Package,
+  TrendingUp,
+  RefreshCw,
+  Download,
+  Truck,
+  Plus,
+  CreditCard,
+  Banknote,
+  Receipt,
+  ChevronRight,
+  type LucideIcon,
+} from "lucide-react"
+import { cn } from "@/lib/utils"
 import { StatCardSkeleton } from "@/components/ui/stat-card-skeleton"
 import apiClient from "@/lib/apiClient"
 import { normalizeUserRole, type UserRole } from "@/lib/role-utils"
@@ -59,6 +75,114 @@ interface DashboardHomeProps {
   onNavigate?: (tab: string) => void;
 }
 
+type StatCardTone = "default" | "blue" | "emerald" | "amber" | "red" | "yellow";
+
+interface DashboardStatCardProps {
+  title: string;
+  value: ReactNode;
+  subtitle: string;
+  linkLabel?: string;
+  icon: LucideIcon;
+  tone?: StatCardTone;
+  onClick?: () => void;
+}
+
+function DashboardStatCard({
+  title,
+  value,
+  subtitle,
+  linkLabel,
+  icon: Icon,
+  tone = "default",
+  onClick,
+}: DashboardStatCardProps) {
+  const toneStyles: Record<StatCardTone, { card: string; title: string; value: string; sub: string; icon: string }> = {
+    default: {
+      card: "hover:shadow-md",
+      title: "",
+      value: "",
+      sub: "text-gray-500",
+      icon: "text-muted-foreground",
+    },
+    blue: {
+      card: "border-blue-200 bg-blue-50/50 hover:shadow-md",
+      title: "text-blue-800",
+      value: "text-blue-700",
+      sub: "text-blue-500",
+      icon: "text-blue-600",
+    },
+    emerald: {
+      card: "border-emerald-200 bg-emerald-50/50 hover:shadow-md",
+      title: "text-emerald-800",
+      value: "text-emerald-700",
+      sub: "text-emerald-500",
+      icon: "text-emerald-600",
+    },
+    amber: {
+      card: "border-amber-200 bg-amber-50/50 hover:shadow-md",
+      title: "text-amber-800",
+      value: "text-amber-700",
+      sub: "text-amber-500",
+      icon: "text-amber-600",
+    },
+    red: {
+      card: "border-red-200 bg-red-50/50 hover:shadow-md",
+      title: "text-red-800",
+      value: "text-red-700",
+      sub: "text-red-500",
+      icon: "text-red-600",
+    },
+    yellow: {
+      card: "hover:shadow-md",
+      title: "",
+      value: "text-yellow-600",
+      sub: "text-gray-500",
+      icon: "text-yellow-600",
+    },
+  };
+
+  const s = toneStyles[tone];
+  const clickable = Boolean(onClick);
+
+  return (
+    <Card
+      className={cn(
+        "transition-all",
+        s.card,
+        clickable && "cursor-pointer hover:ring-1 hover:ring-primary/20 active:scale-[0.99]",
+      )}
+      onClick={onClick}
+      role={clickable ? "button" : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onKeyDown={
+        clickable
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onClick?.();
+              }
+            }
+          : undefined
+      }
+    >
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+        <CardTitle className={cn("text-sm font-medium", s.title)}>{title}</CardTitle>
+        <Icon className={cn("h-4 w-4 shrink-0", tone === "default" ? "h-4 w-4" : "h-5 w-5", s.icon)} />
+      </CardHeader>
+      <CardContent>
+        <div className={cn("text-2xl font-bold", s.value)}>{value}</div>
+        <p className={cn("text-xs mt-1", s.sub)}>{subtitle}</p>
+        {linkLabel && clickable ? (
+          <p className="text-xs text-blue-600 mt-2 flex items-center gap-0.5 font-medium">
+            {linkLabel}
+            <ChevronRight className="h-3 w-3" />
+          </p>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
 export function DashboardHome({ onNavigate }: DashboardHomeProps) {
   const [topProducts, setTopProducts] = useState<TopProduct[]>([])
   const [recentSales, setRecentSales] = useState<RecentSale[]>([])
@@ -70,6 +194,10 @@ export function DashboardHome({ onNavigate }: DashboardHomeProps) {
   const { loading: exportLoading, withLoading: withExportLoading } = useLoading()
   const { toast } = useToast()
   const canOpenInventory = role ? INVENTORY_NAV_ROLES.includes(role) : false
+
+  const goTo = (tab: string) => {
+    if (onNavigate) onNavigate(tab);
+  };
 
   const getTopProducts = async () => {
     try {
@@ -288,54 +416,39 @@ export function DashboardHome({ onNavigate }: DashboardHomeProps) {
           </>
         ) : (
           <>
-            <Card className="hover:shadow-md transition-shadow">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Today's Sales</CardTitle>
-                <DollarSign className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{stats?.todaySales?.length || 0}</div>
-                <p className="text-xs text-gray-500 mt-1">Transactions in last 24h</p>
-              </CardContent>
-            </Card>
-
-            <Card className="hover:shadow-md transition-shadow">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Recent Transactions</CardTitle>
-                <ShoppingCart className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{recentSales.length}</div>
-                <p className="text-xs text-gray-500 mt-1">Latest 5 transactions</p>
-              </CardContent>
-            </Card>
-
-            <Card className="hover:shadow-md transition-shadow">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Total Customers</CardTitle>
-                <Users className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{stats?.totalCustomers || 0}</div>
-                <p className="text-xs text-gray-500 mt-1">Registered customers</p>
-              </CardContent>
-            </Card>
-
-            <Card
-              className={`transition-shadow ${canOpenInventory ? "cursor-pointer hover:shadow-md" : "hover:shadow-md"}`}
-              onClick={() => { if (canOpenInventory) { onNavigate?.("inventory-dashboard") } }}
-            >
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Low Stock Items</CardTitle>
-                <Package className="h-4 w-4 text-yellow-600" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-yellow-600">{stats?.lowStockProducts?.length || 0}</div>
-                {onNavigate && canOpenInventory && (
-                  <p className="text-xs text-blue-600 mt-1">View inventory →</p>
-                )}
-              </CardContent>
-            </Card>
+            <DashboardStatCard
+              title="Today's Sales"
+              value={stats?.todaySales?.length || 0}
+              subtitle="Transactions in last 24h"
+              linkLabel="View sales history"
+              icon={DollarSign}
+              onClick={onNavigate ? () => goTo("sales-history") : undefined}
+            />
+            <DashboardStatCard
+              title="Recent Transactions"
+              value={recentSales.length}
+              subtitle="Latest 5 transactions"
+              linkLabel="View sales history"
+              icon={ShoppingCart}
+              onClick={onNavigate ? () => goTo("sales-history") : undefined}
+            />
+            <DashboardStatCard
+              title="Total Customers"
+              value={stats?.totalCustomers || 0}
+              subtitle="Registered customers"
+              linkLabel="View customers"
+              icon={Users}
+              onClick={onNavigate ? () => goTo("customers") : undefined}
+            />
+            <DashboardStatCard
+              title="Low Stock Items"
+              value={stats?.lowStockProducts?.length || 0}
+              subtitle="Products below minimum stock"
+              linkLabel={canOpenInventory ? "View inventory" : undefined}
+              icon={Package}
+              tone="yellow"
+              onClick={onNavigate && canOpenInventory ? () => goTo("inventory-dashboard") : undefined}
+            />
           </>
         )}
       </div>
@@ -351,49 +464,42 @@ export function DashboardHome({ onNavigate }: DashboardHomeProps) {
           </>
         ) : (
           <>
-            <Card className="hover:shadow-md transition-shadow border-blue-200 bg-blue-50/50">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium text-blue-800">Total Revenue (Today)</CardTitle>
-                <Banknote className="h-5 w-5 text-blue-600" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-blue-700">{formatCurrency(stats?.dailyRevenue || 0)}</div>
-                <p className="text-xs text-blue-500 mt-1">All cash + credit sales</p>
-              </CardContent>
-            </Card>
-
-            <Card className="hover:shadow-md transition-shadow border-emerald-200 bg-emerald-50/50">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium text-emerald-800">Cash Sales (Today)</CardTitle>
-                <DollarSign className="h-5 w-5 text-emerald-600" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-emerald-700">{formatCurrency(stats?.dailyCash || 0)}</div>
-                <p className="text-xs text-emerald-500 mt-1">Paid cash transactions</p>
-              </CardContent>
-            </Card>
-
-            <Card className="hover:shadow-md transition-shadow border-amber-200 bg-amber-50/50">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium text-amber-800">Credit Sales (Today)</CardTitle>
-                <CreditCard className="h-5 w-5 text-amber-600" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-amber-700">{formatCurrency(stats?.dailyCredit || 0)}</div>
-                <p className="text-xs text-amber-500 mt-1">Unpaid credit transactions</p>
-              </CardContent>
-            </Card>
-
-            <Card className="hover:shadow-md transition-shadow border-red-200 bg-red-50/50">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium text-red-800">Expenses (Today)</CardTitle>
-                <Receipt className="h-5 w-5 text-red-600" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-red-700">{formatCurrency(stats?.dailyExpense || 0)}</div>
-                <p className="text-xs text-red-500 mt-1">Total outgoing cash</p>
-              </CardContent>
-            </Card>
+            <DashboardStatCard
+              title="Total Revenue (Today)"
+              value={formatCurrency(stats?.dailyRevenue || 0)}
+              subtitle="All cash + credit sales"
+              linkLabel="Open revenue page"
+              icon={Banknote}
+              tone="blue"
+              onClick={onNavigate ? () => goTo("today-revenue") : undefined}
+            />
+            <DashboardStatCard
+              title="Cash Sales (Today)"
+              value={formatCurrency(stats?.dailyCash || 0)}
+              subtitle="Paid cash transactions"
+              linkLabel="Open cash sales page"
+              icon={DollarSign}
+              tone="emerald"
+              onClick={onNavigate ? () => goTo("today-cash-sales") : undefined}
+            />
+            <DashboardStatCard
+              title="Credit Sales (Today)"
+              value={formatCurrency(stats?.dailyCredit || 0)}
+              subtitle="Unpaid credit transactions"
+              linkLabel="Open credit sales page"
+              icon={CreditCard}
+              tone="amber"
+              onClick={onNavigate ? () => goTo("today-credit-sales") : undefined}
+            />
+            <DashboardStatCard
+              title="Expenses (Today)"
+              value={formatCurrency(stats?.dailyExpense || 0)}
+              subtitle="Total outgoing cash"
+              linkLabel="Open expenses page"
+              icon={Receipt}
+              tone="red"
+              onClick={onNavigate ? () => goTo("today-expenses") : undefined}
+            />
           </>
         )}
       </div>

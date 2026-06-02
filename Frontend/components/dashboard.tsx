@@ -59,6 +59,7 @@ import { PrinterSettings } from "./printer-settings";
 import { ProductExport } from "./product-export";
 import { CustomerLedger } from "./customer-ledger";
 import { Documentation } from "./documentation";
+import { DashboardFinancialDetails } from "./dashboard-financial-details";
 
 
 interface DashboardProps {
@@ -82,6 +83,14 @@ export function Dashboard({ onLogout }: DashboardProps) {
     switch (activeTab) {
       case "dashboard":
         return <DashboardHome onNavigate={setActiveTab} />;
+      case "today-revenue":
+        return <DashboardFinancialDetails mode="revenue" onBack={() => setActiveTab("dashboard")} />;
+      case "today-cash-sales":
+        return <DashboardFinancialDetails mode="cash" onBack={() => setActiveTab("dashboard")} />;
+      case "today-credit-sales":
+        return <DashboardFinancialDetails mode="credit" onBack={() => setActiveTab("dashboard")} />;
+      case "today-expenses":
+        return <DashboardFinancialDetails mode="expenses" onBack={() => setActiveTab("dashboard")} />;
       case "barcode-generator":
         return <BarcodeGenerator />;
       case "new-sale":

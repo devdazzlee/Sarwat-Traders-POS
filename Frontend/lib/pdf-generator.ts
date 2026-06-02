@@ -198,7 +198,7 @@ const buildInvoiceDoc = (data: InvoiceData, logoDataUrl: string | null): jsPDF =
     doc.setFontSize(8);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(180, 180, 180);
-    doc.text('Powered by ACE STUDIOS | Support: +92 336 2500357 | www.acestudios.pk', pageWidth / 2, pageHeight - 10, { align: 'center' });
+    doc.text('Powered by ACE STUDIOS | Support: +92 336 2500357 | www.acestudiosus.com', pageWidth / 2, pageHeight - 10, { align: 'center' });
     doc.text(`Page ${pageNum} of ${pageTotal}`, pageWidth - margin, pageHeight - 10, { align: 'right' });
   };
 
@@ -406,7 +406,7 @@ const buildReturnNoteDoc = (data: ReturnNoteData, logoDataUrl: string | null): j
     doc.setFontSize(8);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(180, 180, 180);
-    doc.text('Powered by ACE STUDIOS | Support: +92 336 2500357 | www.acestudios.pk', pageWidth / 2, pageHeight - 10, { align: 'center' });
+    doc.text('Powered by ACE STUDIOS | Support: +92 336 2500357 | www.acestudiosus.com', pageWidth / 2, pageHeight - 10, { align: 'center' });
     doc.text(`Page ${pageNum} of ${pageTotal}`, pageWidth - margin, pageHeight - 10, { align: 'right' });
   };
 

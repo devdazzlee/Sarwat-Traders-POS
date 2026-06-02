@@ -265,8 +265,8 @@ export function SalesHistory() {
     setSaleEditorData(null);
     try {
       const res = await apiClient.get(`/sale/${saleId}`);
-      const envelope = res.data as { data?: Sale; success?: boolean };
-      const full = envelope?.data;
+      const payload = (res.data as { data?: Sale })?.data ?? res.data;
+      const full = payload as Sale;
       if (!full?.id) {
         throw new Error("Invalid sale response");
       }
@@ -645,7 +645,7 @@ export function SalesHistory() {
           </div>
 
           <div class="footer">
-            Powered by ACE STUDIOS | Support: +92 336 2500357 | www.acestudios.pk
+            Powered by ACE STUDIOS | Support: +92 336 2500357 | www.acestudiosus.com
           </div>
         </body>
       </html>

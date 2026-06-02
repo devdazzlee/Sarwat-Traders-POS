@@ -343,7 +343,12 @@ class SaleService {
     }
 
     const returnedMap = await this.getReturnedQtyByOriginalSaleLineIds(saleId);
-    const saleItems = sale.sale_items.map((item) => {
+    const originalLines = sale.sale_items.filter(
+      (item) => !item.item_type || item.item_type === SaleItemType.ORIGINAL,
+    );
+    const linesForEditor = originalLines.length > 0 ? originalLines : sale.sale_items;
+
+    const saleItems = linesForEditor.map((item) => {
       const already = returnedMap.get(item.id)?.toNumber() ?? 0;
       const origQty = item.quantity.toNumber();
       return {
@@ -1264,7 +1269,9 @@ class SaleService {
       items: Array<{ productId: string; quantity: number; price: number }>;
       discountAmount?: number;
       paymentMethod?: string;
+      paidAmount?: number;
       notes?: string;
+      customerId?: string | null;
       createdBy: string;
     }
   ) {
@@ -1277,71 +1284,217 @@ class SaleService {
       if (!oldSale) throw new AppError(404, "Sale not found");
       if (oldSale.status !== "COMPLETED") throw new AppError(400, "Only completed sales can be edited");
 
-      const branchId = oldSale.branch_id!;
-      const oldTotal = oldSale.total_amount;
-      const newPaymentMethod = data.paymentMethod || oldSale.payment_method;
+      const oldTotal = new Prisma.Decimal(oldSale.total_amount);
+      const oldPaid = new Prisma.Decimal(oldSale.payment_received);
+      const branchId = oldSale.branch_id || undefined;
+      const normalizedPaymentMethod = (data.paymentMethod || oldSale.payment_method).toUpperCase();
+      const newPaymentMethod = normalizedPaymentMethod as Prisma.SaleUpdateInput["payment_method"];
 
-      // Rollback Stock
-      for (const item of oldSale.sale_items) {
-        await tx.stock.update({
-          where: { product_id_branch_id: { product_id: item.product_id, branch_id: branchId } },
-          data: { current_quantity: { increment: item.quantity } },
-        });
+      if (!Array.isArray(data.items) || data.items.length === 0) {
+        throw new AppError(400, "A sale must contain at least one product");
       }
 
-      // Delete old items
-      await tx.saleItem.deleteMany({ where: { sale_id: saleId } });
+      const invalidLine = data.items.find((item) => item.quantity <= 0 || item.price < 0);
+      if (invalidLine) {
+        throw new AppError(400, "Each line must have quantity >= 1 and price >= 0");
+      }
+
+      const originalOldItems = oldSale.sale_items.filter(
+        (item) => !item.item_type || item.item_type === SaleItemType.ORIGINAL,
+      );
+
+      const resolvedCustomerId =
+        data.customerId !== undefined ? data.customerId : oldSale.customer_id;
+
+      if (newPaymentMethod === 'CREDIT' && !resolvedCustomerId) {
+        throw new AppError(400, 'Credit sales require a customer');
+      }
+
+      if (resolvedCustomerId) {
+        const customerExists = await tx.customer.findUnique({
+          where: { id: resolvedCustomerId },
+          select: { id: true },
+        });
+        if (!customerExists) throw new AppError(400, 'Invalid customer');
+      }
+
+      const groupedOld = originalOldItems.reduce<Map<string, Prisma.Decimal>>((acc, item) => {
+        const prev = acc.get(item.product_id) || new Prisma.Decimal(0);
+        acc.set(item.product_id, prev.plus(item.quantity));
+        return acc;
+      }, new Map());
+
+      const groupedNew = data.items.reduce<Map<string, Prisma.Decimal>>((acc, item) => {
+        const prev = acc.get(item.productId) || new Prisma.Decimal(0);
+        acc.set(item.productId, prev.plus(item.quantity));
+        return acc;
+      }, new Map());
+
+      const uniqueProductIds = Array.from(new Set(data.items.map((item) => item.productId)));
+      const products = await tx.product.findMany({
+        where: { id: { in: uniqueProductIds } },
+        select: { id: true, name: true },
+      });
+      const productMap = new Map(products.map((p) => [p.id, p]));
+      const missing = uniqueProductIds.filter((id) => !productMap.has(id));
+      if (missing.length > 0) {
+        throw new AppError(400, `Products not found: ${missing.join(", ")}`);
+      }
+
+      if (branchId) {
+        const stockRows = await tx.stock.findMany({
+          where: { branch_id: branchId, product_id: { in: Array.from(new Set([...groupedOld.keys(), ...groupedNew.keys()])) } },
+          select: { product_id: true, current_quantity: true },
+        });
+        const stockMap = new Map(stockRows.map((s) => [s.product_id, new Prisma.Decimal(s.current_quantity)]));
+
+        for (const [productId, wanted] of groupedNew.entries()) {
+          const current = stockMap.get(productId) || new Prisma.Decimal(0);
+          const rollbackQty = groupedOld.get(productId) || new Prisma.Decimal(0);
+          const availableAfterRollback = current.plus(rollbackQty);
+          if (wanted.gt(availableAfterRollback)) {
+            const productName = productMap.get(productId)?.name || "Unknown product";
+            throw new AppError(
+              400,
+              `Insufficient stock for ${productName}. Available: ${availableAfterRollback.toNumber()}, requested: ${wanted.toNumber()}`,
+            );
+          }
+        }
+      }
 
       const subtotal = data.items.reduce((sum, item) => sum + item.price * item.quantity, 0);
-      const discount = data.discountAmount ?? Number(oldSale.discount_amount);
-      const newTotal = Math.max(0, subtotal - discount);
-
-      // Create new items and update stock
-      const saleItemsData = [];
-      for (const item of data.items) {
-        saleItemsData.push({
-          product_id: item.productId,
-          quantity: new Prisma.Decimal(item.quantity),
-          unit_price: new Prisma.Decimal(item.price),
-          line_total: new Prisma.Decimal(item.price * item.quantity),
-        });
-
-        await tx.stock.update({
-          where: { product_id_branch_id: { product_id: item.productId, branch_id: branchId } },
-          data: { current_quantity: { decrement: item.quantity } },
-        });
+      const discount = Math.max(0, data.discountAmount ?? Number(oldSale.discount_amount));
+      if (discount > subtotal) {
+        throw new AppError(400, "Discount cannot be greater than subtotal");
       }
 
-      // Handle Ledger Delta
-      if (oldSale.customer_id) {
-        const customer = await tx.customer.findUnique({ where: { id: oldSale.customer_id } });
-        if (customer) {
-          let balanceDelta = new Prisma.Decimal(0);
-          if (oldSale.payment_method === "CREDIT" && newPaymentMethod === "CREDIT") {
-            balanceDelta = new Prisma.Decimal(newTotal).minus(oldTotal);
-          } else if (oldSale.payment_method === "CREDIT" && newPaymentMethod !== "CREDIT") {
-            balanceDelta = new Prisma.Decimal(oldTotal).mul(-1);
-          } else if (oldSale.payment_method !== "CREDIT" && newPaymentMethod === "CREDIT") {
-            balanceDelta = new Prisma.Decimal(newTotal);
-          }
-          if (!balanceDelta.isZero()) {
-            const newBalance = new Prisma.Decimal(customer.outstanding_balance).plus(balanceDelta);
-            await tx.customer.update({
-              where: { id: oldSale.customer_id },
-              data: { outstanding_balance: newBalance }
-            });
-            await tx.customerLedger.create({
-              data: {
-                customer_id: oldSale.customer_id,
-                entry_type: LedgerEntryType.ADJUSTMENT,
-                amount: balanceDelta.abs(),
-                description: `Sale Adjustment - ${oldSale.sale_number}`,
-                sale_id: oldSale.sale_number,
-                balance_after: newBalance,
-                created_by: data.createdBy
-              }
-            });
-          }
+      const taxAmount = 0;
+      const newTotalNumber = Math.max(0, subtotal - discount + taxAmount);
+      const newTotal = new Prisma.Decimal(newTotalNumber);
+
+      const requestedPaid = Math.max(
+        0,
+        Number.isFinite(Number(data.paidAmount)) ? Number(data.paidAmount) : Number(oldPaid),
+      );
+
+      const paymentReceived =
+        newPaymentMethod === "CREDIT"
+          ? Math.min(requestedPaid, newTotalNumber)
+          : requestedPaid;
+
+      const dueAmount = Math.max(0, newTotalNumber - paymentReceived);
+      const changeAmount = newPaymentMethod === "CREDIT" ? 0 : Math.max(0, paymentReceived - newTotalNumber);
+      const paymentStatus: Prisma.SaleUpdateInput["payment_status"] =
+        dueAmount <= 0 ? "PAID" : paymentReceived > 0 ? "PARTIAL" : "PENDING";
+
+      if (branchId) {
+        // Rollback previous stock impact
+        for (const [productId, qty] of groupedOld.entries()) {
+          await tx.stock.upsert({
+            where: { product_id_branch_id: { product_id: productId, branch_id: branchId } },
+            update: { current_quantity: { increment: qty } },
+            create: {
+              product_id: productId,
+              branch_id: branchId,
+              current_quantity: qty,
+              minimum_quantity: new Prisma.Decimal(0),
+              maximum_quantity: new Prisma.Decimal(1000),
+              reserved_quantity: new Prisma.Decimal(0),
+            },
+          });
+        }
+
+        // Apply new stock impact
+        for (const [productId, qty] of groupedNew.entries()) {
+          await tx.stock.upsert({
+            where: { product_id_branch_id: { product_id: productId, branch_id: branchId } },
+            update: { current_quantity: { decrement: qty } },
+            create: {
+              product_id: productId,
+              branch_id: branchId,
+              current_quantity: new Prisma.Decimal(0).minus(qty),
+              minimum_quantity: new Prisma.Decimal(0),
+              maximum_quantity: new Prisma.Decimal(1000),
+              reserved_quantity: new Prisma.Decimal(0),
+            },
+          });
+        }
+      }
+
+      await tx.saleItem.deleteMany({ where: { sale_id: saleId } });
+
+      const saleItemsData = data.items.map((item) => ({
+        product_id: item.productId,
+        quantity: new Prisma.Decimal(item.quantity),
+        unit_price: new Prisma.Decimal(item.price),
+        tax_rate: new Prisma.Decimal(0),
+        tax_amount: new Prisma.Decimal(0),
+        discount_rate: new Prisma.Decimal(0),
+        discount_amount: new Prisma.Decimal(0),
+        line_total: new Prisma.Decimal(item.price * item.quantity),
+        item_type: SaleItemType.ORIGINAL,
+      }));
+
+      const oldCreditOutstanding =
+        oldSale.payment_method === 'CREDIT' ? oldTotal.minus(oldPaid) : new Prisma.Decimal(0);
+      const newCreditOutstanding =
+        newPaymentMethod === 'CREDIT'
+          ? newTotal.minus(new Prisma.Decimal(Math.min(paymentReceived, newTotalNumber)))
+          : new Prisma.Decimal(0);
+
+      const oldCustomerId = oldSale.customer_id;
+      const newCustomerId = resolvedCustomerId ?? null;
+      const customerChanged = oldCustomerId !== newCustomerId;
+
+      const adjustCustomerCredit = async (
+        customerId: string,
+        delta: Prisma.Decimal,
+        description: string,
+      ) => {
+        if (delta.isZero()) return;
+        const customer = await tx.customer.findUnique({ where: { id: customerId } });
+        if (!customer) return;
+        const newBalance = new Prisma.Decimal(customer.outstanding_balance).plus(delta);
+        await tx.customer.update({
+          where: { id: customerId },
+          data: { outstanding_balance: newBalance },
+        });
+        await tx.customerLedger.create({
+          data: {
+            customer_id: customerId,
+            entry_type: LedgerEntryType.ADJUSTMENT,
+            amount: delta.abs(),
+            description,
+            sale_id: oldSale.sale_number,
+            balance_after: newBalance,
+            created_by: data.createdBy,
+          },
+        });
+      };
+
+      if (customerChanged) {
+        if (oldCustomerId && !oldCreditOutstanding.isZero()) {
+          await adjustCustomerCredit(
+            oldCustomerId,
+            oldCreditOutstanding.negated(),
+            `Sale edit — credit removed (${oldSale.sale_number})`,
+          );
+        }
+        if (newCustomerId && !newCreditOutstanding.isZero()) {
+          await adjustCustomerCredit(
+            newCustomerId,
+            newCreditOutstanding,
+            `Sale edit — credit assigned (${oldSale.sale_number})`,
+          );
+        }
+      } else if (newCustomerId) {
+        const balanceDelta = newCreditOutstanding.minus(oldCreditOutstanding);
+        if (!balanceDelta.isZero()) {
+          await adjustCustomerCredit(
+            newCustomerId,
+            balanceDelta,
+            `Sale edit adjustment - ${oldSale.sale_number}`,
+          );
         }
       }
 
@@ -1349,14 +1502,18 @@ class SaleService {
         where: { id: saleId },
         data: {
           subtotal: new Prisma.Decimal(subtotal),
-          total_amount: new Prisma.Decimal(newTotal),
+          tax_amount: new Prisma.Decimal(taxAmount),
+          total_amount: newTotal,
           discount_amount: new Prisma.Decimal(discount),
-          payment_method: newPaymentMethod as any,
-          payment_received: newPaymentMethod === "CREDIT" ? 0 : new Prisma.Decimal(newTotal),
+          payment_method: newPaymentMethod,
+          payment_status: paymentStatus,
+          payment_received: new Prisma.Decimal(paymentReceived),
+          change_amount: new Prisma.Decimal(changeAmount),
           notes: data.notes ?? oldSale.notes,
-          sale_items: { create: saleItemsData }
+          customer_id: newCustomerId,
+          sale_items: { create: saleItemsData },
         },
-        include: { sale_items: { include: { product: true } }, customer: true }
+        include: { sale_items: { include: { product: true } }, customer: true },
       });
     }, {
       maxWait: 20000,
