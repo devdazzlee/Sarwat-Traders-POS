@@ -286,7 +286,7 @@ export function NewSale() {
         await Promise.all([
           fetchProducts(),
           fetchCategories(),
-          fetchCustomers(),
+          fetchCustomers(true),
         ]);
       } catch (error) {
         // Error loading data - no toast shown

@@ -171,6 +171,10 @@ class OfflineSyncManager {
           }
         }
         await offlineDB.markSynced(item.id);
+        if (item.url.includes('/customer')) {
+          const { refreshCustomerListGlobally } = await import('./customer-list-sync');
+          await refreshCustomerListGlobally().catch(() => undefined);
+        }
         console.log(`Synced: ${item.method} ${item.url}`);
       } else {
         await offlineDB.markFailed(item.id, `HTTP ${response.status}`);

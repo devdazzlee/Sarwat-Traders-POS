@@ -55,7 +55,13 @@ import {
 import apiClient from "@/lib/apiClient";
 import { API_BASE } from "@/config/constants";
 import { offlineDB } from "@/lib/offline-db";
-import { cachedGet, queueMutation } from "@/lib/offline-helpers";
+import { queueMutation } from "@/lib/offline-helpers";
+import {
+  fetchCustomersForManagementTab,
+  refreshCustomerListGlobally,
+  upsertCustomerInStore,
+} from "@/lib/customer-list-sync";
+import { useStore } from "@/lib/store";
 import { useToast } from "@/hooks/use-toast";
 import { PageLoader } from "@/components/ui/page-loader";
 import { StatCardSkeleton } from "@/components/ui/stat-card-skeleton";
@@ -95,19 +101,20 @@ export function Customers({ onViewLedger }: CustomersProps) {
   const [isSummaryLoading, setIsSummaryLoading] = useState(false);
   const [ledgerCustomerId, setLedgerCustomerId] = useState<string | null>(null);
 
-  // 1) Fetch customers — falls back to IndexedDB when offline
+  // 1) Fetch customers — shared with New Sale via global store + cache invalidation
   const fetchCustomers = async () => {
     setIsLoading(true);
     try {
       if (!navigator.onLine) {
         const cached = await offlineDB.getCustomers();
         if (cached.length > 0) {
-          setCustomers(cached.map((c) => c.data as Customer));
+          const list = cached.map((c) => c.data as Customer);
+          setCustomers(list);
           return;
         }
       }
-      const data = await cachedGet<Customer[]>('/customer', undefined, 'customers-mgmt');
-      setCustomers(data || []);
+      const data = await fetchCustomersForManagementTab();
+      setCustomers(data);
     } catch (err: any) {
       console.log(err);
       toast({ title: "Error", description: "Failed to load customers", variant: "destructive" });
@@ -181,14 +188,16 @@ export function Customers({ onViewLedger }: CustomersProps) {
     setIsAdding(true);
     try {
       const payload = buildCustomerPayload(newCustomer);
-      const { queued } = await queueMutation('POST', '/customer', payload, 'customer');
+      const { queued, data } = await queueMutation<Customer>('POST', '/customer', payload, 'customer');
       setNewCustomer({});
       setIsAddDialogOpen(false);
       if (queued) {
         toast({ title: "Saved Offline", description: "Customer will sync when connected." });
       } else {
+        if (data?.id) upsertCustomerInStore(data);
+        await refreshCustomerListGlobally();
+        setCustomers(useStore.getState().customers);
         toast({ title: "Success", description: "Customer created successfully." });
-        fetchCustomers();
       }
     } catch (err: any) {
       toast({ title: "Error", description: err.response?.data?.message || "Failed to create customer", variant: "destructive" });
@@ -218,8 +227,9 @@ export function Customers({ onViewLedger }: CustomersProps) {
         setCustomers((prev) => prev.map((c) => c.id === editingCustomer.id ? { ...c, ...payload } : c));
         toast({ title: "Saved Offline", description: "Customer update will sync when connected." });
       } else {
+        await refreshCustomerListGlobally();
+        setCustomers(useStore.getState().customers);
         toast({ title: "Success", description: "Customer updated successfully." });
-        fetchCustomers();
       }
     } catch (err: any) {
       toast({ title: "Error", description: err.response?.data?.message || "Failed to update customer", variant: "destructive" });
@@ -239,8 +249,9 @@ export function Customers({ onViewLedger }: CustomersProps) {
         setCustomers((prev) => prev.filter((c) => c.id !== deleteTargetCustomer.id));
         toast({ title: "Deleted Offline", description: "Deletion will sync when connected." });
       } else {
+        await refreshCustomerListGlobally();
+        setCustomers(useStore.getState().customers);
         toast({ title: "Success", description: "Customer deleted successfully." });
-        fetchCustomers();
       }
       setDeleteTargetCustomer(null);
     } catch (err: any) {

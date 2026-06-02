@@ -26,7 +26,7 @@ export const getCustomerLedger = asyncHandler(async (req: Request, res: Response
  */
 export const recordPayment = asyncHandler(async (req: Request, res: Response) => {
   const { customerId } = req.params;
-  const { amount, description, referenceNo } = req.body;
+  const { amount, description, referenceNo, saleId } = req.body;
 
   if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
     return new ApiResponse(null, 'Valid positive amount is required', 400, false).send(res);
@@ -38,6 +38,7 @@ export const recordPayment = asyncHandler(async (req: Request, res: Response) =>
     createdBy: req.user!.id,
     description,
     referenceNo,
+    saleId,
   });
 
   new ApiResponse(result, 'Payment recorded successfully', 201).send(res);

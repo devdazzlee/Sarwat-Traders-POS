@@ -68,7 +68,7 @@ interface Category {
   is_active?: boolean
 }
 
-interface Customer {
+export interface Customer {
   id: string
   name: string
   phone?: string
@@ -378,7 +378,9 @@ export const useStore = create<StoreState>()(
         }
 
         try {
-          const res = await apiClient.get("/customer")
+          const res = await apiClient.get("/customer", force
+            ? { headers: { "X-Skip-Offline-Cache": "true" } }
+            : undefined)
 
           await offlineDB.saveCustomers(res.data.data)
 

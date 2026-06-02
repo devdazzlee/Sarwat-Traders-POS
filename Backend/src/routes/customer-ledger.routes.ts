@@ -1,5 +1,6 @@
 import express from 'express';
 import { authenticate, authorize } from '../middleware/auth.middleware';
+import { idempotency } from '../middleware/idempotency.middleware';
 import {
   getCustomerLedger,
   recordPayment,
@@ -12,6 +13,6 @@ router.use(authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'BRANCH_MANAGER', 'W
 
 router.get('/summary', getCreditSummary);
 router.get('/:customerId', getCustomerLedger);
-router.post('/:customerId/payment', recordPayment);
+router.post('/:customerId/payment', idempotency, recordPayment);
 
 export default router;

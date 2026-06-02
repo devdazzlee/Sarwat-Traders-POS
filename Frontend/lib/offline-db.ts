@@ -344,6 +344,10 @@ export const offlineDB = {
     return cached.data;
   },
 
+  async deleteCachedData(key: string) {
+    await db.cachedData.delete(key);
+  },
+
   async clearExpiredCache() {
     const now = Date.now();
     await db.cachedData

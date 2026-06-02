@@ -1,10 +1,17 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -50,6 +57,12 @@ interface LedgerEntry {
   debit: number;
   credit: number;
   balance: number;
+  invoiceDue?: number;
+  invoicePaid?: number;
+  invoiceTotal?: number;
+  saleId?: string | null;
+  paymentStatus?: string | null;
+  isCollectable?: boolean;
   payment_method: string | null;
 }
 
@@ -68,6 +81,36 @@ interface CustomerLedgerProps {
   onBack: () => void;
 }
 
+const money = (n: number) =>
+  `Rs ${Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+
+function entryTypeLabel(type: string) {
+  if (type === "CREDIT_SALE") return "Credit Sale";
+  if (type === "PAYMENT_RECEIVED") return "Payment";
+  if (type === "ADJUSTMENT") return "Adjustment";
+  if (type === "REFUND") return "Refund";
+  return type.replace(/_/g, " ");
+}
+
+/** Positive = customer owes; negative = advance credit stored in DB */
+function formatRunningBalance(running: number) {
+  if (running > 0) {
+    return {
+      text: `Rs ${running.toLocaleString()}`,
+      className: "text-amber-700",
+      hint: "Total amount customer owed on the account after this entry (cumulative, not this invoice only)",
+    };
+  }
+  if (running < 0) {
+    return {
+      text: `Rs ${Math.abs(running).toLocaleString()} Adv`,
+      className: "text-emerald-700",
+      hint: "Advance credit after this entry",
+    };
+  }
+  return { text: "Rs 0", className: "text-slate-500", hint: "Settled" };
+}
+
 export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
@@ -81,24 +124,36 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
     totalSales: 0,
     totalPayments: 0,
     balance: 0,
+    balanceDue: 0,
+    advanceBalance: 0,
   });
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [selectedEntry, setSelectedEntry] = useState<LedgerEntry | null>(null);
   const [paymentAmount, setPaymentAmount] = useState("");
   const [paymentDescription, setPaymentDescription] = useState("");
+  const [paymentSaleKey, setPaymentSaleKey] = useState<string>("");
   const [isSubmittingPayment, setIsSubmittingPayment] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
-  const fetchLedgerData = useCallback(async () => {
-    setLoading(true);
+  const fetchLedgerData = useCallback(async (options?: { silent?: boolean }) => {
+    const silent = options?.silent ?? false;
+    if (silent) {
+      setIsRefreshing(true);
+    } else {
+      setLoading(true);
+    }
     try {
       const [custRes, ledgerRes] = await Promise.all([
-        apiClient.get(`${API_BASE}/customer/${customerId}`),
+        apiClient.get(`${API_BASE}/customer/${customerId}`, {
+          headers: { "X-Skip-Offline-Cache": "true" },
+        }),
         apiClient.get(`${API_BASE}/customer-ledger/${customerId}`, {
           params: {
             limit: 200,
             ...(dateFrom ? { startDate: format(dateFrom, "yyyy-MM-dd") } : {}),
             ...(dateTo ? { endDate: format(dateTo, "yyyy-MM-dd") } : {}),
           },
+          headers: { "X-Skip-Offline-Cache": "true" },
         }),
       ]);
 
@@ -106,10 +161,13 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
 
       const data = ledgerRes.data.data;
       setEntries(data.entries || []);
+      const bal = Number(data.summary?.currentBalance ?? 0);
       setSummary({
         totalSales: data.summary?.totalSales || 0,
         totalPayments: data.summary?.totalPayments || 0,
-        balance: data.summary?.currentBalance || 0,
+        balance: bal,
+        balanceDue: data.summary?.balanceDue ?? Math.max(0, bal),
+        advanceBalance: data.summary?.advanceBalance ?? Math.max(0, -bal),
       });
     } catch (error: any) {
       toast({
@@ -118,7 +176,11 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
         variant: "destructive",
       });
     } finally {
-      setLoading(false);
+      if (silent) {
+        setIsRefreshing(false);
+      } else {
+        setLoading(false);
+      }
     }
   }, [customerId, dateFrom, dateTo, toast]);
 
@@ -141,6 +203,89 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
       const db = new Date(b.date).getTime();
       return sortOrder === "desc" ? db - da : da - db;
     });
+
+  const openInvoices = useMemo(() => {
+    const seen = new Set<string>();
+    const list: {
+      key: string;
+      saleId: string | null;
+      reference_no: string;
+      invoiceDue: number;
+      debit: number;
+      date: string;
+    }[] = [];
+
+    for (const e of entries) {
+      if (e.type !== "CREDIT_SALE" || (e.invoiceDue ?? 0) <= 0) continue;
+      const key = e.saleId || e.reference_no || e.id;
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      list.push({
+        key,
+        saleId: e.saleId ?? null,
+        reference_no: e.reference_no ?? key,
+        invoiceDue: e.invoiceDue ?? 0,
+        debit: e.debit,
+        date: e.date,
+      });
+    }
+
+    return list.sort(
+      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+    );
+  }, [entries]);
+
+  const resolvePaymentTarget = useCallback(
+    (saleKey: string) => {
+      if (!saleKey || saleKey === "__general__") {
+        return { saleId: null as string | null, referenceNo: null as string | null };
+      }
+      const inv = openInvoices.find(
+        (i) => i.key === saleKey || i.saleId === saleKey || i.reference_no === saleKey
+      );
+      return {
+        saleId: inv?.saleId || inv?.reference_no || saleKey,
+        referenceNo: inv?.reference_no ?? null,
+      };
+    },
+    [openInvoices]
+  );
+
+  const openPaymentModal = useCallback(
+    (entry?: LedgerEntry | null) => {
+      setSelectedEntry(entry ?? null);
+
+      if (entry) {
+        const key = entry.saleId || entry.reference_no || "";
+        setPaymentSaleKey(key);
+        setPaymentAmount(String(entry.invoiceDue ?? entry.debit ?? ""));
+        setPaymentDescription(`Payment for ${entry.reference_no}`);
+      } else if (openInvoices.length === 1) {
+        const inv = openInvoices[0];
+        setPaymentSaleKey(inv.key);
+        setPaymentAmount(String(inv.invoiceDue));
+        setPaymentDescription(`Payment for ${inv.reference_no}`);
+      } else if (openInvoices.length > 1) {
+        setPaymentSaleKey("");
+        setPaymentAmount("");
+        setPaymentDescription("Payment received");
+      } else {
+        setPaymentSaleKey("__general__");
+        setPaymentAmount("");
+        setPaymentDescription("Account Payment");
+      }
+
+      setIsPaymentModalOpen(true);
+    },
+    [openInvoices]
+  );
+
+  const resetPaymentModal = useCallback(() => {
+    setSelectedEntry(null);
+    setPaymentAmount("");
+    setPaymentDescription("");
+    setPaymentSaleKey("");
+  }, []);
 
   const formatDate = (d: string) => {
     try {
@@ -215,14 +360,21 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
     doc.setFontSize(11);
     doc.text(`Rs ${summary.totalPayments.toLocaleString()}`, 18 + cardWidth, 100);
 
-    // Balance Due
-    doc.setFillColor(255, 251, 235);
+    // Balance Due / Advance
+    const isAdvance = summary.advanceBalance > 0;
+    doc.setFillColor(isAdvance ? 240 : 255, isAdvance ? 253 : 251, isAdvance ? 244 : 235);
     doc.roundedRect(15 + (cardWidth * 2), 85, cardWidth - 5, 20, 2, 2, 'F');
-    doc.setTextColor(180, 83, 9);
+    doc.setTextColor(isAdvance ? 21 : 180, isAdvance ? 128 : 83, isAdvance ? 61 : 9);
     doc.setFontSize(8);
-    doc.text("BALANCE DUE", 18 + (cardWidth * 2), 92);
+    doc.text(isAdvance ? "ADVANCE CREDIT" : "BALANCE DUE", 18 + (cardWidth * 2), 92);
     doc.setFontSize(11);
-    doc.text(`Rs ${summary.balance.toLocaleString()}`, 18 + (cardWidth * 2), 100);
+    doc.text(
+      isAdvance
+        ? `Rs ${summary.advanceBalance.toLocaleString()}`
+        : `Rs ${summary.balanceDue.toLocaleString()}`,
+      18 + (cardWidth * 2),
+      100
+    );
 
     // Table
     const tableData = filteredEntries.map(entry => [
@@ -231,12 +383,12 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
       entry.reference_no || "—",
       entry.debit > 0 ? `Rs ${entry.debit.toLocaleString()}` : "—",
       entry.credit > 0 ? `Rs ${entry.credit.toLocaleString()}` : "—",
-      `Rs ${entry.balance.toLocaleString()}`
+      formatRunningBalance(entry.balance).text
     ]);
 
     autoTable(doc, {
       startY: 115,
-      head: [["Date & Time", "Description", "Reference", "Debit", "Credit", "Balance"]],
+      head: [["Date & Time", "Description", "Reference", "Debit", "Credit", "Running Bal."]],
       body: tableData,
       theme: 'striped',
       headStyles: { 
@@ -289,8 +441,6 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
     setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
   };
 
-  if (loading) return <PageLoader message="Loading ledger..." />;
-
   const handlePaymentSubmit = async () => {
     if (!paymentAmount || isNaN(Number(paymentAmount)) || Number(paymentAmount) <= 0) {
       toast({
@@ -301,12 +451,32 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
       return;
     }
 
+    const saleKey =
+      paymentSaleKey ||
+      selectedEntry?.saleId ||
+      selectedEntry?.reference_no ||
+      "";
+
+    if (openInvoices.length > 0 && !saleKey) {
+      toast({
+        title: "Select invoice",
+        description: "Choose which sale this payment is for",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const { saleId } = resolvePaymentTarget(saleKey);
+
     setIsSubmittingPayment(true);
     try {
+      const operationId = crypto.randomUUID();
       await apiClient.post(`${API_BASE}/customer-ledger/${customerId}/payment`, {
         amount: Number(paymentAmount),
         description: paymentDescription,
-        referenceNo: selectedEntry?.reference_no || null,
+        saleId,
+      }, {
+        headers: { "X-Operation-Id": operationId },
       });
 
       toast({
@@ -314,7 +484,8 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
         description: "Payment recorded successfully",
       });
       setIsPaymentModalOpen(false);
-      fetchLedgerData();
+      resetPaymentModal();
+      await fetchLedgerData({ silent: true });
     } catch (error: any) {
       toast({
         title: "Error",
@@ -325,6 +496,8 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
       setIsSubmittingPayment(false);
     }
   };
+
+  if (loading) return <PageLoader message="Loading ledger..." />;
 
   if (!customer) {
     return (
@@ -365,8 +538,14 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
             </div>
           </div>
           <div className="flex items-center gap-2 mr-8 md:mr-10">
-            <Button variant="outline" size="sm" onClick={fetchLedgerData} className="gap-1.5">
-              <RefreshCw className="h-3.5 w-3.5" /> Refresh
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => fetchLedgerData({ silent: true })}
+              disabled={isRefreshing}
+              className="gap-1.5"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? "animate-spin" : ""}`} /> Refresh
             </Button>
             <Button variant="outline" size="sm" onClick={handleDownloadPDF} className="gap-1.5 border-blue-200 text-blue-600 hover:bg-blue-50">
               <Download className="h-3.5 w-3.5" /> Export PDF
@@ -377,12 +556,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
             <Button 
                 size="sm" 
                 className="gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm"
-                onClick={() => {
-                    setSelectedEntry(null);
-                    setPaymentAmount("");
-                    setPaymentDescription("Account Payment");
-                    setIsPaymentModalOpen(true);
-                }}
+                onClick={() => openPaymentModal(null)}
             >
               <Plus className="h-3.5 w-3.5" /> Receive Payment
             </Button>
@@ -416,18 +590,52 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
             <div className="text-[10px] text-slate-400 mt-0.5">Received from customer</div>
           </div>
 
-          <div className={`rounded-2xl border p-4 shadow-sm ${summary.balance > 0 ? "bg-amber-50 border-amber-200" : "bg-emerald-50 border-emerald-200"}`}>
+          <div
+            className={`rounded-2xl border p-4 shadow-sm ${
+              summary.balanceDue > 0
+                ? "bg-amber-50 border-amber-200"
+                : summary.advanceBalance > 0
+                  ? "bg-emerald-50 border-emerald-200"
+                  : "bg-slate-50 border-slate-200"
+            }`}
+          >
             <div className="flex items-center justify-between mb-2">
-              <span className={`text-xs font-semibold uppercase tracking-wide ${summary.balance > 0 ? "text-amber-600" : "text-emerald-600"}`}>Balance Due</span>
-              <div className={`p-1.5 rounded-lg ${summary.balance > 0 ? "bg-amber-100" : "bg-emerald-100"}`}>
-                <Wallet className={`h-3.5 w-3.5 ${summary.balance > 0 ? "text-amber-600" : "text-emerald-600"}`} />
+              <span
+                className={`text-xs font-semibold uppercase tracking-wide ${
+                  summary.advanceBalance > 0 ? "text-emerald-600" : summary.balanceDue > 0 ? "text-amber-600" : "text-slate-500"
+                }`}
+              >
+                {summary.advanceBalance > 0 ? "Advance Credit" : "Balance Due"}
+              </span>
+              <div
+                className={`p-1.5 rounded-lg ${
+                  summary.advanceBalance > 0 ? "bg-emerald-100" : summary.balanceDue > 0 ? "bg-amber-100" : "bg-slate-100"
+                }`}
+              >
+                <Wallet
+                  className={`h-3.5 w-3.5 ${
+                    summary.advanceBalance > 0 ? "text-emerald-600" : summary.balanceDue > 0 ? "text-amber-600" : "text-slate-500"
+                  }`}
+                />
               </div>
             </div>
-            <div className={`text-xl font-black ${summary.balance > 0 ? "text-amber-700" : "text-emerald-700"}`}>
-              Rs {summary.balance.toLocaleString()}
+            <div
+              className={`text-xl font-black ${
+                summary.advanceBalance > 0 ? "text-emerald-700" : summary.balanceDue > 0 ? "text-amber-700" : "text-slate-600"
+              }`}
+            >
+              {summary.advanceBalance > 0
+                ? money(summary.advanceBalance)
+                : summary.balanceDue > 0
+                  ? money(summary.balanceDue)
+                  : "Rs 0"}
             </div>
-            <div className={`text-[10px] mt-0.5 ${summary.balance > 0 ? "text-amber-500" : "text-emerald-500"}`}>
-              {summary.balance > 0 ? "Outstanding receivable" : "Fully paid"}
+            <div className="text-[10px] mt-0.5 text-slate-500">
+              {summary.advanceBalance > 0
+                ? "Customer paid more than total due (prepaid)"
+                : summary.balanceDue > 0
+                  ? "Amount still owed by customer"
+                  : "No outstanding due"}
             </div>
           </div>
 
@@ -462,7 +670,13 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                 <Receipt className="h-4 w-4 text-blue-500" />
                 Statement of Account
               </h2>
-              <p className="text-xs text-slate-400 mt-0.5">{entries.length} transaction{entries.length !== 1 ? "s" : ""}</p>
+              <p className="text-xs text-slate-400 mt-0.5">
+                {entries.length} transaction{entries.length !== 1 ? "s" : ""}
+                {" · "}
+                <span className="text-slate-500">
+                  Running balance = total owed on account after each row (use <strong className="font-semibold">Due</strong> for per-invoice amount)
+                </span>
+              </p>
             </div>
             <div className="flex flex-nowrap items-center gap-2 overflow-x-auto no-scrollbar py-1">
               <div className="relative shrink-0">
@@ -510,15 +724,21 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                   <th className="text-left px-6 py-4 text-[11px] font-bold text-slate-400 uppercase tracking-wider">Description</th>
                   <th className="text-left px-6 py-4 text-[11px] font-bold text-slate-400 uppercase tracking-wider w-[180px]">Reference</th>
                   <th className="text-right px-6 py-4 text-[11px] font-bold text-slate-400 uppercase tracking-wider w-[140px]">Debit</th>
+                  <th className="text-right px-6 py-4 text-[11px] font-bold text-slate-400 uppercase tracking-wider w-[130px]">Due</th>
                   <th className="text-right px-6 py-4 text-[11px] font-bold text-slate-400 uppercase tracking-wider w-[140px]">Credit</th>
-                  <th className="text-right px-6 py-4 text-[11px] font-bold text-slate-400 uppercase tracking-wider w-[150px]">Balance</th>
+                  <th
+                    className="text-right px-6 py-4 text-[11px] font-bold text-slate-400 uppercase tracking-wider w-[150px]"
+                    title="Cumulative account balance after this entry"
+                  >
+                    Running Bal.
+                  </th>
                   <th className="text-right px-6 py-4 text-[11px] font-bold text-slate-400 uppercase tracking-wider w-[100px]">Action</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredEntries.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="py-16 text-center">
+                    <td colSpan={8} className="py-16 text-center">
                       <div className="flex flex-col items-center gap-2 text-slate-400">
                         <Receipt className="h-8 w-8 opacity-20" />
                         <p className="text-sm font-medium">No transactions found</p>
@@ -541,11 +761,9 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                           <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${entry.type === "CREDIT_SALE" ? "bg-rose-400 shadow-[0_0_8px_rgba(251,113,133,0.4)]" : "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.4)]"}`} />
                           <div>
                             <div className="font-bold text-slate-800 text-sm leading-snug">{entry.description}</div>
-                            {entry.payment_method && (
-                              <Badge variant="outline" className="mt-1 text-[10px] h-5 px-2 border-slate-200 text-slate-500 font-bold uppercase">
-                                {entry.payment_method.replace("_", " ")}
-                              </Badge>
-                            )}
+                            <Badge variant="outline" className="mt-1 text-[10px] h-5 px-2 border-slate-200 text-slate-500 font-bold uppercase">
+                              {entryTypeLabel(entry.type)}
+                            </Badge>
                           </div>
                         </div>
                       </td>
@@ -556,7 +774,27 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                       </td>
                       <td className="px-6 py-5 text-right">
                         {entry.debit > 0 ? (
-                          <span className="font-black text-rose-600 text-sm">Rs {entry.debit.toLocaleString()}</span>
+                          <div>
+                            <span className="font-black text-rose-600 text-sm">Rs {entry.debit.toLocaleString()}</span>
+                            {(entry.invoicePaid ?? 0) > 0 && (
+                              <div className="text-[10px] text-slate-400 font-medium mt-0.5">
+                                Paid Rs {(entry.invoicePaid ?? 0).toLocaleString()}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-slate-200 text-sm">—</span>
+                        )}
+                      </td>
+                      <td className="px-6 py-5 text-right">
+                        {entry.type === "CREDIT_SALE" ? (
+                          (entry.invoiceDue ?? 0) > 0 ? (
+                            <span className="font-black text-amber-700 text-sm">
+                              Rs {(entry.invoiceDue ?? 0).toLocaleString()}
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-bold text-emerald-600 uppercase">Paid</span>
+                          )
                         ) : (
                           <span className="text-slate-200 text-sm">—</span>
                         )}
@@ -569,22 +807,22 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                         )}
                       </td>
                       <td className="px-6 py-5 text-right">
-                        <span className={`font-black text-sm ${entry.balance > 0 ? "text-amber-700" : "text-emerald-600"}`}>
-                          Rs {entry.balance.toLocaleString()}
-                        </span>
+                        {(() => {
+                          const rb = formatRunningBalance(entry.balance);
+                          return (
+                            <span className={`font-black text-sm ${rb.className}`} title={rb.hint}>
+                              {rb.text}
+                            </span>
+                          );
+                        })()}
                       </td>
                       <td className="px-6 py-5 text-right">
-                        {entry.type.includes("SALE") && entry.balance > 0 && (
+                        {entry.isCollectable && (entry.invoiceDue ?? 0) > 0 && (
                           <Button 
                             variant="ghost" 
                             size="sm"
                             className="h-8 px-3 text-[11px] uppercase font-bold text-emerald-600 bg-emerald-50 hover:bg-emerald-100 border border-emerald-100 rounded-lg shadow-sm"
-                            onClick={() => {
-                                setSelectedEntry(entry);
-                                setPaymentAmount(entry.balance.toString());
-                                setPaymentDescription(`Payment for ${entry.reference_no}`);
-                                setIsPaymentModalOpen(true);
-                            }}
+                            onClick={() => openPaymentModal(entry)}
                           >
                             Collect
                           </Button>
@@ -603,11 +841,24 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                     <td className="px-4 py-3 text-right font-black text-rose-600 text-xs">
                       Rs {filteredEntries.reduce((s, e) => s + e.debit, 0).toLocaleString()}
                     </td>
+                    <td className="px-4 py-3 text-right font-black text-amber-700 text-xs">
+                      {summary.balanceDue > 0
+                        ? `Rs ${summary.balanceDue.toLocaleString()}`
+                        : summary.advanceBalance > 0
+                          ? "—"
+                          : "Rs 0"}
+                    </td>
                     <td className="px-4 py-3 text-right font-black text-emerald-600 text-xs">
                       Rs {filteredEntries.reduce((s, e) => s + e.credit, 0).toLocaleString()}
                     </td>
-                    <td className="px-5 py-3 text-right font-black text-amber-700 text-xs text-nowrap">
-                      Rs {summary.balance.toLocaleString()}
+                    <td className="px-5 py-3 text-right text-xs font-black text-nowrap">
+                      {summary.advanceBalance > 0 ? (
+                        <span className="text-emerald-700">Adv {money(summary.advanceBalance)}</span>
+                      ) : summary.balanceDue > 0 ? (
+                        <span className="text-amber-700">Due {money(summary.balanceDue)}</span>
+                      ) : (
+                        <span className="text-slate-500">Rs 0</span>
+                      )}
                     </td>
                     <td className="px-4 py-3"></td>
                   </tr>
@@ -623,20 +874,72 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
         </div>
       </div>
 
-      <Dialog open={isPaymentModalOpen} onOpenChange={setIsPaymentModalOpen}>
-        <DialogContent className="sm:max-w-[400px]">
+      <Dialog
+        open={isPaymentModalOpen}
+        onOpenChange={(open) => {
+          setIsPaymentModalOpen(open);
+          if (!open) resetPaymentModal();
+        }}
+      >
+        <DialogContent className="sm:max-w-[440px]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <DollarSign className="h-5 w-5 text-emerald-600" />
               Receive Payment
             </DialogTitle>
             <DialogDescription>
-              {selectedEntry 
-                ? `Recording payment for transaction ${selectedEntry.reference_no}`
-                : "Record a general payment to the customer's account balance."}
+              {selectedEntry
+                ? `Apply payment toward invoice ${selectedEntry.reference_no}. Extra amount becomes advance credit.`
+                : summary.balanceDue > 0
+                  ? `Outstanding due: ${money(summary.balanceDue)}. Overpayment is stored as advance credit.`
+                  : summary.advanceBalance > 0
+                    ? `Current advance credit: ${money(summary.advanceBalance)}.`
+                    : "No outstanding due on this account."}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
+            {openInvoices.length > 0 && (
+              <div className="space-y-2">
+                <Label className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                  Apply to invoice
+                </Label>
+                <Select
+                  value={paymentSaleKey || undefined}
+                  onValueChange={(value) => {
+                    setPaymentSaleKey(value);
+                    if (value === "__general__") {
+                      setPaymentDescription("Account Payment");
+                      return;
+                    }
+                    const inv = openInvoices.find(
+                      (i) => i.key === value || i.reference_no === value
+                    );
+                    if (inv) {
+                      setPaymentDescription(`Payment for ${inv.reference_no}`);
+                      setPaymentAmount(String(inv.invoiceDue));
+                    }
+                  }}
+                >
+                  <SelectTrigger className="h-10 text-sm font-medium">
+                    <SelectValue placeholder="Select sale / invoice…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {openInvoices.map((inv) => (
+                      <SelectItem key={inv.key} value={inv.key}>
+                        {inv.reference_no} — Due Rs {inv.invoiceDue.toLocaleString()}
+                        {inv.debit !== inv.invoiceDue
+                          ? ` (of Rs ${inv.debit.toLocaleString()})`
+                          : ""}
+                      </SelectItem>
+                    ))}
+                    <SelectItem value="__general__">
+                      General payment (auto-allocate to open invoices)
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
             <div className="space-y-2">
               <Label htmlFor="amount" className="text-xs font-bold uppercase tracking-wider text-slate-500">Amount (Rs)</Label>
               <div className="relative">
@@ -651,11 +954,21 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                   autoFocus
                 />
               </div>
-              {selectedEntry && (
-                 <p className="text-[10px] text-amber-600 font-bold uppercase tracking-tight">
-                    Full balance for this entry: Rs {selectedEntry.balance.toLocaleString()}
-                 </p>
-              )}
+              {(() => {
+                const key = paymentSaleKey || selectedEntry?.saleId || selectedEntry?.reference_no;
+                const inv = openInvoices.find(
+                  (i) => i.key === key || i.reference_no === key
+                );
+                const due = inv?.invoiceDue ?? selectedEntry?.invoiceDue ?? 0;
+                if (due > 0) {
+                  return (
+                    <p className="text-[10px] text-amber-600 font-bold uppercase tracking-tight">
+                      Amount due on selected invoice: Rs {due.toLocaleString()}
+                    </p>
+                  );
+                }
+                return null;
+              })()}
             </div>
             <div className="space-y-2">
               <Label htmlFor="description" className="text-xs font-bold uppercase tracking-wider text-slate-500">Description / Remarks</Label>
@@ -669,7 +982,14 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setIsPaymentModalOpen(false)} disabled={isSubmittingPayment}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsPaymentModalOpen(false);
+                resetPaymentModal();
+              }}
+              disabled={isSubmittingPayment}
+            >
               Cancel
             </Button>
             <Button 
