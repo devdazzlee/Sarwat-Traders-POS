@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo, startTransition } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, startTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { LoadingButton } from "@/components/ui/loading-button";
@@ -214,7 +214,11 @@ export function NewSale() {
   const quantityInputRefs = useRef<Record<string, HTMLElement | null>>({});
   const quantityPlusRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const quickQtyPlusRef = useRef<HTMLButtonElement | null>(null);
+  const quickQtyInputRef = useRef<HTMLInputElement | null>(null);
+  const searchDropdownRef = useRef<HTMLDivElement | null>(null);
   const [quickQtyFocusTick, setQuickQtyFocusTick] = useState(0);
+  const [productSearchOpen, setProductSearchOpen] = useState(false);
+  const [highlightedProductIndex, setHighlightedProductIndex] = useState(0);
   const lastAddedProductId = useRef<string | null>(null);
   const [activeCartLineId, setActiveCartLineId] = useState<string | null>(null);
   // Refs for cart items and scrollable container
@@ -298,11 +302,6 @@ export function NewSale() {
     };
 
     fetchData();
-
-    // Focus the search input
-    if (searchInputRef.current) {
-      searchInputRef.current.focus();
-    }
 
     // Cleanup function to prevent memory leaks and state updates after unmount
     return () => {
@@ -486,16 +485,56 @@ export function NewSale() {
       const searchLower = searchTerm.toLowerCase().trim();
       if (searchLower.length === 0) return true;
       
-      // Search in name, barcode, SKU
+      // Search in name, code, barcode, SKU (same fields used for POS scanning)
       const nameMatch = product.name?.toLowerCase().includes(searchLower);
+      const codeMatch = product.code?.toLowerCase().includes(searchLower);
       const barcodeMatch = product.barcode?.toLowerCase().includes(searchLower);
       const skuMatch = product.sku?.toLowerCase().includes(searchLower);
-      
-      return nameMatch || barcodeMatch || skuMatch;
+
+      return nameMatch || codeMatch || barcodeMatch || skuMatch;
     })();
 
     return matchesCategory && matchesSearch;
   });
+
+  const SEARCH_DROPDOWN_LIMIT = 25;
+
+  const searchDropdownProducts = useMemo(() => {
+    if (!searchTerm.trim()) return [];
+    return filteredProducts.slice(0, SEARCH_DROPDOWN_LIMIT);
+  }, [filteredProducts, searchTerm]);
+
+  const searchDropdownOverflowCount = useMemo(() => {
+    if (!searchTerm.trim()) return 0;
+    return Math.max(0, filteredProducts.length - SEARCH_DROPDOWN_LIMIT);
+  }, [filteredProducts.length, searchTerm]);
+
+  const focusSearchInput = useCallback((options?: { clear?: boolean }) => {
+    setProductSearchOpen(false);
+    setHighlightedProductIndex(0);
+    if (options?.clear) setSearchTerm("");
+    requestAnimationFrame(() => {
+      const el = searchInputRef.current;
+      if (!el || paymentDialogOpen) return;
+      el.focus({ preventScroll: true });
+      el.select();
+    });
+  }, [paymentDialogOpen]);
+
+  const focusQuantityInput = useCallback(() => {
+    requestAnimationFrame(() => {
+      const el = quickQtyInputRef.current;
+      if (!el) return;
+      el.focus({ preventScroll: true });
+      el.select();
+    });
+  }, []);
+
+  useEffect(() => {
+    focusSearchInput();
+    // Initial focus only — paymentDialogOpen changes are handled inside focusSearchInput
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const addToCart = (product: Product, quantity: number = 1, customPrice?: number) => {
     // For testing: Allow negative sales (stock can go below 0)
@@ -1600,8 +1639,13 @@ export function NewSale() {
     }, 50);
   };
 
-  const handleProductClick = (product: Product) => {
+  const selectProductForSale = (product: Product) => {
     addToCart(product, 1);
+    setProductSearchOpen(false);
+  };
+
+  const handleProductClick = (product: Product) => {
+    selectProductForSale(product);
   };
 
   const handleCategoryChange = async (categoryId: string) => {
@@ -1717,14 +1761,32 @@ export function NewSale() {
     return cart[cart.length - 1];
   }, [cart, activeCartLineId]);
 
-  // After adding a product, focus search-bar + (never the Sale Summary card)
+  const confirmQuantityAndReturnToSearch = useCallback(() => {
+    const line = quickAdjustLine;
+    if (line) {
+      const unitName = line.unitName || line.unit;
+      const raw = quantityInputs[line.id];
+      const parsed = raw ? parseCustomQuantityInput(raw, unitName) : null;
+      if (raw && parsed !== null && parsed > 0) {
+        updateQuantityManual(line.id, parsed, unitName);
+      }
+      setQuantityInputs((prev) => {
+        const next = { ...prev };
+        delete next[line.id];
+        return next;
+      });
+    }
+    focusSearchInput({ clear: true });
+  }, [quickAdjustLine, quantityInputs, focusSearchInput]);
+
+  // After adding a product, focus quantity input (keyboard sale flow)
   useEffect(() => {
-    if (quickQtyFocusTick === 0 || cart.length === 0) return;
+    if (quickQtyFocusTick === 0) return;
     const frame = requestAnimationFrame(() => {
-      quickQtyPlusRef.current?.focus({ preventScroll: true });
+      focusQuantityInput();
     });
     return () => cancelAnimationFrame(frame);
-  }, [quickQtyFocusTick, cart.length]);
+  }, [quickQtyFocusTick, focusQuantityInput]);
 
   return (
     <div className="flex flex-col lg:flex-row h-screen">
@@ -1779,10 +1841,13 @@ export function NewSale() {
                 ref={searchInputRef}
                 placeholder={isScanning ? "Processing scan..." : "Scan barcode or search products..."}
                 value={searchTerm}
+                onFocus={() => {
+                  if (searchTerm.trim()) setProductSearchOpen(true);
+                }}
                 onBlur={(e) => {
-                  // Don't blur if clicking on interactive elements
                   const relatedTarget = e.relatedTarget as HTMLElement;
                   if (relatedTarget && (
+                    relatedTarget.closest('[data-product-search-dropdown]') ||
                     relatedTarget.getAttribute('data-price-input') === 'true' ||
                     relatedTarget.getAttribute('data-quantity-input') === 'true' ||
                     relatedTarget.getAttribute('data-quick-qty') === 'true' ||
@@ -1794,12 +1859,13 @@ export function NewSale() {
                   )) {
                     return;
                   }
-                  // Schedule refocus after idle period (not immediate)
-                  // This allows user to interact with other elements
+                  setProductSearchOpen(false);
                 }}
                 onChange={(e) => {
                   const value = e.target.value;
                   setSearchTerm(value);
+                  setHighlightedProductIndex(0);
+                  setProductSearchOpen(value.trim().length > 0);
                   
                   // Clear any pending scan timeout
                   if (scanTimeoutRef.current) {
@@ -1844,27 +1910,61 @@ export function NewSale() {
                   }
                 }}
                 onKeyDown={(e) => {
-                  // Detect Enter key (barcode scanner typically sends Enter after data)
-                  if (e.key === 'Enter' && searchTerm.trim()) {
+                  const trimmed = searchTerm.trim();
+
+                  if (e.key === "Escape") {
                     e.preventDefault();
-                    const trimmedValue = searchTerm.trim();
-                    
-                    // Mark that Enter was pressed to prevent onChange from processing
+                    setProductSearchOpen(false);
+                    setHighlightedProductIndex(0);
+                    return;
+                  }
+
+                  if (e.key === "ArrowDown" && searchDropdownProducts.length > 0) {
+                    e.preventDefault();
+                    setProductSearchOpen(true);
+                    setHighlightedProductIndex((i) =>
+                      Math.min(i + 1, searchDropdownProducts.length - 1),
+                    );
+                    return;
+                  }
+
+                  if (e.key === "ArrowUp" && searchDropdownProducts.length > 0) {
+                    e.preventDefault();
+                    setProductSearchOpen(true);
+                    setHighlightedProductIndex((i) => Math.max(i - 1, 0));
+                    return;
+                  }
+
+                  if (e.key === "Enter" && trimmed) {
                     enterKeyPressedRef.current = true;
-                    
-                    // Check if it's a barcode format (numeric barcode or CODE-PRICE format)
-                    const isNumericBarcode = /^\d{8,}$/.test(trimmedValue) ||
-                      /^\d{12,13}$/.test(trimmedValue) || // EAN-13, UPC-A
-                      /^\d{8}$/.test(trimmedValue); // EAN-8
-                    
-                    // Check if it's CODE-PRICE format (contains dash)
-                    const isCodePriceFormat = trimmedValue.includes('-') && trimmedValue.length > 3;
-                    
+
+                    const isNumericBarcode =
+                      /^\d{8,}$/.test(trimmed) ||
+                      /^\d{12,13}$/.test(trimmed) ||
+                      /^\d{8}$/.test(trimmed);
+                    const isCodePriceFormat = trimmed.includes("-") && trimmed.length > 3;
+
                     if (isNumericBarcode || isCodePriceFormat) {
-                      handleScannerInput(trimmedValue);
+                      e.preventDefault();
+                      handleScannerInput(trimmed);
+                      setTimeout(() => {
+                        enterKeyPressedRef.current = false;
+                      }, 100);
+                      return;
                     }
-                    
-                    // Reset flag after processing
+
+                    if (searchDropdownProducts.length > 0) {
+                      e.preventDefault();
+                      const product =
+                        searchDropdownProducts[highlightedProductIndex] ??
+                        searchDropdownProducts[0];
+                      selectProductForSale(product);
+                      setTimeout(() => {
+                        enterKeyPressedRef.current = false;
+                      }, 100);
+                      return;
+                    }
+
                     setTimeout(() => {
                       enterKeyPressedRef.current = false;
                     }, 100);
@@ -1876,6 +1976,43 @@ export function NewSale() {
                 )}
                 autoFocus
               />
+
+              {productSearchOpen && searchDropdownProducts.length > 0 && (
+                <div
+                  ref={searchDropdownRef}
+                  data-product-search-dropdown
+                  role="listbox"
+                  className="absolute left-0 right-0 top-full z-50 mt-1 max-h-64 overflow-y-auto rounded-md border border-gray-200 bg-white py-1 shadow-lg"
+                >
+                  {searchDropdownProducts.map((product, index) => (
+                    <button
+                      key={product.id}
+                      type="button"
+                      role="option"
+                      aria-selected={index === highlightedProductIndex}
+                      className={cn(
+                        "flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left text-sm transition-colors",
+                        index === highlightedProductIndex
+                          ? "bg-blue-50 text-blue-900"
+                          : "hover:bg-slate-50",
+                      )}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onMouseEnter={() => setHighlightedProductIndex(index)}
+                      onClick={() => selectProductForSale(product)}
+                    >
+                      <span className="truncate font-medium">{product.name}</span>
+                      <span className="shrink-0 text-xs font-semibold text-blue-600 tabular-nums">
+                        Rs {product.price.toLocaleString()}
+                      </span>
+                    </button>
+                  ))}
+                  {searchDropdownOverflowCount > 0 && (
+                    <p className="border-t border-gray-100 px-3 py-2 text-xs text-gray-500">
+                      +{searchDropdownOverflowCount} more — type a more specific name or code
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
 
             <div
@@ -1902,6 +2039,7 @@ export function NewSale() {
               </Button>
               <div className="flex min-w-0 flex-1 flex-col items-center justify-center border-r border-gray-200 bg-slate-50/90 px-2 py-0.5">
                 <Input
+                  ref={quickQtyInputRef}
                   disabled={!quickAdjustLine}
                   type="text"
                   inputMode={
@@ -1966,6 +2104,11 @@ export function NewSale() {
                   }}
                   onKeyDown={(e) => {
                     if (!quickAdjustLine) return;
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      confirmQuantityAndReturnToSearch();
+                      return;
+                    }
                     if (e.key === "ArrowUp") {
                       e.preventDefault();
                       bumpQuantity(quickAdjustLine.id, 1);
@@ -2578,6 +2721,12 @@ export function NewSale() {
                                 }, 300);
                               }}
                               onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  setActiveCartLineId(item.id);
+                                  confirmQuantityAndReturnToSearch();
+                                  return;
+                                }
                                 if (e.key === "ArrowUp") {
                                   e.preventDefault();
                                   bumpQuantity(item.id, 1);
