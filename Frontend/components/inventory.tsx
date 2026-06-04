@@ -18,6 +18,7 @@ import { useToast } from "@/hooks/use-toast"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { Search, Plus, Edit, Package, AlertTriangle, Upload, X, ImageIcon, RefreshCw, Trash2, Loader2, Mail } from "lucide-react"
 import apiClient from "@/lib/apiClient"
+import { useStore } from "@/lib/store"
 import { isPendingImageUrl } from "@/lib/offline-queue-payload"
 import { usePosData } from "@/hooks/use-pos-data"
 import { shareInventoryReportOnEmail } from "@/lib/pdf-generator"
@@ -130,6 +131,48 @@ function pickRealRelationId(
   return fallback ?? ""
 }
 
+function mapGlobalProductToInventoryRow(product: any): Product {
+  const rel = (id?: string, name?: string) =>
+    id ? { id, name: name || "" } : undefined
+  return {
+    id: product.id,
+    name: product.name,
+    sku: product.sku || "",
+    code: product.code || "",
+    pct_or_hs_code: product.pct_or_hs_code,
+    description: product.description,
+    purchase_rate: product.purchase_rate || 0,
+    sales_rate_exc_dis_and_tax: product.sales_rate_exc_dis_and_tax || 0,
+    sales_rate_inc_dis_and_tax: product.sales_rate_inc_dis_and_tax || 0,
+    discount_amount: product.discount_amount,
+    min_qty: product.min_qty,
+    max_qty: product.max_qty,
+    is_active: product.is_active ?? true,
+    display_on_pos: product.display_on_pos ?? true,
+    is_batch: product.is_batch ?? false,
+    auto_fill_on_demand_sheet: product.auto_fill_on_demand_sheet ?? false,
+    non_inventory_item: product.non_inventory_item ?? false,
+    is_deal: product.is_deal ?? false,
+    is_featured: product.is_featured ?? false,
+    unit: rel(product.unitId, product.unitName),
+    tax: rel(product.taxId, product.taxName),
+    category: rel(product.categoryId, product.category),
+    subcategory: rel(product.subcategoryId, product.subcategory),
+    supplier: rel(product.supplierId, product.supplierName),
+    brand: rel(product.brandId, product.brandName),
+    color: rel(product.colorId, product.colorName),
+    size: rel(product.sizeId, product.sizeName),
+    created_at: product.created_at || new Date().toISOString(),
+    updated_at: product.updated_at || new Date().toISOString(),
+    images: product.images || [],
+    available_stock: product.available_stock ?? product.current_stock ?? product.stock ?? 0,
+    current_stock: product.current_stock ?? product.stock ?? 0,
+    reserved_stock: product.reserved_stock ?? 0,
+    minimum_stock: product.minimum_stock ?? 0,
+    maximum_stock: product.maximum_stock ?? 0,
+  }
+}
+
 interface ProductFormData {
   name: string
   unit_id: string
@@ -204,7 +247,20 @@ const ProductForm = ({
 
   return (
     <>
-      <div className="space-y-6">
+      <div className="relative space-y-6">
+      {loading && (
+        <div
+          className="absolute inset-0 z-20 flex items-center justify-center rounded-lg bg-background/80 backdrop-blur-[1px]"
+          aria-busy="true"
+          aria-live="polite"
+        >
+          <div className="flex flex-col items-center gap-2 text-muted-foreground">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            <span className="text-sm font-medium">Saving...</span>
+          </div>
+        </div>
+      )}
+      <div className={loading ? "pointer-events-none opacity-50" : undefined}>
       <div className="space-y-4">
         <h3 className="text-lg font-semibold">Required Information</h3>
         <p className="text-sm text-muted-foreground">
@@ -260,6 +316,34 @@ const ProductForm = ({
                   .map((category) => (
                     <SelectItem key={category.id} value={category.id}>
                       {category.name}
+                    </SelectItem>
+                  ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label htmlFor="supplier_id">Supplier</Label>
+            <Select
+              value={formData.supplier_id || "none"}
+              onValueChange={(value) =>
+                updateFormData("supplier_id", value === "none" ? "" : value)
+              }
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select supplier" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">None</SelectItem>
+                {suppliers
+                  .filter(
+                    (s) =>
+                      s?.id &&
+                      s.id !== RELATION_SENTINEL_ALL &&
+                      String(s.name || "").toLowerCase() !== "all"
+                  )
+                  .map((supplier) => (
+                    <SelectItem key={supplier.id} value={supplier.id}>
+                      {supplier.name}
                     </SelectItem>
                   ))}
               </SelectContent>
@@ -403,6 +487,7 @@ const ProductForm = ({
           )}
         </Button>
       </div>
+      </div>
     </div>
     </>
   )
@@ -416,8 +501,10 @@ export default function Inventory() {
     products: globalProducts, 
     categories: globalCategories, 
     isAnyLoading: globalLoading,
-    refreshAllData 
+    productsLoading: globalProductsLoading,
+    fetchProducts,
   } = usePosData()
+  const upsertProductFromApi = useStore((s) => s.upsertProductFromApi)
 
   // State for products and pagination
   const [products, setProducts] = useState<Product[]>([])
@@ -460,6 +547,7 @@ export default function Inventory() {
     sales_rate_exc_dis_and_tax: "",
     sales_rate_inc_dis_and_tax: "",
     category_id: "",
+    supplier_id: "",
     is_active: true,
     display_on_pos: true,
     is_batch: false,
@@ -551,7 +639,7 @@ export default function Inventory() {
         ...dataWithoutImages,
         image_urls: imageUrls,
       })
-      return response.data
+      return response.data?.data ?? response.data
     },
 
     async updateProduct(id: string, productData: any, imageUrls: string[]) {
@@ -560,7 +648,7 @@ export default function Inventory() {
         ...dataWithoutImages,
         existing_images: imageUrls,
       })
-      return response.data
+      return response.data?.data ?? response.data
     },
 
     async toggleProductStatus(id: string) {
@@ -586,7 +674,16 @@ export default function Inventory() {
       setIsInitialLoading(false)
       setLoading(false)
     }
-  }, [currentPage, searchTerm, selectedCategory, selectedSubcategory, pageSize, globalProducts, globalLoading])
+  }, [
+    currentPage,
+    searchTerm,
+    selectedCategory,
+    selectedSubcategory,
+    pageSize,
+    globalProducts,
+    globalLoading,
+    globalProductsLoading,
+  ])
 
   const loadDropdownData = async () => {
     try {
@@ -671,44 +768,7 @@ export default function Inventory() {
         paginatedProducts = filteredProducts.slice(startIndex, endIndex)
       }
 
-      // Transform to match the Product interface
-      const productsData = paginatedProducts.map((product: any) => ({
-        id: product.id,
-        name: product.name,
-        sku: product.sku || "",
-        code: product.code || "",
-        pct_or_hs_code: product.pct_or_hs_code,
-        description: product.description,
-        purchase_rate: product.purchase_rate || 0,
-        sales_rate_exc_dis_and_tax: product.sales_rate_exc_dis_and_tax || 0,
-        sales_rate_inc_dis_and_tax: product.sales_rate_inc_dis_and_tax || 0,
-        discount_amount: product.discount_amount,
-        min_qty: product.min_qty,
-        max_qty: product.max_qty,
-        is_active: product.is_active ?? true,
-        display_on_pos: product.display_on_pos ?? true,
-        is_batch: product.is_batch ?? false,
-        auto_fill_on_demand_sheet: product.auto_fill_on_demand_sheet ?? false,
-        non_inventory_item: product.non_inventory_item ?? false,
-        is_deal: product.is_deal ?? false,
-        is_featured: product.is_featured ?? false,
-        unit: { id: product.unitId, name: product.unitName },
-        tax: { id: product.taxId, name: product.taxName },
-        category: { id: product.categoryId, name: product.category },
-        subcategory: { id: product.subcategoryId, name: product.subcategory },
-        supplier: { id: product.supplierId, name: product.supplierName },
-        brand: { id: product.brandId, name: product.brandName },
-        color: { id: product.colorId, name: product.colorName },
-        size: { id: product.sizeId, name: product.sizeName },
-        created_at: product.created_at || new Date().toISOString(),
-        updated_at: product.updated_at || new Date().toISOString(),
-        images: product.images || [],
-        available_stock: product.available_stock ?? product.current_stock ?? product.stock ?? 0,
-        current_stock: product.current_stock ?? product.stock ?? 0,
-        reserved_stock: product.reserved_stock ?? 0,
-        minimum_stock: product.minimum_stock ?? 0,
-        maximum_stock: product.maximum_stock ?? 0,
-      }))
+      const productsData = paginatedProducts.map(mapGlobalProductToInventoryRow)
 
       setProducts(productsData)
       setTotalProducts(total)
@@ -741,10 +801,16 @@ export default function Inventory() {
         min_qty: Number(formData.min_qty) || 0,
         max_qty: Number(formData.max_qty) || 0,
         initial_stock: Number(formData.initial_stock) || 0,
+        supplier_id:
+          formData.supplier_id && formData.supplier_id !== RELATION_SENTINEL_ALL
+            ? formData.supplier_id
+            : undefined,
       }
 
       // Images are already uploaded - existingImageUrls has all Cloudinary URLs
-      await apiService.createProduct(dataToSubmit, existingImageUrls)
+      const created = await apiService.createProduct(dataToSubmit, existingImageUrls)
+      if (created?.id) upsertProductFromApi(created)
+      await fetchProducts({ force: true })
 
       toast({
         title: "Success",
@@ -753,7 +819,6 @@ export default function Inventory() {
 
       setIsAddDialogOpen(false)
       resetForm()
-      refreshAllData()
     } catch (error) {
       toast({
         title: "Error",
@@ -787,9 +852,15 @@ export default function Inventory() {
         discount_amount: Number(formData.discount_amount) || 0,
         min_qty: Number(formData.min_qty) || 0,
         max_qty: Number(formData.max_qty) || 0,
+        supplier_id:
+          formData.supplier_id && formData.supplier_id !== RELATION_SENTINEL_ALL
+            ? formData.supplier_id
+            : "",
       }
       // All images are already Cloudinary URLs - no base64, no large payload
-      await apiService.updateProduct(editingProduct.id, dataToSubmit, existingImageUrls)
+      const updated = await apiService.updateProduct(editingProduct.id, dataToSubmit, existingImageUrls)
+      if (updated?.id) upsertProductFromApi(updated)
+      await fetchProducts({ force: true })
 
       toast({
         title: "Success",
@@ -799,7 +870,6 @@ export default function Inventory() {
       setIsEditDialogOpen(false)
       setEditingProduct(null)
       resetForm()
-      refreshAllData()
     } catch (error) {
       toast({
         title: "Error",
@@ -814,11 +884,11 @@ export default function Inventory() {
   const handleToggleStatus = async (id: string) => {
     try {
       await apiService.toggleProductStatus(id)
+      await fetchProducts({ force: true })
       toast({
         title: "Success",
         description: "Product status updated successfully",
       })
-      loadProducts()
     } catch (error) {
       toast({
         title: "Error",
@@ -840,7 +910,7 @@ export default function Inventory() {
       })
       setIsDeleteDialogOpen(false)
       setProductToDelete(null)
-      refreshAllData()
+      await fetchProducts({ force: true })
     } catch (error) {
       toast({
         title: "Error",

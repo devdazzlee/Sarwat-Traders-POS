@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -16,21 +15,15 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
 } from "@/components/ui/dialog";
 import {
   ArrowLeft,
   Download,
-  TrendingUp,
-  TrendingDown,
-  Wallet,
-  CreditCard,
   Search,
   Receipt,
-  Phone,
-  Mail,
   RefreshCw,
   ChevronUp,
   ChevronDown,
@@ -84,6 +77,11 @@ interface CustomerLedgerProps {
 const money = (n: number) =>
   `Rs ${Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 
+/** Replace em/en dashes in API copy with simpler punctuation for display */
+function cleanDisplayText(text: string) {
+  return text.replace(/\s*[\u2013\u2014]\s*/g, ": ").trim();
+}
+
 function entryTypeLabel(type: string) {
   if (type === "CREDIT_SALE") return "Credit Sale";
   if (type === "PAYMENT_RECEIVED") return "Payment";
@@ -92,23 +90,48 @@ function entryTypeLabel(type: string) {
   return type.replace(/_/g, " ");
 }
 
-/** Positive = customer owes; negative = advance credit stored in DB */
-function formatRunningBalance(running: number) {
-  if (running > 0) {
+/** Positive outstanding = customer owes you; negative = prepaid credit in customer's favor */
+function getNetBalancePresentation(balance: number) {
+  if (balance > 0.009) {
     return {
-      text: `Rs ${running.toLocaleString()}`,
+      label: "Amount Due",
+      amount: balance,
       className: "text-amber-700",
-      hint: "Total amount customer owed on the account after this entry (cumulative, not this invoice only)",
+      cardClass: "bg-amber-50 border-amber-200",
+      labelClass: "text-amber-600",
+      hint: "Customer owes this amount on the account",
+      variant: "due" as const,
     };
   }
-  if (running < 0) {
+  if (balance < -0.009) {
     return {
-      text: `Rs ${Math.abs(running).toLocaleString()} Adv`,
+      label: "Available Credit",
+      amount: Math.abs(balance),
       className: "text-emerald-700",
-      hint: "Advance credit after this entry",
+      cardClass: "bg-emerald-50 border-emerald-200",
+      labelClass: "text-emerald-600",
+      hint: "Customer has prepaid credit. Not an amount they need to pay now.",
+      variant: "credit" as const,
     };
   }
-  return { text: "Rs 0", className: "text-slate-500", hint: "Settled" };
+  return {
+    label: "Account Balance",
+    amount: 0,
+    className: "text-slate-600",
+    cardClass: "bg-slate-50 border-slate-200",
+    labelClass: "text-slate-500",
+    hint: "No outstanding balance on this account",
+    variant: "settled" as const,
+  };
+}
+
+function formatRunningBalance(running: number) {
+  const net = getNetBalancePresentation(running);
+  return {
+    text: net.variant === "settled" ? "Rs 0" : money(net.amount),
+    className: net.className,
+    hint: net.hint,
+  };
 }
 
 export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
@@ -121,8 +144,8 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
   const [dateFrom, setDateFrom] = useState<Date | undefined>(undefined);
   const [dateTo, setDateTo] = useState<Date | undefined>(undefined);
   const [summary, setSummary] = useState({
-    totalSales: 0,
-    totalPayments: 0,
+    totalDebits: 0,
+    totalCredits: 0,
     balance: 0,
     balanceDue: 0,
     advanceBalance: 0,
@@ -163,8 +186,8 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
       setEntries(data.entries || []);
       const bal = Number(data.summary?.currentBalance ?? 0);
       setSummary({
-        totalSales: data.summary?.totalSales || 0,
-        totalPayments: data.summary?.totalPayments || 0,
+        totalDebits: data.summary?.totalDebits ?? data.summary?.totalSales ?? 0,
+        totalCredits: data.summary?.totalCredits ?? data.summary?.totalPayments ?? 0,
         balance: bal,
         balanceDue: data.summary?.balanceDue ?? Math.max(0, bal),
         advanceBalance: data.summary?.advanceBalance ?? Math.max(0, -bal),
@@ -204,81 +227,80 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
       return sortOrder === "desc" ? db - da : da - db;
     });
 
-  const openInvoices = useMemo(() => {
+  type PaymentTarget = {
+    key: string;
+    saleId: string | null;
+    referenceNo: string | null;
+    label: string;
+    detail: string;
+    suggestedAmount: number;
+    kind: "invoice" | "account";
+  };
+
+  const paymentTargets = useMemo(() => {
     const seen = new Set<string>();
-    const list: {
-      key: string;
-      saleId: string | null;
-      reference_no: string;
-      invoiceDue: number;
-      debit: number;
-      date: string;
-    }[] = [];
+    const targets: PaymentTarget[] = [];
 
     for (const e of entries) {
-      if (e.type !== "CREDIT_SALE" || (e.invoiceDue ?? 0) <= 0) continue;
-      const key = e.saleId || e.reference_no || e.id;
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      list.push({
-        key,
-        saleId: e.saleId ?? null,
-        reference_no: e.reference_no ?? key,
-        invoiceDue: e.invoiceDue ?? 0,
-        debit: e.debit,
-        date: e.date,
+      const ref = e.saleId || e.reference_no;
+      if (!ref || seen.has(ref)) continue;
+      const due = e.invoiceDue ?? 0;
+      if (due <= 0.009) continue;
+      seen.add(ref);
+      targets.push({
+        key: ref,
+        saleId: e.saleId ?? ref,
+        referenceNo: e.reference_no ?? ref,
+        label: e.reference_no ?? ref,
+        detail: cleanDisplayText(entryTypeLabel(e.type)),
+        suggestedAmount: due,
+        kind: "invoice",
       });
     }
 
-    return list.sort(
-      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
-    );
-  }, [entries]);
+    if (summary.balanceDue > 0.009) {
+      targets.push({
+        key: "__account__",
+        saleId: null,
+        referenceNo: null,
+        label: "Whole account balance",
+        detail: "Applies to total amount due on this customer account",
+        suggestedAmount: summary.balanceDue,
+        kind: "account",
+      });
+    }
+
+    return targets;
+  }, [entries, summary.balanceDue]);
 
   const resolvePaymentTarget = useCallback(
-    (saleKey: string) => {
-      if (!saleKey || saleKey === "__general__") {
+    (targetKey: string) => {
+      if (!targetKey || targetKey === "__account__") {
         return { saleId: null as string | null, referenceNo: null as string | null };
       }
-      const inv = openInvoices.find(
-        (i) => i.key === saleKey || i.saleId === saleKey || i.reference_no === saleKey
+      const t = paymentTargets.find(
+        (i) => i.key === targetKey || i.saleId === targetKey || i.referenceNo === targetKey
       );
       return {
-        saleId: inv?.saleId || inv?.reference_no || saleKey,
-        referenceNo: inv?.reference_no ?? null,
+        saleId: t?.saleId || t?.referenceNo || targetKey,
+        referenceNo: t?.referenceNo ?? null,
       };
     },
-    [openInvoices]
+    [paymentTargets]
   );
 
-  const openPaymentModal = useCallback(
-    (entry?: LedgerEntry | null) => {
-      setSelectedEntry(entry ?? null);
-
-      if (entry) {
-        const key = entry.saleId || entry.reference_no || "";
-        setPaymentSaleKey(key);
-        setPaymentAmount(String(entry.invoiceDue ?? entry.debit ?? ""));
-        setPaymentDescription(`Payment for ${entry.reference_no}`);
-      } else if (openInvoices.length === 1) {
-        const inv = openInvoices[0];
-        setPaymentSaleKey(inv.key);
-        setPaymentAmount(String(inv.invoiceDue));
-        setPaymentDescription(`Payment for ${inv.reference_no}`);
-      } else if (openInvoices.length > 1) {
-        setPaymentSaleKey("");
-        setPaymentAmount("");
-        setPaymentDescription("Payment received");
-      } else {
-        setPaymentSaleKey("__general__");
-        setPaymentAmount("");
-        setPaymentDescription("Account Payment");
-      }
-
-      setIsPaymentModalOpen(true);
-    },
-    [openInvoices]
-  );
+  const applyPaymentTarget = useCallback((targetKey: string) => {
+    setPaymentSaleKey(targetKey);
+    const t = paymentTargets.find((x) => x.key === targetKey);
+    if (!t) return;
+    if (t.kind === "account") {
+      setPaymentDescription("Payment toward account balance");
+      setPaymentAmount(String(t.suggestedAmount));
+      return;
+    }
+    setPaymentDescription(`Payment for ${t.referenceNo ?? t.label}`);
+    setPaymentAmount(String(t.suggestedAmount));
+  }, [paymentTargets]);
 
   const resetPaymentModal = useCallback(() => {
     setSelectedEntry(null);
@@ -287,12 +309,45 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
     setPaymentSaleKey("");
   }, []);
 
+  const openPaymentModal = useCallback(
+    (entry?: LedgerEntry | null) => {
+      setSelectedEntry(entry ?? null);
+
+      if (entry) {
+        const ref = entry.saleId || entry.reference_no || "";
+        const match = paymentTargets.find(
+          (t) => t.key === ref || t.saleId === ref || t.referenceNo === ref
+        );
+        if (match) {
+          applyPaymentTarget(match.key);
+        } else if (summary.balanceDue > 0) {
+          applyPaymentTarget("__account__");
+        } else {
+          setPaymentSaleKey(ref);
+          setPaymentAmount(String(entry.invoiceDue ?? entry.debit ?? ""));
+          setPaymentDescription(
+            entry.reference_no ? `Payment for ${entry.reference_no}` : "Payment received"
+          );
+        }
+      } else if (paymentTargets.length === 1) {
+        applyPaymentTarget(paymentTargets[0].key);
+      } else {
+        setPaymentSaleKey("");
+        setPaymentAmount("");
+        setPaymentDescription("");
+      }
+
+      setIsPaymentModalOpen(true);
+    },
+    [paymentTargets, summary.balanceDue, applyPaymentTarget]
+  );
+
   const formatDate = (d: string) => {
     try {
       const dt = new Date(d);
-      return isNaN(dt.getTime()) ? "—" : format(dt, "dd MMM yyyy");
+      return isNaN(dt.getTime()) ? "N/A" : format(dt, "dd MMM yyyy");
     } catch {
-      return "—";
+      return "N/A";
     }
   };
 
@@ -342,37 +397,41 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
     // Summary Mini-Cards in PDF
     const cardWidth = (pageWidth - 30) / 3;
     
-    // Total Sales
+    const pdfNet = getNetBalancePresentation(summary.balance);
+
     doc.setFillColor(255, 251, 251);
     doc.roundedRect(15, 85, cardWidth - 5, 20, 2, 2, 'F');
     doc.setTextColor(225, 29, 72);
     doc.setFontSize(8);
-    doc.text("TOTAL SALES", 18, 92);
+    doc.text("TOTAL DEBITS", 18, 92);
     doc.setFontSize(11);
-    doc.text(`Rs ${summary.totalSales.toLocaleString()}`, 18, 100);
+    doc.text(`Rs ${summary.totalDebits.toLocaleString()}`, 18, 100);
 
-    // Total Payments
     doc.setFillColor(240, 253, 244);
     doc.roundedRect(15 + cardWidth, 85, cardWidth - 5, 20, 2, 2, 'F');
     doc.setTextColor(21, 128, 61);
     doc.setFontSize(8);
-    doc.text("TOTAL PAYMENTS", 18 + cardWidth, 92);
+    doc.text("TOTAL CREDITS", 18 + cardWidth, 92);
     doc.setFontSize(11);
-    doc.text(`Rs ${summary.totalPayments.toLocaleString()}`, 18 + cardWidth, 100);
+    doc.text(`Rs ${summary.totalCredits.toLocaleString()}`, 18 + cardWidth, 100);
 
-    // Balance Due / Advance
-    const isAdvance = summary.advanceBalance > 0;
-    doc.setFillColor(isAdvance ? 240 : 255, isAdvance ? 253 : 251, isAdvance ? 244 : 235);
-    doc.roundedRect(15 + (cardWidth * 2), 85, cardWidth - 5, 20, 2, 2, 'F');
-    doc.setTextColor(isAdvance ? 21 : 180, isAdvance ? 128 : 83, isAdvance ? 61 : 9);
+    doc.setFillColor(
+      pdfNet.variant === "credit" ? 240 : pdfNet.variant === "due" ? 255 : 248,
+      pdfNet.variant === "credit" ? 253 : pdfNet.variant === "due" ? 251 : 250,
+      pdfNet.variant === "credit" ? 244 : pdfNet.variant === "due" ? 235 : 252
+    );
+    doc.roundedRect(15 + cardWidth * 2, 85, cardWidth - 5, 20, 2, 2, 'F');
+    doc.setTextColor(
+      pdfNet.variant === "credit" ? 21 : pdfNet.variant === "due" ? 180 : 100,
+      pdfNet.variant === "credit" ? 128 : pdfNet.variant === "due" ? 83 : 116,
+      pdfNet.variant === "credit" ? 61 : pdfNet.variant === "due" ? 9 : 139
+    );
     doc.setFontSize(8);
-    doc.text(isAdvance ? "ADVANCE CREDIT" : "BALANCE DUE", 18 + (cardWidth * 2), 92);
+    doc.text(pdfNet.label.toUpperCase(), 18 + cardWidth * 2, 92);
     doc.setFontSize(11);
     doc.text(
-      isAdvance
-        ? `Rs ${summary.advanceBalance.toLocaleString()}`
-        : `Rs ${summary.balanceDue.toLocaleString()}`,
-      18 + (cardWidth * 2),
+      pdfNet.variant === "settled" ? "Rs 0" : `Rs ${pdfNet.amount.toLocaleString()}`,
+      18 + cardWidth * 2,
       100
     );
 
@@ -380,15 +439,15 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
     const tableData = filteredEntries.map(entry => [
       `${formatDate(entry.date)}\n${formatTime(entry.date)}`,
       entry.description,
-      entry.reference_no || "—",
-      entry.debit > 0 ? `Rs ${entry.debit.toLocaleString()}` : "—",
-      entry.credit > 0 ? `Rs ${entry.credit.toLocaleString()}` : "—",
+      entry.reference_no || "",
+      entry.debit > 0 ? `Rs ${entry.debit.toLocaleString()}` : "",
+      entry.credit > 0 ? `Rs ${entry.credit.toLocaleString()}` : "",
       formatRunningBalance(entry.balance).text
     ]);
 
     autoTable(doc, {
       startY: 115,
-      head: [["Date & Time", "Description", "Reference", "Debit", "Credit", "Running Bal."]],
+      head: [["Date & Time", "Description", "Reference", "Debit", "Credit", "Running Balance"]],
       body: tableData,
       theme: 'striped',
       headStyles: { 
@@ -451,22 +510,22 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
       return;
     }
 
-    const saleKey =
+    const targetKey =
       paymentSaleKey ||
       selectedEntry?.saleId ||
       selectedEntry?.reference_no ||
       "";
 
-    if (openInvoices.length > 0 && !saleKey) {
+    if (paymentTargets.length > 0 && !targetKey) {
       toast({
-        title: "Select invoice",
-        description: "Choose which sale this payment is for",
+        title: "Select payment for",
+        description: "Choose which invoice or account balance this payment applies to",
         variant: "destructive",
       });
       return;
     }
 
-    const { saleId } = resolvePaymentTarget(saleKey);
+    const { saleId } = resolvePaymentTarget(targetKey);
 
     setIsSubmittingPayment(true);
     try {
@@ -509,236 +568,137 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
   }
 
   const creditUsed = customer.credit_limit > 0
-    ? Math.min(100, Math.round((summary.balance / customer.credit_limit) * 100))
+    ? Math.min(100, Math.round((Math.max(0, summary.balance) / customer.credit_limit) * 100))
     : 0;
 
+  const netBalance = getNetBalancePresentation(summary.balance);
+  const selectedTarget = paymentTargets.find((t) => t.key === paymentSaleKey);
+
   return (
-    <div className="flex flex-col h-[95vh] bg-slate-50 overflow-hidden">
-      {/* Top Bar */}
-      <div className="bg-white border-b border-slate-200 px-4 md:px-6 pr-20 py-4 shrink-0">
-        <div className="flex items-center justify-between gap-4 flex-wrap">
-          <div className="flex items-center gap-3">
-            <Button variant="ghost" size="icon" onClick={onBack} className="h-9 w-9 shrink-0">
-              <ArrowLeft className="h-5 w-5" />
+    <div className="flex flex-col min-h-0 flex-1 bg-slate-100 h-full">
+      <div className="bg-white border-b border-slate-200 px-4 lg:px-6 py-3 shrink-0">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between max-w-[1400px] mx-auto w-full">
+          <div className="flex items-center gap-3 min-w-0">
+            <Button
+              size="sm"
+              onClick={onBack}
+              className="h-9 shrink-0 gap-1.5 bg-sky-600 font-medium text-white shadow-sm hover:bg-sky-700"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              <span>Back</span>
             </Button>
-            <div>
-              <h1 className="text-lg font-bold text-slate-900 leading-tight">{customer.name}</h1>
-              <div className="flex items-center gap-3 mt-0.5 flex-wrap">
-                {customer.phone_number && (
-                  <span className="flex items-center gap-1 text-xs text-slate-500">
-                    <Phone className="h-3 w-3" /> {customer.phone_number}
-                  </span>
-                )}
-                {customer.email && (
-                  <span className="flex items-center gap-1 text-xs text-slate-500">
-                    <Mail className="h-3 w-3" /> {customer.email}
-                  </span>
-                )}
-              </div>
+            <div className="min-w-0">
+              <h1 className="text-base sm:text-lg font-semibold text-slate-900 truncate">{customer.name}</h1>
+              {customer.phone_number && (
+                <p className="text-xs text-slate-500 truncate">{customer.phone_number}</p>
+              )}
             </div>
           </div>
-          <div className="flex items-center gap-2 mr-8 md:mr-10">
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
             <Button
               variant="outline"
               size="sm"
               onClick={() => fetchLedgerData({ silent: true })}
               disabled={isRefreshing}
-              className="gap-1.5"
+              className="h-9"
             >
-              <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? "animate-spin" : ""}`} /> Refresh
+              <RefreshCw className={`h-4 w-4 sm:mr-1.5 ${isRefreshing ? "animate-spin" : ""}`} />
+              <span className="hidden sm:inline">Refresh</span>
             </Button>
-            <Button variant="outline" size="sm" onClick={handleDownloadPDF} className="gap-1.5 border-blue-200 text-blue-600 hover:bg-blue-50">
-              <Download className="h-3.5 w-3.5" /> Export PDF
+            <Button variant="outline" size="sm" onClick={handleDownloadPDF} className="h-9 hidden md:inline-flex">
+              <Download className="h-4 w-4 mr-1.5" /> PDF
             </Button>
-            <Button variant="outline" size="sm" onClick={handlePrint} className="gap-1.5 border-slate-200 text-slate-700 hover:bg-slate-50">
-              <Printer className="h-3.5 w-3.5" /> Print
+            <Button variant="outline" size="sm" onClick={handlePrint} className="h-9 hidden md:inline-flex">
+              <Printer className="h-4 w-4 mr-1.5" /> Print
             </Button>
-            <Button 
-                size="sm" 
-                className="gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm"
-                onClick={() => openPaymentModal(null)}
+            <Button
+              size="sm"
+              className="h-9 bg-emerald-600 hover:bg-emerald-700 text-white"
+              onClick={() => openPaymentModal(null)}
             >
-              <Plus className="h-3.5 w-3.5" /> Receive Payment
+              <Plus className="h-4 w-4 sm:mr-1.5" />
+              <span className="hidden sm:inline">Receive Payment</span>
+              <span className="sm:hidden">Pay</span>
             </Button>
           </div>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 md:p-8 space-y-6 w-full max-w-[1600px] mx-auto">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 lg:p-6">
+        <div className="max-w-[1400px] mx-auto w-full space-y-5">
 
-        {/* Summary Cards */}
-        <div className="grid grid-cols-2 xl:grid-cols-4 gap-4 md:gap-6">
-          <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Total Sales</span>
-              <div className="bg-rose-50 p-1.5 rounded-lg">
-                <TrendingUp className="h-3.5 w-3.5 text-rose-500" />
-              </div>
-            </div>
-            <div className="text-xl font-black text-slate-900">Rs {summary.totalSales.toLocaleString()}</div>
-            <div className="text-[10px] text-slate-400 mt-0.5">Credit purchases</div>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="bg-white rounded-xl border border-slate-200 p-3.5">
+            <p className="text-[11px] font-medium text-slate-500 uppercase">Total Debits</p>
+            <p className="text-lg font-semibold text-rose-600 mt-1 tabular-nums">{money(summary.totalDebits)}</p>
           </div>
-
-          <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Payments</span>
-              <div className="bg-emerald-50 p-1.5 rounded-lg">
-                <TrendingDown className="h-3.5 w-3.5 text-emerald-500" />
-              </div>
-            </div>
-            <div className="text-xl font-black text-slate-900">Rs {summary.totalPayments.toLocaleString()}</div>
-            <div className="text-[10px] text-slate-400 mt-0.5">Received from customer</div>
+          <div className="bg-white rounded-xl border border-slate-200 p-3.5">
+            <p className="text-[11px] font-medium text-slate-500 uppercase">Total Credits</p>
+            <p className="text-lg font-semibold text-emerald-600 mt-1 tabular-nums">{money(summary.totalCredits)}</p>
           </div>
-
-          <div
-            className={`rounded-2xl border p-4 shadow-sm ${
-              summary.balanceDue > 0
-                ? "bg-amber-50 border-amber-200"
-                : summary.advanceBalance > 0
-                  ? "bg-emerald-50 border-emerald-200"
-                  : "bg-slate-50 border-slate-200"
-            }`}
-          >
-            <div className="flex items-center justify-between mb-2">
-              <span
-                className={`text-xs font-semibold uppercase tracking-wide ${
-                  summary.advanceBalance > 0 ? "text-emerald-600" : summary.balanceDue > 0 ? "text-amber-600" : "text-slate-500"
-                }`}
-              >
-                {summary.advanceBalance > 0 ? "Advance Credit" : "Balance Due"}
-              </span>
-              <div
-                className={`p-1.5 rounded-lg ${
-                  summary.advanceBalance > 0 ? "bg-emerald-100" : summary.balanceDue > 0 ? "bg-amber-100" : "bg-slate-100"
-                }`}
-              >
-                <Wallet
-                  className={`h-3.5 w-3.5 ${
-                    summary.advanceBalance > 0 ? "text-emerald-600" : summary.balanceDue > 0 ? "text-amber-600" : "text-slate-500"
-                  }`}
-                />
-              </div>
-            </div>
-            <div
-              className={`text-xl font-black ${
-                summary.advanceBalance > 0 ? "text-emerald-700" : summary.balanceDue > 0 ? "text-amber-700" : "text-slate-600"
-              }`}
-            >
-              {summary.advanceBalance > 0
-                ? money(summary.advanceBalance)
-                : summary.balanceDue > 0
-                  ? money(summary.balanceDue)
-                  : "Rs 0"}
-            </div>
-            <div className="text-[10px] mt-0.5 text-slate-500">
-              {summary.advanceBalance > 0
-                ? "Customer paid more than total due (prepaid)"
-                : summary.balanceDue > 0
-                  ? "Amount still owed by customer"
-                  : "No outstanding due"}
-            </div>
+          <div className={`rounded-xl border p-3.5 ${netBalance.cardClass}`}>
+            <p className={`text-[11px] font-medium uppercase ${netBalance.labelClass}`}>{netBalance.label}</p>
+            <p className={`text-lg font-semibold mt-1 tabular-nums ${netBalance.className}`}>
+              {netBalance.variant === "settled" ? "Rs 0" : money(netBalance.amount)}
+            </p>
           </div>
-
-          <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Credit Limit</span>
-              <div className="bg-blue-50 p-1.5 rounded-lg">
-                <CreditCard className="h-3.5 w-3.5 text-blue-500" />
-              </div>
-            </div>
-            <div className="text-xl font-black text-slate-900">Rs {Number(customer.credit_limit).toLocaleString()}</div>
-            {customer.credit_limit > 0 && (
-              <div className="mt-1.5">
-                <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all ${creditUsed >= 90 ? "bg-red-500" : creditUsed >= 60 ? "bg-amber-400" : "bg-emerald-400"}`}
-                    style={{ width: `${creditUsed}%` }}
-                  />
-                </div>
-                <div className="text-[10px] text-slate-400 mt-0.5">{creditUsed}% used</div>
-              </div>
-            )}
+          <div className="bg-white rounded-xl border border-slate-200 p-3.5">
+            <p className="text-[11px] font-medium text-slate-500 uppercase">Credit Limit</p>
+            <p className="text-lg font-semibold text-slate-900 mt-1 tabular-nums">
+              {money(Number(customer.credit_limit))}
+            </p>
           </div>
         </div>
 
-        {/* Statement Table */}
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-          {/* Table Header / Filters */}
-          <div className="px-5 py-4 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-3">
-            <div>
-              <h2 className="text-base font-bold text-slate-800 flex items-center gap-2">
-                <Receipt className="h-4 w-4 text-blue-500" />
-                Statement of Account
-              </h2>
-              <p className="text-xs text-slate-400 mt-0.5">
-                {entries.length} transaction{entries.length !== 1 ? "s" : ""}
-                {" · "}
-                <span className="text-slate-500">
-                  Running balance = total owed on account after each row (use <strong className="font-semibold">Due</strong> for per-invoice amount)
-                </span>
-              </p>
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
+          <div className="px-4 py-3 border-b border-slate-100">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold text-slate-800">Statement of Account</h2>
+              <span className="text-xs text-slate-500">{entries.length} entries</span>
             </div>
-            <div className="flex flex-nowrap items-center gap-2 overflow-x-auto no-scrollbar py-1">
-              <div className="relative shrink-0">
-                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+          </div>
+
+          <div className="px-4 py-3 border-b border-slate-100 bg-slate-50/50">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+              <div className="relative sm:col-span-2 lg:col-span-1">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
                 <Input
-                  placeholder="Search transactions..."
+                  placeholder="Search..."
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  className="pl-9 h-10 text-sm w-[200px] md:w-[250px] border-slate-200"
+                  className="pl-9 h-9 text-sm bg-white"
                 />
               </div>
-              
-              <div className="flex items-center gap-1.5 shrink-0">
-                <DatePicker 
-                  date={dateFrom} 
-                  onDateChange={setDateFrom} 
-                  placeholder="From Date" 
-                />
-                <span className="text-[10px] font-bold text-slate-300 uppercase px-1">to</span>
-                <DatePicker 
-                  date={dateTo} 
-                  onDateChange={setDateTo} 
-                  placeholder="To Date" 
-                />
-              </div>
-
+              <DatePicker date={dateFrom} onDateChange={setDateFrom} placeholder="From" />
+              <DatePicker date={dateTo} onDateChange={setDateTo} placeholder="To" />
               <Button
                 variant="outline"
                 size="sm"
-                className="h-10 px-3 text-sm gap-2 text-slate-500 border-slate-200 shrink-0"
-                onClick={() => setSortOrder(o => o === "desc" ? "asc" : "desc")}
+                className="h-9 w-full justify-center text-slate-600 bg-white"
+                onClick={() => setSortOrder((o) => (o === "desc" ? "asc" : "desc"))}
               >
-                {sortOrder === "desc" ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
-                <span className="hidden sm:inline">{sortOrder === "desc" ? "Newest First" : "Oldest First"}</span>
+                {sortOrder === "desc" ? <ChevronDown className="h-4 w-4 mr-1" /> : <ChevronUp className="h-4 w-4 mr-1" />}
+                {sortOrder === "desc" ? "Newest" : "Oldest"}
               </Button>
             </div>
           </div>
 
-          {/* Table */}
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+          <div className="overflow-x-auto overscroll-x-contain">
+            <table className="w-full min-w-[720px] text-sm border-collapse">
               <thead>
-                <tr className="border-b border-slate-100 bg-slate-50/70">
-                  <th className="text-left px-6 py-4 text-[11px] font-bold text-slate-400 uppercase tracking-wider w-[150px]">Date & Time</th>
-                  <th className="text-left px-6 py-4 text-[11px] font-bold text-slate-400 uppercase tracking-wider">Description</th>
-                  <th className="text-left px-6 py-4 text-[11px] font-bold text-slate-400 uppercase tracking-wider w-[180px]">Reference</th>
-                  <th className="text-right px-6 py-4 text-[11px] font-bold text-slate-400 uppercase tracking-wider w-[140px]">Debit</th>
-                  <th className="text-right px-6 py-4 text-[11px] font-bold text-slate-400 uppercase tracking-wider w-[130px]">Due</th>
-                  <th className="text-right px-6 py-4 text-[11px] font-bold text-slate-400 uppercase tracking-wider w-[140px]">Credit</th>
-                  <th
-                    className="text-right px-6 py-4 text-[11px] font-bold text-slate-400 uppercase tracking-wider w-[150px]"
-                    title="Cumulative account balance after this entry"
-                  >
-                    Running Bal.
-                  </th>
-                  <th className="text-right px-6 py-4 text-[11px] font-bold text-slate-400 uppercase tracking-wider w-[100px]">Action</th>
+                <tr className="border-b border-slate-200 bg-slate-50">
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 w-[110px]">Date</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 min-w-[200px]">Details</th>
+                  <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 w-[100px]">Debit</th>
+                  <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 w-[100px]">Credit</th>
+                  <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 w-[120px]">Balance</th>
+                  <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 w-[88px]"></th>
                 </tr>
               </thead>
               <tbody>
                 {filteredEntries.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="py-16 text-center">
+                    <td colSpan={6} className="py-16 text-center">
                       <div className="flex flex-col items-center gap-2 text-slate-400">
                         <Receipt className="h-8 w-8 opacity-20" />
                         <p className="text-sm font-medium">No transactions found</p>
@@ -747,81 +707,56 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                     </td>
                   </tr>
                 ) : (
-                  filteredEntries.map((entry, idx) => (
-                    <tr
-                      key={entry.id}
-                      className={`border-b border-slate-50 hover:bg-slate-50/60 transition-colors ${idx % 2 === 0 ? "" : "bg-slate-50/20"}`}
-                    >
-                      <td className="px-6 py-5">
-                        <div className="font-bold text-slate-800 text-sm">{formatDate(entry.date)}</div>
-                        <div className="text-xs text-slate-400 mt-1">{formatTime(entry.date)}</div>
+                  filteredEntries.map((entry) => (
+                    <tr key={entry.id} className="border-b border-slate-100 hover:bg-slate-50/50">
+                      <td className="px-4 py-3 align-top whitespace-nowrap">
+                        <p className="font-medium text-slate-800 text-xs">{formatDate(entry.date)}</p>
+                        <p className="text-[11px] text-slate-400">{formatTime(entry.date)}</p>
                       </td>
-                      <td className="px-6 py-5">
-                        <div className="flex items-center gap-3">
-                          <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${entry.type === "CREDIT_SALE" ? "bg-rose-400 shadow-[0_0_8px_rgba(251,113,133,0.4)]" : "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.4)]"}`} />
-                          <div>
-                            <div className="font-bold text-slate-800 text-sm leading-snug">{entry.description}</div>
-                            <Badge variant="outline" className="mt-1 text-[10px] h-5 px-2 border-slate-200 text-slate-500 font-bold uppercase">
-                              {entryTypeLabel(entry.type)}
-                            </Badge>
-                          </div>
+                      <td className="px-4 py-3 align-top min-w-0">
+                        <p className="text-sm text-slate-800 leading-snug break-words">
+                          {cleanDisplayText(entry.description)}
+                        </p>
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1">
+                          <span className="text-[11px] text-slate-500">{entryTypeLabel(entry.type)}</span>
+                          {entry.reference_no && (
+                            <>
+                              <span className="text-slate-300">·</span>
+                              <span className="text-[11px] font-mono text-slate-600">{entry.reference_no}</span>
+                            </>
+                          )}
                         </div>
                       </td>
-                      <td className="px-6 py-5">
-                        <span className="font-mono text-xs text-blue-600 font-bold px-2 py-1 bg-blue-50 rounded-md">
-                          {entry.reference_no || <span className="text-slate-300 font-normal">—</span>}
-                        </span>
-                      </td>
-                      <td className="px-6 py-5 text-right">
+                      <td className="px-4 py-3 text-right align-top tabular-nums whitespace-nowrap">
                         {entry.debit > 0 ? (
-                          <div>
-                            <span className="font-black text-rose-600 text-sm">Rs {entry.debit.toLocaleString()}</span>
-                            {(entry.invoicePaid ?? 0) > 0 && (
-                              <div className="text-[10px] text-slate-400 font-medium mt-0.5">
-                                Paid Rs {(entry.invoicePaid ?? 0).toLocaleString()}
-                              </div>
-                            )}
-                          </div>
+                          <span className="font-semibold text-rose-600">{money(entry.debit)}</span>
                         ) : (
-                          <span className="text-slate-200 text-sm">—</span>
+                          <span className="text-slate-300">-</span>
                         )}
                       </td>
-                      <td className="px-6 py-5 text-right">
-                        {entry.type === "CREDIT_SALE" ? (
-                          (entry.invoiceDue ?? 0) > 0 ? (
-                            <span className="font-black text-amber-700 text-sm">
-                              Rs {(entry.invoiceDue ?? 0).toLocaleString()}
-                            </span>
-                          ) : (
-                            <span className="text-[10px] font-bold text-emerald-600 uppercase">Paid</span>
-                          )
-                        ) : (
-                          <span className="text-slate-200 text-sm">—</span>
-                        )}
-                      </td>
-                      <td className="px-6 py-5 text-right">
+                      <td className="px-4 py-3 text-right align-top tabular-nums whitespace-nowrap">
                         {entry.credit > 0 ? (
-                          <span className="font-black text-emerald-600 text-sm">Rs {entry.credit.toLocaleString()}</span>
+                          <span className="font-semibold text-emerald-600">{money(entry.credit)}</span>
                         ) : (
-                          <span className="text-slate-200 text-sm">—</span>
+                          <span className="text-slate-300">-</span>
                         )}
                       </td>
-                      <td className="px-6 py-5 text-right">
+                      <td className="px-4 py-3 text-right align-top tabular-nums whitespace-nowrap">
                         {(() => {
                           const rb = formatRunningBalance(entry.balance);
                           return (
-                            <span className={`font-black text-sm ${rb.className}`} title={rb.hint}>
+                            <span className={`font-semibold text-sm ${rb.className}`} title={rb.hint}>
                               {rb.text}
                             </span>
                           );
                         })()}
                       </td>
-                      <td className="px-6 py-5 text-right">
+                      <td className="px-4 py-3 text-right align-top">
                         {entry.isCollectable && (entry.invoiceDue ?? 0) > 0 && (
-                          <Button 
-                            variant="ghost" 
+                          <Button
+                            variant="outline"
                             size="sm"
-                            className="h-8 px-3 text-[11px] uppercase font-bold text-emerald-600 bg-emerald-50 hover:bg-emerald-100 border border-emerald-100 rounded-lg shadow-sm"
+                            className="h-8 text-xs text-emerald-700 border-emerald-200 hover:bg-emerald-50"
                             onClick={() => openPaymentModal(entry)}
                           >
                             Collect
@@ -834,43 +769,26 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
               </tbody>
               {filteredEntries.length > 0 && (
                 <tfoot>
-                  <tr className="bg-slate-50 border-t-2 border-slate-200">
-                    <td colSpan={3} className="px-5 py-3 text-xs font-bold text-slate-600 uppercase tracking-wide">
+                  <tr className="bg-slate-50 border-t border-slate-200">
+                    <td colSpan={2} className="px-4 py-3 text-xs font-semibold text-slate-600">
                       Totals
                     </td>
-                    <td className="px-4 py-3 text-right font-black text-rose-600 text-xs">
-                      Rs {filteredEntries.reduce((s, e) => s + e.debit, 0).toLocaleString()}
+                    <td className="px-4 py-3 text-right font-semibold text-rose-600 tabular-nums">
+                      {money(filteredEntries.reduce((s, e) => s + e.debit, 0))}
                     </td>
-                    <td className="px-4 py-3 text-right font-black text-amber-700 text-xs">
-                      {summary.balanceDue > 0
-                        ? `Rs ${summary.balanceDue.toLocaleString()}`
-                        : summary.advanceBalance > 0
-                          ? "—"
-                          : "Rs 0"}
+                    <td className="px-4 py-3 text-right font-semibold text-emerald-600 tabular-nums">
+                      {money(filteredEntries.reduce((s, e) => s + e.credit, 0))}
                     </td>
-                    <td className="px-4 py-3 text-right font-black text-emerald-600 text-xs">
-                      Rs {filteredEntries.reduce((s, e) => s + e.credit, 0).toLocaleString()}
+                    <td className={`px-4 py-3 text-right font-semibold tabular-nums ${netBalance.className}`}>
+                      {netBalance.variant === "settled" ? "Rs 0" : money(netBalance.amount)}
                     </td>
-                    <td className="px-5 py-3 text-right text-xs font-black text-nowrap">
-                      {summary.advanceBalance > 0 ? (
-                        <span className="text-emerald-700">Adv {money(summary.advanceBalance)}</span>
-                      ) : summary.balanceDue > 0 ? (
-                        <span className="text-amber-700">Due {money(summary.balanceDue)}</span>
-                      ) : (
-                        <span className="text-slate-500">Rs 0</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3"></td>
+                    <td />
                   </tr>
                 </tfoot>
               )}
             </table>
           </div>
         </div>
-
-        {/* Print footer */}
-        <div className="hidden print:block text-center pt-8 border-t border-slate-200 text-xs text-slate-400">
-          System-generated statement — Sarwat Trader ERP
         </div>
       </div>
 
@@ -881,121 +799,102 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
           if (!open) resetPaymentModal();
         }}
       >
-        <DialogContent className="sm:max-w-[440px]">
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <DollarSign className="h-5 w-5 text-emerald-600" />
               Receive Payment
             </DialogTitle>
             <DialogDescription>
-              {selectedEntry
-                ? `Apply payment toward invoice ${selectedEntry.reference_no}. Extra amount becomes advance credit.`
-                : summary.balanceDue > 0
-                  ? `Outstanding due: ${money(summary.balanceDue)}. Overpayment is stored as advance credit.`
-                  : summary.advanceBalance > 0
-                    ? `Current advance credit: ${money(summary.advanceBalance)}.`
-                    : "No outstanding due on this account."}
+              {netBalance.variant === "due"
+                ? `${netBalance.label}: ${money(netBalance.amount)}`
+                : netBalance.variant === "credit"
+                  ? `${netBalance.label}: ${money(netBalance.amount)}`
+                  : "Account is settled."}
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 py-4">
-            {openInvoices.length > 0 && (
-              <div className="space-y-2">
-                <Label className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                  Apply to invoice
-                </Label>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="payment-target">
+                Payment applies to <span className="text-destructive">*</span>
+              </Label>
+              {paymentTargets.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No open balance to collect.</p>
+              ) : (
                 <Select
                   value={paymentSaleKey || undefined}
-                  onValueChange={(value) => {
-                    setPaymentSaleKey(value);
-                    if (value === "__general__") {
-                      setPaymentDescription("Account Payment");
-                      return;
-                    }
-                    const inv = openInvoices.find(
-                      (i) => i.key === value || i.reference_no === value
-                    );
-                    if (inv) {
-                      setPaymentDescription(`Payment for ${inv.reference_no}`);
-                      setPaymentAmount(String(inv.invoiceDue));
-                    }
-                  }}
+                  onValueChange={applyPaymentTarget}
                 >
-                  <SelectTrigger className="h-10 text-sm font-medium">
-                    <SelectValue placeholder="Select sale / invoice…" />
+                  <SelectTrigger id="payment-target" className="h-10">
+                    <SelectValue placeholder="Select invoice or account" />
                   </SelectTrigger>
                   <SelectContent>
-                    {openInvoices.map((inv) => (
-                      <SelectItem key={inv.key} value={inv.key}>
-                        {inv.reference_no} — Due Rs {inv.invoiceDue.toLocaleString()}
-                        {inv.debit !== inv.invoiceDue
-                          ? ` (of Rs ${inv.debit.toLocaleString()})`
-                          : ""}
+                    {paymentTargets.map((t) => (
+                      <SelectItem key={t.key} value={t.key}>
+                        <span className="flex w-full items-center justify-between gap-3">
+                          <span className="truncate">
+                            {t.label}
+                            {t.kind === "invoice" && t.detail ? (
+                              <span className="text-muted-foreground"> · {t.detail}</span>
+                            ) : null}
+                          </span>
+                          <span className="shrink-0 tabular-nums text-muted-foreground">
+                            {money(t.suggestedAmount)}
+                          </span>
+                        </span>
                       </SelectItem>
                     ))}
-                    <SelectItem value="__general__">
-                      General payment (auto-allocate to open invoices)
-                    </SelectItem>
                   </SelectContent>
                 </Select>
-              </div>
-            )}
-
-            <div className="space-y-2">
-              <Label htmlFor="amount" className="text-xs font-bold uppercase tracking-wider text-slate-500">Amount (Rs)</Label>
+              )}
+              {selectedTarget?.kind === "account" && (
+                <p className="text-xs text-muted-foreground">
+                  Applies to total amount due on this account.
+                </p>
+              )}
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="amount">Amount (Rs)</Label>
               <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">Rs</span>
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">
+                  Rs
+                </span>
                 <Input
                   id="amount"
                   type="number"
-                  placeholder="0.00"
-                  className="pl-10 h-11 text-lg font-black"
+                  className="pl-10"
                   value={paymentAmount}
                   onChange={(e) => setPaymentAmount(e.target.value)}
-                  autoFocus
                 />
               </div>
-              {(() => {
-                const key = paymentSaleKey || selectedEntry?.saleId || selectedEntry?.reference_no;
-                const inv = openInvoices.find(
-                  (i) => i.key === key || i.reference_no === key
-                );
-                const due = inv?.invoiceDue ?? selectedEntry?.invoiceDue ?? 0;
-                if (due > 0) {
-                  return (
-                    <p className="text-[10px] text-amber-600 font-bold uppercase tracking-tight">
-                      Amount due on selected invoice: Rs {due.toLocaleString()}
-                    </p>
-                  );
-                }
-                return null;
-              })()}
+              {selectedTarget && selectedTarget.suggestedAmount > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Due on selection: {money(selectedTarget.suggestedAmount)}
+                </p>
+              )}
             </div>
             <div className="space-y-2">
-              <Label htmlFor="description" className="text-xs font-bold uppercase tracking-wider text-slate-500">Description / Remarks</Label>
+              <Label htmlFor="description">Description</Label>
               <Input
                 id="description"
-                placeholder="e.g., Partial cash payment"
-                className="h-10 text-sm"
                 value={paymentDescription}
                 onChange={(e) => setPaymentDescription(e.target.value)}
               />
             </div>
           </div>
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setIsPaymentModalOpen(false);
-                resetPaymentModal();
-              }}
-              disabled={isSubmittingPayment}
-            >
+            <Button variant="outline" onClick={() => setIsPaymentModalOpen(false)} disabled={isSubmittingPayment}>
               Cancel
             </Button>
-            <Button 
-                onClick={handlePaymentSubmit} 
-                className="bg-emerald-600 hover:bg-emerald-700 text-white"
-                disabled={isSubmittingPayment}
+            <Button
+              onClick={handlePaymentSubmit}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white"
+              disabled={
+                isSubmittingPayment ||
+                (paymentTargets.length > 0 && !paymentSaleKey) ||
+                !paymentAmount ||
+                Number(paymentAmount) <= 0
+              }
             >
               {isSubmittingPayment ? (
                 <>

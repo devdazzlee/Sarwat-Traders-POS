@@ -303,11 +303,32 @@ class CustomerLedgerService {
       }),
       prisma.customerLedger.findMany({
         where: { customer_id: customerId },
-        select: { entry_type: true, amount: true },
+        orderBy: { created_at: 'asc' },
+        select: { id: true, entry_type: true, amount: true, balance_after: true },
       }),
     ]);
 
-    // Compute summary from all entries (not just this page)
+    // Derive debit/credit from running balance deltas (works for sales, payments, adjustments, refunds)
+    const debitCreditById = new Map<string, { debit: number; credit: number }>();
+    let prevBalance = 0;
+    let totalDebits = 0;
+    let totalCredits = 0;
+    for (const e of allEntries) {
+      const bal = Number(e.balance_after);
+      const delta = bal - prevBalance;
+      let debit = 0;
+      let credit = 0;
+      if (delta > 0.009) {
+        debit = delta;
+        totalDebits += delta;
+      } else if (delta < -0.009) {
+        credit = Math.abs(delta);
+        totalCredits += Math.abs(delta);
+      }
+      debitCreditById.set(e.id, { debit, credit });
+      prevBalance = bal;
+    }
+
     let totalSales = 0;
     let totalPayments = 0;
     for (const e of allEntries) {
@@ -357,10 +378,9 @@ class CustomerLedgerService {
         e.entry_type === 'CREDIT_SALE' && saleInfo ? Number(saleInfo.total_amount) : 0;
       const invoicePaid =
         e.entry_type === 'CREDIT_SALE' && saleInfo ? Number(saleInfo.payment_received) : 0;
-      const invoiceDue =
-        e.entry_type === 'CREDIT_SALE' && saleInfo
-          ? Math.max(0, invoiceTotal - invoicePaid)
-          : 0;
+      const invoiceDue = saleInfo ? Math.max(0, invoiceTotal - invoicePaid) : 0;
+
+      const amounts = debitCreditById.get(e.id) ?? { debit: 0, credit: 0 };
 
       return {
         id: e.id,
@@ -368,8 +388,8 @@ class CustomerLedgerService {
         type: e.entry_type,
         description: e.description ?? '',
         reference_no: e.reference_no ?? saleInfo?.sale_number ?? null,
-        debit: e.entry_type === 'CREDIT_SALE' ? Number(e.amount) : 0,
-        credit: e.entry_type === 'PAYMENT_RECEIVED' ? Number(e.amount) : 0,
+        debit: amounts.debit,
+        credit: amounts.credit,
         balance: Number(e.balance_after),
         invoiceTotal,
         invoicePaid,
@@ -390,6 +410,8 @@ class CustomerLedgerService {
       summary: {
         totalSales,
         totalPayments,
+        totalDebits,
+        totalCredits,
         currentBalance,
         balanceDue: Math.max(0, currentBalance),
         advanceBalance: Math.max(0, -currentBalance),

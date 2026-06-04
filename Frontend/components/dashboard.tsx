@@ -68,6 +68,8 @@ interface DashboardProps {
 
 export function Dashboard({ onLogout }: DashboardProps) {
   const DASHBOARD_TAB_STORAGE_KEY = "dashboard_active_tab";
+  const LEDGER_CUSTOMER_KEY = "dashboard_ledger_customer_id";
+
   const [activeTab, setActiveTab] = useState<string>(() => {
     if (typeof window === "undefined") return "dashboard";
     const savedTab = localStorage.getItem(DASHBOARD_TAB_STORAGE_KEY);
@@ -76,10 +78,28 @@ export function Dashboard({ onLogout }: DashboardProps) {
     return preferredTab || "dashboard";
   });
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    return sessionStorage.getItem(LEDGER_CUSTOMER_KEY);
+  });
+
+  const openCustomerLedger = (customerId: string) => {
+    setSelectedCustomerId(customerId);
+    sessionStorage.setItem(LEDGER_CUSTOMER_KEY, customerId);
+    setActiveTab("customer-ledger");
+  };
+
+  const closeCustomerLedger = () => {
+    setSelectedCustomerId(null);
+    sessionStorage.removeItem(LEDGER_CUSTOMER_KEY);
+    setActiveTab("customers");
+  };
 
   useEffect(() => {
     localStorage.setItem(DASHBOARD_TAB_STORAGE_KEY, activeTab);
+    if (activeTab !== "customer-ledger") {
+      sessionStorage.removeItem(LEDGER_CUSTOMER_KEY);
+    }
   }, [activeTab]);
 
   const renderContent = () => {
@@ -133,28 +153,15 @@ export function Dashboard({ onLogout }: DashboardProps) {
       case "pricing":
         return <Pricing />;
       case "customers":
-        return <Customers 
-          onViewLedger={(id) => {
-            setSelectedCustomerId(id);
-            setActiveTab("customer-ledger");
-          }} 
-        />;
+        return <Customers onViewLedger={openCustomerLedger} />;
       case "customer-ledger":
         return selectedCustomerId ? (
-          <CustomerLedger 
-            customerId={selectedCustomerId} 
-            onBack={() => {
-              setSelectedCustomerId(null);
-              setActiveTab("customers");
-            }} 
+          <CustomerLedger
+            customerId={selectedCustomerId}
+            onBack={closeCustomerLedger}
           />
         ) : (
-          <Customers 
-            onViewLedger={(id) => {
-              setSelectedCustomerId(id);
-              setActiveTab("customer-ledger");
-            }} 
-          />
+          <Customers onViewLedger={openCustomerLedger} />
         );
       case "loyalty":
         return <Stocks />;

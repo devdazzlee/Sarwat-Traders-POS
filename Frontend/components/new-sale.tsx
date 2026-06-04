@@ -212,7 +212,11 @@ export function NewSale() {
   // Refs for price and quantity inputs for keyboard navigation
   const priceInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const quantityInputRefs = useRef<Record<string, HTMLElement | null>>({});
+  const quantityPlusRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const quickQtyPlusRef = useRef<HTMLButtonElement | null>(null);
+  const [quickQtyFocusTick, setQuickQtyFocusTick] = useState(0);
   const lastAddedProductId = useRef<string | null>(null);
+  const [activeCartLineId, setActiveCartLineId] = useState<string | null>(null);
   // Refs for cart items and scrollable container
   const cartItemRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const cartScrollContainerRef = useRef<HTMLDivElement | null>(null);
@@ -523,7 +527,8 @@ export function NewSale() {
     if (customPrice !== undefined && originalProductPrice > 0) {
       // Calculate quantity: barcodePrice / originalPrice
       finalQuantity = customPrice / originalProductPrice;
-      finalQuantity = Math.max(0.01, finalQuantity); // Ensure minimum quantity
+      const minFromUnit = isWeightUnit(product.unitName) ? 0.01 : 1;
+      finalQuantity = Math.max(minFromUnit, finalQuantity);
       
       // Show the scanned price (barcode value) in the price field for display
       displayPrice = customPrice; // Display barcode price in price field
@@ -534,60 +539,64 @@ export function NewSale() {
       finalQuantity = Math.max(1, quantity);
     }
     
-    console.log('addToCart - Barcode price:', customPrice, 'Original price:', originalProductPrice, 'Calculated quantity:', finalQuantity, 'Display price:', displayPrice, 'Actual unit price:', actualUnitPrice);
+    const isBarcodeLine = customPrice !== undefined && originalProductPrice > 0;
+    let affectedLineId: string | null = null;
 
-    // Always create a NEW separate line item for each scan (don't increment existing)
-    // Generate unique ID for each scan to allow multiple separate entries
-    const uniqueCartItemId = `${product.id}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-
-    // Use functional state update to avoid stale closure issues
-    setCart((prevCart) => [
-      ...prevCart,
-      {
-        id: uniqueCartItemId, // Unique ID for this cart entry (each scan = new entry)
-        productId: product.id, // Store original product ID for reference
-        name: product.name,
-        price: displayPrice, // Display price (barcode price if scanned, otherwise original)
-        originalPrice: originalProductPrice, // Store original product price
-        actualUnitPrice: actualUnitPrice, // Actual unit price for line total calculations
-        quantity: finalQuantity, // Calculated quantity (barcodePrice / originalPrice)
-        category: product.category,
-        unitId: product.unitId,
-        unitName: product.unitName,
-        unit: product.unitName,
-      },
-    ]);
-
-    lastAddedProductId.current = uniqueCartItemId;
-    
-    // Use startTransition for non-urgent UI updates (scroll, focus) - doesn't block main thread
-    startTransition(() => {
-      // Instant scroll to newly added item (use unique cart item ID)
-      setTimeout(() => {
-        const cartItem = cartItemRefs.current[uniqueCartItemId];
-        if (cartItem && cartScrollContainerRef.current) {
-          cartItem.scrollIntoView({ 
-            behavior: 'auto', // Instant scroll
-            block: 'nearest',
-            inline: 'nearest'
-          });
+    setCart((prevCart) => {
+      if (!isBarcodeLine) {
+        const lastLineIndex = prevCart.findLastIndex(
+          (line) => line.productId === product.id || line.id === product.id,
+        );
+        if (lastLineIndex >= 0) {
+          const existing = prevCart[lastLineIndex];
+          const unitName = existing.unitName || existing.unit;
+          const bumpBy = isPieceUnit(unitName) ? 1 : getQuantityIncrement(unitName);
+          const nextQty = isPieceUnit(unitName)
+            ? Math.round(existing.quantity + bumpBy)
+            : Number((existing.quantity + bumpBy).toFixed(3));
+          const minQ = isPieceUnit(unitName) ? 1 : 0.01;
+          const updated = [...prevCart];
+          updated[lastLineIndex] = {
+            ...existing,
+            quantity: Math.max(minQ, nextQty),
+          };
+          affectedLineId = existing.id;
+          return updated;
         }
-      }, 0);
-
-      // DISABLED: Auto-focus on price input - removed to prevent interference with scanning
-      // Keep focus on search input for rapid scanning
-      /*
-      if (customPrice === undefined) {
-        setTimeout(() => {
-          const priceInput = priceInputRefs.current[uniqueCartItemId];
-          if (priceInput) {
-            priceInput.focus();
-            priceInput.select();
-          }
-        }, 0);
       }
-      */
+
+      const uniqueCartItemId = `${product.id}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      affectedLineId = uniqueCartItemId;
+
+      return [
+        ...prevCart,
+        {
+          id: uniqueCartItemId,
+          productId: product.id,
+          name: product.name,
+          price: displayPrice,
+          originalPrice: originalProductPrice,
+          actualUnitPrice: actualUnitPrice,
+          quantity: finalQuantity,
+          category: product.category,
+          unitId: product.unitId,
+          unitName: product.unitName,
+          unit: product.unitName,
+        },
+      ];
     });
+
+    if (affectedLineId) {
+      lastAddedProductId.current = affectedLineId;
+      setActiveCartLineId(affectedLineId);
+      setQuantityInputs((prev) => {
+        const next = { ...prev };
+        delete next[affectedLineId!];
+        return next;
+      });
+    }
+    
+    setQuickQtyFocusTick((n) => n + 1);
 
     // Toast removed as per user request - no toast when selecting products
   };
@@ -658,11 +667,8 @@ export function NewSale() {
     );
   };
 
-  const isPieceUnit = (unitName?: string): boolean => {
-    if (!unitName) return false;
-    const unitLower = unitName.toLowerCase();
-    return unitLower.includes("pc") || unitLower.includes("piece");
-  };
+  /** Sell by whole number unless the unit is weight (kg/g). Unknown/empty = pieces. */
+  const isPieceUnit = (unitName?: string): boolean => !isWeightUnit(unitName);
 
   const getQuantityPresetOptions = (unitName?: string) => {
     if (isWeightUnit(unitName)) {
@@ -720,70 +726,54 @@ export function NewSale() {
     return 1;
   };
 
-  const updateQuantity = (id: string, change: number) => {
-    const item = cart.find((item) => item.id === id);
-    // Find product by productId if item has it, otherwise fallback to id (for backward compatibility)
-    const product = item && (item as any).productId 
-      ? products.find((p) => p.id === (item as any).productId)
-      : products.find((p) => p.id === id);
-
-    // For testing: Allow negative sales (stock can go below 0)
-    // Comment out stock validation for testing purposes
-    /*
-    if (item && product) {
-      const newQuantity = item.quantity + change
-      const availableStock = product.available_stock ?? product.stock
-
-      if (newQuantity > availableStock) {
-        toast({
-          variant: "destructive",
-          title: "Insufficient Stock",
-          description: `Only ${availableStock} units available`,
-        })
-        return
-      }
-    }
-    */
-
-    // Get unit-aware increment
-    const unitName = item?.unitName || item?.unit || product?.unitName;
-    const currentQuantity = Number(item?.quantity || 0);
-    const mode = quantityModes[id] ?? "preset";
+  const computeQuantityAfterChange = (
+    currentQuantity: number,
+    direction: 1 | -1,
+    unitName?: string,
+    mode: "preset" | "custom" = "custom",
+  ): number => {
     const minQuantity = isPieceUnit(unitName) ? 1 : 0.01;
     let targetQuantity = currentQuantity;
 
-    // Keep weight preset flow simple for sellers:
-    // 250g -> 500g, 1kg -> 2kg (and reverse on minus).
     if (mode === "preset" && isWeightUnit(unitName)) {
       const presets = getQuantityPresetOptions(unitName).map((preset) => preset.quantity);
       const presetMin = Math.min(...presets);
       const presetMax = Math.max(...presets);
       targetQuantity =
-        change > 0
+        direction > 0
           ? Math.min(presetMax, Math.max(presetMin, currentQuantity * 2))
           : Math.max(presetMin, currentQuantity / 2);
-
-      // Snap to nearest preset value to avoid float precision mismatches.
       targetQuantity = presets.reduce((best, candidate) =>
         Math.abs(candidate - targetQuantity) < Math.abs(best - targetQuantity) ? candidate : best,
       presets[0]);
     } else {
-    const increment = getQuantityIncrement(unitName);
-    const actualChange = change > 0 ? increment : -increment;
-      targetQuantity = currentQuantity + actualChange;
+      const increment = getQuantityIncrement(unitName);
+      targetQuantity = currentQuantity + (direction > 0 ? increment : -increment);
     }
 
-    setCart(
-      cart.map((item) => {
-        if (item.id === id) {
-          const newQuantity = targetQuantity;
-          const normalizedQuantity = isPieceUnit(unitName)
-            ? Math.round(newQuantity)
-            : newQuantity;
-          return { ...item, quantity: Math.max(minQuantity, normalizedQuantity) };
-        }
-        return item;
-      })
+    const normalizedQuantity = isPieceUnit(unitName)
+      ? Math.round(targetQuantity)
+      : Number(targetQuantity.toFixed(3));
+    return Math.max(minQuantity, normalizedQuantity);
+  };
+
+  const bumpQuantity = (id: string, direction: 1 | -1) => {
+    setActiveCartLineId(id);
+    setQuantityInputs((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setCart((prev) =>
+      prev.map((line) => {
+        if (line.id !== id) return line;
+        const unitName = line.unitName || line.unit;
+        const mode = quantityModes[id] ?? "preset";
+        return {
+          ...line,
+          quantity: computeQuantityAfterChange(line.quantity, direction, unitName, mode),
+        };
+      }),
     );
   };
 
@@ -793,13 +783,8 @@ export function NewSale() {
       ? Math.round(Number(newQuantity))
       : Number(newQuantity);
     const validQuantity = Math.max(minQuantity, normalizedQuantity);
-    setCart(
-      cart.map((item) => {
-        if (item.id === id) {
-          return { ...item, quantity: validQuantity };
-        }
-        return item;
-      })
+    setCart((prev) =>
+      prev.map((line) => (line.id === id ? { ...line, quantity: validQuantity } : line)),
     );
   };
 
@@ -1724,6 +1709,23 @@ export function NewSale() {
     };
   }, [cart, total, paymentDialogOpen, paymentMethodPending, startPayment, isScanning, selectedCustomer, toast]);
 
+  const quickAdjustLine = useMemo(() => {
+    if (cart.length === 0) return null;
+    if (activeCartLineId) {
+      return cart.find((line) => line.id === activeCartLineId) ?? cart[cart.length - 1];
+    }
+    return cart[cart.length - 1];
+  }, [cart, activeCartLineId]);
+
+  // After adding a product, focus search-bar + (never the Sale Summary card)
+  useEffect(() => {
+    if (quickQtyFocusTick === 0 || cart.length === 0) return;
+    const frame = requestAnimationFrame(() => {
+      quickQtyPlusRef.current?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [quickQtyFocusTick, cart.length]);
+
   return (
     <div className="flex flex-col lg:flex-row h-screen">
       {/* Products Section */}
@@ -1767,8 +1769,8 @@ export function NewSale() {
               )}
             </div>
           </div>
-          <div className="flex items-center space-x-4">
-            <div className="relative flex-1 max-w-md">
+          <div className="flex w-full max-w-2xl flex-wrap items-stretch gap-2">
+            <div className="relative min-w-[12rem] w-full max-w-md flex-1">
               <Search className={`absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 ${isScanning ? 'text-blue-500 animate-pulse' : 'text-gray-400'}`} />
               {isScanning && (
                 <LoadingSpinner size="sm" className="absolute right-3 top-1/2 transform -translate-y-1/2" />
@@ -1783,6 +1785,8 @@ export function NewSale() {
                   if (relatedTarget && (
                     relatedTarget.getAttribute('data-price-input') === 'true' ||
                     relatedTarget.getAttribute('data-quantity-input') === 'true' ||
+                    relatedTarget.getAttribute('data-quick-qty') === 'true' ||
+                    relatedTarget.closest('[data-quick-qty="true"]') ||
                     relatedTarget.getAttribute('data-quantity-select') === 'true' ||
                     relatedTarget.getAttribute('data-amount-input') === 'true' ||
                     relatedTarget.tagName === 'SELECT' ||
@@ -1866,9 +1870,131 @@ export function NewSale() {
                     }, 100);
                   }
                 }}
-                className={`pl-10 ${isScanning ? 'border-blue-500 bg-blue-50/50' : ''}`}
+                className={cn(
+                  "h-10 pl-10 border-gray-200 shadow-sm focus-visible:ring-1 focus-visible:ring-blue-400 focus-visible:ring-offset-0",
+                  isScanning && "border-blue-500 bg-blue-50/50 pr-10",
+                )}
                 autoFocus
               />
+            </div>
+
+            <div
+              className={cn(
+                "flex h-10 w-full min-w-[13rem] max-w-[15rem] shrink-0 items-stretch overflow-hidden rounded-md border bg-white shadow-sm transition-opacity sm:w-[15rem]",
+                quickAdjustLine ? "border-gray-200" : "border-dashed border-gray-200 opacity-40",
+              )}
+              title={
+                quickAdjustLine
+                  ? `Adjust quantity for ${quickAdjustLine.name}`
+                  : "Add a product to adjust quantity"
+              }
+            >
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={!quickAdjustLine}
+                className="h-10 w-11 shrink-0 rounded-none border-r border-gray-200 px-0 hover:bg-slate-100 disabled:opacity-40 focus-visible:ring-0 focus-visible:ring-offset-0"
+                aria-label="Decrease quantity"
+                data-quick-qty="true"
+                onClick={() => quickAdjustLine && bumpQuantity(quickAdjustLine.id, -1)}
+              >
+                <Minus className="h-4 w-4" />
+              </Button>
+              <div className="flex min-w-0 flex-1 flex-col items-center justify-center border-r border-gray-200 bg-slate-50/90 px-2 py-0.5">
+                <Input
+                  disabled={!quickAdjustLine}
+                  type="text"
+                  inputMode={
+                    quickAdjustLine && isWeightUnit(quickAdjustLine.unitName || quickAdjustLine.unit)
+                      ? "text"
+                      : "decimal"
+                  }
+                  placeholder="Qty"
+                  data-quantity-input="true"
+                  data-quick-qty="true"
+                  value={
+                    quickAdjustLine
+                      ? quantityInputs[quickAdjustLine.id] ??
+                        formatQuantityValue(quickAdjustLine.quantity)
+                      : ""
+                  }
+                  onFocus={() => {
+                    if (!quickAdjustLine) return;
+                    isUserInteractingRef.current = true;
+                    setActiveCartLineId(quickAdjustLine.id);
+                  }}
+                  onChange={(e) => {
+                    if (!quickAdjustLine) return;
+                    const unitName = quickAdjustLine.unitName || quickAdjustLine.unit;
+                    const value = e.target.value.trim();
+                    setQuantityModes((prev) => ({ ...prev, [quickAdjustLine.id]: "custom" }));
+                    if (value === "") {
+                      setQuantityInputs((prev) => ({ ...prev, [quickAdjustLine.id]: "" }));
+                      return;
+                    }
+                    setQuantityInputs((prev) => ({ ...prev, [quickAdjustLine.id]: value }));
+                    const parsed = parseCustomQuantityInput(value, unitName);
+                    if (parsed === null) return;
+                    updateQuantityManual(quickAdjustLine.id, parsed, unitName);
+                  }}
+                  onBlur={() => {
+                    if (!quickAdjustLine) return;
+                    const unitName = quickAdjustLine.unitName || quickAdjustLine.unit;
+                    const minQuantity = isPieceUnit(unitName) ? 1 : 0.01;
+                    const currentValue = quantityInputs[quickAdjustLine.id];
+                    const parsed = currentValue
+                      ? parseCustomQuantityInput(currentValue, unitName)
+                      : null;
+                    if (!currentValue || parsed === null || parsed <= 0) {
+                      setQuantityInputs((prev) => {
+                        const next = { ...prev };
+                        delete next[quickAdjustLine.id];
+                        return next;
+                      });
+                      updateQuantityManual(quickAdjustLine.id, minQuantity, unitName);
+                    } else {
+                      updateQuantityManual(quickAdjustLine.id, parsed, unitName);
+                      setQuantityInputs((prev) => {
+                        const next = { ...prev };
+                        delete next[quickAdjustLine.id];
+                        return next;
+                      });
+                    }
+                    setTimeout(() => {
+                      isUserInteractingRef.current = false;
+                    }, 300);
+                  }}
+                  onKeyDown={(e) => {
+                    if (!quickAdjustLine) return;
+                    if (e.key === "ArrowUp") {
+                      e.preventDefault();
+                      bumpQuantity(quickAdjustLine.id, 1);
+                    }
+                    if (e.key === "ArrowDown") {
+                      e.preventDefault();
+                      bumpQuantity(quickAdjustLine.id, -1);
+                    }
+                  }}
+                  className="h-7 w-full max-w-[5.5rem] border-0 bg-transparent p-0 text-center text-base font-bold tabular-nums shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none disabled:opacity-50"
+                />
+                <span className="max-w-full truncate text-[10px] leading-none text-gray-500">
+                  {quickAdjustLine
+                    ? `Rs ${formatMoney(getSellingPrice(quickAdjustLine))} each`
+                    : "each"}
+                </span>
+              </div>
+              <Button
+                ref={quickQtyPlusRef}
+                type="button"
+                variant="ghost"
+                disabled={!quickAdjustLine}
+                className="h-10 w-11 shrink-0 rounded-none px-0 hover:bg-blue-50 hover:text-blue-700 disabled:opacity-40 focus-visible:ring-0 focus-visible:ring-offset-0"
+                aria-label="Increase quantity"
+                data-quick-qty="true"
+                onClick={() => quickAdjustLine && bumpQuantity(quickAdjustLine.id, 1)}
+              >
+                <Plus className="h-4 w-4" />
+              </Button>
             </div>
           </div>
         </div>
@@ -2075,8 +2201,8 @@ export function NewSale() {
         )}
       </div>
 
-      {/* Cart Section */}
-      <div className="w-full lg:w-[400px] bg-white lg:border-l border-gray-200 flex flex-col">
+      {/* Cart Section — fixed narrow width so product grid keeps more space */}
+      <div className="w-full shrink-0 lg:w-[min(100%,300px)] xl:w-[320px] bg-white lg:border-l border-gray-200 flex flex-col">
         <div className="border-b border-gray-200 bg-slate-50/60 p-4">
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -2232,7 +2358,13 @@ export function NewSale() {
                     ref={(el) => {
                       cartItemRefs.current[item.id] = el;
                     }}
-                    className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm"
+                    onClick={() => setActiveCartLineId(item.id)}
+                    className={cn(
+                      "rounded-lg border bg-white p-2.5 shadow-sm transition-shadow",
+                      activeCartLineId === item.id
+                        ? "border-blue-400 ring-2 ring-blue-200/80"
+                        : "border-gray-200",
+                    )}
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="space-y-1">
@@ -2256,108 +2388,20 @@ export function NewSale() {
                       </Button>
                     </div>
 
-                    <div className="mt-2 rounded-lg border border-gray-100 bg-slate-50 p-2 space-y-2">
-                      {/* Price editor */}
-                      <div>
-                        <div className="flex items-center justify-between">
-                          <label className="text-[10px] font-semibold tracking-wide text-gray-600">
-                            Selling Price (Rs)
-                          </label>
-                          {isPriceOverridden(item) && (
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="ghost"
-                              className="h-7 px-2 text-[11px] text-amber-700 hover:text-amber-800"
-                              onClick={() => {
-                                setCart(
-                                  cart.map((cartItem) =>
-                                    cartItem.id === item.id
-                                      ? {
-                                          ...cartItem,
-                                          actualUnitPrice: cartItem.originalPrice,
-                                          price: cartItem.originalPrice,
-                                        }
-                                      : cartItem,
-                                  ),
-                                );
-                              }}
-                            >
-                              Reset Default
-                            </Button>
-                          )}
-                        </div>
-                          <Input
-                            ref={(el) => {
-                              priceInputRefs.current[item.id] = el;
-                              if (el) {
-                              el.setAttribute("data-price-input", "true");
-                              }
-                            }}
-                            type="text"
-                            inputMode="decimal"
-                          value={
-                            priceInputs[item.id] !== undefined
-                              ? priceInputs[item.id]
-                              : item.actualUnitPrice === 0
-                                ? ""
-                                : String(item.actualUnitPrice || item.price)
-                          }
-                            onFocus={() => {
-                              isUserInteractingRef.current = true;
-                            }}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" || e.key === "Tab") {
-                              e.preventDefault();
-                              const quantityInput = quantityInputRefs.current[item.id];
-                              if (quantityInput) {
-                                quantityInput.focus();
-                                if (quantityInput instanceof HTMLInputElement) {
-                                quantityInput.select();
-                                }
-                              }
-                            }
-                          }}
-                          onChange={(e) => {
-                            const value = e.target.value;
-                            setPriceInputs((prev) => ({ ...prev, [item.id]: value }));
-                            
-                            if (value === "") {
-                              setCart(
-                                cart.map((cartItem) =>
-                                  cartItem.id === item.id
-                                    ? { ...cartItem, actualUnitPrice: 0, price: 0 }
-                                    : cartItem,
-                                ),
-                              );
-                              return;
-                            }
-                            
-                            if (/^(\d*\.?\d*)$/.test(value)) {
-                              if (value === ".") return;
-                              const numValue = parseFloat(value);
-                              if (!isNaN(numValue) && numValue >= 0) {
-                                setCart(
-                                  cart.map((cartItem) =>
-                                    cartItem.id === item.id
-                                      ? { ...cartItem, actualUnitPrice: numValue, price: numValue }
-                                      : cartItem,
-                                  ),
-                                );
-                              }
-                            }
-                          }}
-                          onBlur={(e) => {
-                            const value = e.target.value.trim();
-                            setPriceInputs((prev) => {
-                              const newState = { ...prev };
-                              delete newState[item.id];
-                              return newState;
-                            });
-                            
-                            if (value === "" || value === "." || value === "0") {
-                              setCart(
-                                cart.map((cartItem) =>
+                    <div className="mt-2 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <label className="text-[10px] font-medium text-gray-500 shrink-0">
+                          Unit price
+                        </label>
+                        {isPriceOverridden(item) && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            className="h-6 px-1.5 text-[10px] text-amber-700"
+                            onClick={() => {
+                              setCart((prev) =>
+                                prev.map((cartItem) =>
                                   cartItem.id === item.id
                                     ? {
                                         ...cartItem,
@@ -2367,66 +2411,135 @@ export function NewSale() {
                                     : cartItem,
                                 ),
                               );
-                            } else {
-                              const numValue = parseFloat(value);
-                              if (!isNaN(numValue) && numValue >= 0) {
-                                setCart(
-                                  cart.map((cartItem) =>
-                                    cartItem.id === item.id
-                                      ? { ...cartItem, actualUnitPrice: numValue, price: numValue }
-                                      : cartItem,
-                                  ),
-                                );
-                              } else {
-                                setCart(
-                                  cart.map((cartItem) =>
-                                    cartItem.id === item.id
-                                      ? {
-                                          ...cartItem,
-                                          actualUnitPrice: cartItem.originalPrice,
-                                          price: cartItem.originalPrice,
-                                        }
-                                      : cartItem,
-                                  ),
-                                );
-                              }
-                            }
-                            setTimeout(() => {
-                              isUserInteractingRef.current = false;
-                            }, 300);
-                          }}
-                          className={`mt-1 h-8 text-sm font-semibold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
-                            isPriceOverridden(item) ? "border-amber-400 bg-amber-50" : ""
-                          }`}
-                        />
+                            }}
+                          >
+                            Reset
+                          </Button>
+                        )}
                       </div>
-                      
-                      {/* Quantity + amount based auto-calc */}
-                      <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-                      <div>
-                          <label className="text-[10px] font-semibold uppercase tracking-wide text-gray-600">
-                            Quantity {unitName && unitName.toLowerCase() !== "unknown" ? `(${unitName})` : ""}
-                        </label>
-                          <div className="mt-1 space-y-2">
+                      <Input
+                        ref={(el) => {
+                          priceInputRefs.current[item.id] = el;
+                          if (el) el.setAttribute("data-price-input", "true");
+                        }}
+                        type="text"
+                        inputMode="decimal"
+                        value={
+                          priceInputs[item.id] !== undefined
+                            ? priceInputs[item.id]
+                            : item.actualUnitPrice === 0
+                              ? ""
+                              : String(item.actualUnitPrice || item.price)
+                        }
+                        onFocus={() => {
+                          isUserInteractingRef.current = true;
+                          setActiveCartLineId(item.id);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === "Tab") {
+                            e.preventDefault();
+                            quantityInputRefs.current[item.id]?.focus();
+                          }
+                        }}
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          setPriceInputs((prev) => ({ ...prev, [item.id]: value }));
+                          if (value === "") {
+                            setCart((prev) =>
+                              prev.map((cartItem) =>
+                                cartItem.id === item.id
+                                  ? { ...cartItem, actualUnitPrice: 0, price: 0 }
+                                  : cartItem,
+                              ),
+                            );
+                            return;
+                          }
+                          if (/^(\d*\.?\d*)$/.test(value) && value !== ".") {
+                            const numValue = parseFloat(value);
+                            if (!isNaN(numValue) && numValue >= 0) {
+                              setCart((prev) =>
+                                prev.map((cartItem) =>
+                                  cartItem.id === item.id
+                                    ? { ...cartItem, actualUnitPrice: numValue, price: numValue }
+                                    : cartItem,
+                                ),
+                              );
+                            }
+                          }
+                        }}
+                        onBlur={(e) => {
+                          const value = e.target.value.trim();
+                          setPriceInputs((prev) => {
+                            const newState = { ...prev };
+                            delete newState[item.id];
+                            return newState;
+                          });
+                          if (value === "" || value === "." || value === "0") {
+                            setCart((prev) =>
+                              prev.map((cartItem) =>
+                                cartItem.id === item.id
+                                  ? {
+                                      ...cartItem,
+                                      actualUnitPrice: cartItem.originalPrice,
+                                      price: cartItem.originalPrice,
+                                    }
+                                  : cartItem,
+                              ),
+                            );
+                          } else {
+                            const numValue = parseFloat(value);
+                            setCart((prev) =>
+                              prev.map((cartItem) =>
+                                cartItem.id === item.id
+                                  ? {
+                                      ...cartItem,
+                                      actualUnitPrice:
+                                        !isNaN(numValue) && numValue >= 0
+                                          ? numValue
+                                          : cartItem.originalPrice,
+                                      price:
+                                        !isNaN(numValue) && numValue >= 0
+                                          ? numValue
+                                          : cartItem.originalPrice,
+                                    }
+                                  : cartItem,
+                              ),
+                            );
+                          }
+                          setTimeout(() => {
+                            isUserInteractingRef.current = false;
+                          }, 300);
+                        }}
+                        className={cn(
+                          "h-8 text-sm font-semibold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none",
+                          isPriceOverridden(item) && "border-amber-400 bg-amber-50",
+                        )}
+                      />
+
+                      <div className="flex items-stretch gap-2">
+                        <div className="flex flex-1 min-w-0 items-stretch overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            className="h-10 w-10 shrink-0 rounded-none border-r border-gray-200 hover:bg-slate-100 focus-visible:ring-0 focus-visible:ring-offset-0"
+                            aria-label="Decrease quantity"
+                            onClick={() => bumpQuantity(item.id, -1)}
+                          >
+                            <Minus className="h-4 w-4" />
+                          </Button>
+                          <div className="flex flex-1 min-w-0 flex-col items-center justify-center px-1 py-0.5 border-r border-gray-200 bg-slate-50/80">
                             <Input
                               ref={(el) => {
                                 quantityInputRefs.current[item.id] = el;
-                                if (el) {
-                                  el.setAttribute("data-quantity-input", "true");
-                                }
+                                if (el) el.setAttribute("data-quantity-input", "true");
                               }}
                               type="text"
                               inputMode={isWeightUnit(unitName) ? "text" : "decimal"}
-                              placeholder={
-                                isPieceUnit(unitName)
-                                  ? "Type pieces"
-                                  : isWeightUnit(unitName)
-                                    ? "250g or 0.25kg"
-                                    : "Type quantity"
-                              }
+                              placeholder="Qty"
                               value={quantityInputs[item.id] ?? formatQuantityValue(item.quantity)}
                               onFocus={() => {
                                 isUserInteractingRef.current = true;
+                                setActiveCartLineId(item.id);
                               }}
                               onChange={(e) => {
                                 const value = e.target.value.trim();
@@ -2435,7 +2548,6 @@ export function NewSale() {
                                   setQuantityInputs((prev) => ({ ...prev, [item.id]: "" }));
                                   return;
                                 }
-
                                 setQuantityInputs((prev) => ({ ...prev, [item.id]: value }));
                                 const parsed = parseCustomQuantityInput(value, unitName);
                                 if (parsed === null) return;
@@ -2465,22 +2577,42 @@ export function NewSale() {
                                   isUserInteractingRef.current = false;
                                 }, 300);
                               }}
-                              className="h-8 text-xs font-semibold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                              onKeyDown={(e) => {
+                                if (e.key === "ArrowUp") {
+                                  e.preventDefault();
+                                  bumpQuantity(item.id, 1);
+                                }
+                                if (e.key === "ArrowDown") {
+                                  e.preventDefault();
+                                  bumpQuantity(item.id, -1);
+                                }
+                              }}
+                              className="h-7 border-0 bg-transparent text-center text-base font-bold shadow-none focus-visible:ring-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                             />
-                          </div>
-                      </div>
-                      
-                        <div className="space-y-1">
-                          <label className="text-[10px] font-semibold uppercase tracking-wide text-gray-600">
-                            Total
-                          </label>
-                          <div className="rounded-md border border-blue-100 bg-blue-50 px-2 h-8 flex items-center justify-start">
-                            <span className="text-sm font-semibold text-blue-900 whitespace-nowrap text-left">
-                              Rs {formatMoney(effectiveUnitPrice * item.quantity)}
+                            <span className="text-[10px] text-gray-500 leading-none pb-0.5">
+                              Rs {formatMoney(effectiveUnitPrice)} each
                             </span>
                           </div>
-                    </div>
-                  </div>
+                          <Button
+                            ref={(el) => {
+                              quantityPlusRefs.current[item.id] = el;
+                            }}
+                            type="button"
+                            variant="ghost"
+                            className="h-10 w-10 shrink-0 rounded-none hover:bg-blue-50 hover:text-blue-700 focus-visible:ring-0 focus-visible:ring-offset-0"
+                            aria-label="Increase quantity"
+                            onClick={() => bumpQuantity(item.id, 1)}
+                          >
+                            <Plus className="h-4 w-4" />
+                          </Button>
+                        </div>
+                        <div className="flex shrink-0 flex-col justify-center rounded-md border border-blue-100 bg-blue-50 px-2.5 min-w-[72px]">
+                          <span className="text-[10px] font-medium text-blue-700/80 leading-none">Total</span>
+                          <span className="text-sm font-bold text-blue-900 tabular-nums leading-tight">
+                            Rs {formatMoney(effectiveUnitPrice * item.quantity)}
+                          </span>
+                        </div>
+                      </div>
                     </div>
                   </div>
                   );

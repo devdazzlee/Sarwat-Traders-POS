@@ -1500,14 +1500,14 @@ class SaleService {
           await adjustCustomerCredit(
             oldCustomerId,
             oldCreditOutstanding.negated(),
-            `Sale edit — credit removed (${oldSale.sale_number})`,
+            `Sale edit: credit removed (${oldSale.sale_number})`,
           );
         }
         if (newCustomerId && !newCreditOutstanding.isZero()) {
           await adjustCustomerCredit(
             newCustomerId,
             newCreditOutstanding,
-            `Sale edit — credit assigned (${oldSale.sale_number})`,
+            `Sale edit: credit assigned (${oldSale.sale_number})`,
           );
         }
       } else if (newCustomerId) {

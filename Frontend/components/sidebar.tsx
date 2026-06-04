@@ -353,6 +353,9 @@ const filterMenuSectionsByRole = (role: UserRole | null): SidebarMenuSection[] =
 const getVisibleTabIds = (sections: SidebarMenuSection[]) =>
   sections.flatMap((section) => section.items.map((item) => item.id));
 
+/** Tabs rendered by Dashboard but not listed in the sidebar (deep links from other screens). */
+const INTERNAL_DASHBOARD_TABS = new Set(["customer-ledger"]);
+
 export function Sidebar({
   activeTab,
   setActiveTab,
@@ -385,7 +388,11 @@ export function Sidebar({
 
   useEffect(() => {
     const visibleTabIds = getVisibleTabIds(filteredMenuSections);
-    if (!visibleTabIds.length || visibleTabIds.includes(activeTab)) {
+    if (
+      !visibleTabIds.length ||
+      visibleTabIds.includes(activeTab) ||
+      INTERNAL_DASHBOARD_TABS.has(activeTab)
+    ) {
       return;
     }
 

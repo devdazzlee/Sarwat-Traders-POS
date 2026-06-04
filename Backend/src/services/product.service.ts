@@ -1010,6 +1010,20 @@ export class ProductService {
                     name: true,
                 },
             },
+            supplier_id: true,
+            supplier: {
+                select: {
+                    id: true,
+                    name: true,
+                },
+            },
+            tax_id: true,
+            tax: {
+                select: {
+                    id: true,
+                    name: true,
+                },
+            },
             ProductImage: {
                 select: {
                     image: true,

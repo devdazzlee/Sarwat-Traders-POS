@@ -65,7 +65,6 @@ import { useStore } from "@/lib/store";
 import { useToast } from "@/hooks/use-toast";
 import { PageLoader } from "@/components/ui/page-loader";
 import { StatCardSkeleton } from "@/components/ui/stat-card-skeleton";
-import { CustomerLedger } from "./customer-ledger";
 
 interface Customer {
   id: string;
@@ -99,8 +98,6 @@ export function Customers({ onViewLedger }: CustomersProps) {
   const [isDeletingCustomer, setIsDeletingCustomer] = useState(false);
   const [creditSummary, setCreditSummary] = useState({ totalOutstanding: 0, totalPayable: 0 });
   const [isSummaryLoading, setIsSummaryLoading] = useState(false);
-  const [ledgerCustomerId, setLedgerCustomerId] = useState<string | null>(null);
-
   // 1) Fetch customers — shared with New Sale via global store + cache invalidation
   const fetchCustomers = async () => {
     setIsLoading(true);
@@ -595,7 +592,7 @@ export function Customers({ onViewLedger }: CustomersProps) {
                           size="sm"
                           variant="ghost"
                           className="bg-indigo-50 text-indigo-700 hover:bg-indigo-100 h-8 px-2 font-black text-[10px] uppercase tracking-wider gap-2 rounded-lg border border-indigo-100"
-                          onClick={() => setLedgerCustomerId(customer.id)}
+                          onClick={() => onViewLedger(customer.id)}
                         >
                           <FileText className="h-3 w-3" /> Ledger
                         </Button>
@@ -835,24 +832,6 @@ export function Customers({ onViewLedger }: CustomersProps) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      {/* Ledger Modal */}
-      <Dialog 
-        open={!!ledgerCustomerId} 
-        onOpenChange={(open) => !open && setLedgerCustomerId(null)}
-      >
-        <DialogContent className="max-w-[95vw] w-full lg:max-w-[1400px] max-h-[95vh] overflow-hidden p-0 border-none bg-white shadow-2xl rounded-xl">
-          <DialogHeader className="sr-only">
-            <DialogTitle>Customer Ledger History</DialogTitle>
-            <DialogDescription>View transaction and payment history for this customer.</DialogDescription>
-          </DialogHeader>
-          {ledgerCustomerId && (
-            <CustomerLedger 
-              customerId={ledgerCustomerId} 
-              onBack={() => setLedgerCustomerId(null)} 
-            />
-          )}
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
