@@ -52,3 +52,56 @@ export const getCreditSummary = asyncHandler(async (_req: Request, res: Response
   const summary = await ledgerService.getCreditSummary();
   new ApiResponse(summary, 'Credit summary fetched').send(res);
 });
+
+/**
+ * PATCH /customer-ledger/:customerId/entries/:entryId
+ * Update a ledger entry (payment or adjustment)
+ */
+export const updateLedgerEntry = asyncHandler(async (req: Request, res: Response) => {
+  const { customerId, entryId } = req.params;
+  const { amount, description, referenceNo, date, direction } = req.body;
+
+  if (amount !== undefined && (isNaN(Number(amount)) || Number(amount) <= 0)) {
+    return new ApiResponse(null, 'Amount must be a positive number', 400, false).send(res);
+  }
+
+  if (direction !== undefined && direction !== 'debit' && direction !== 'credit') {
+    return new ApiResponse(null, 'Direction must be debit or credit', 400, false).send(res);
+  }
+
+  const parsedDate = date ? new Date(date) : undefined;
+  if (parsedDate && Number.isNaN(parsedDate.getTime())) {
+    return new ApiResponse(null, 'Invalid date', 400, false).send(res);
+  }
+
+  const result = await ledgerService.updateLedgerEntry({
+    customerId,
+    entryId,
+    amount: amount !== undefined ? Number(amount) : undefined,
+    description,
+    referenceNo,
+    date: parsedDate,
+    direction,
+    updatedBy: req.user!.id,
+  });
+
+  new ApiResponse(result, 'Ledger entry updated successfully').send(res);
+});
+
+/**
+ * DELETE /customer-ledger/:customerId/entries/:entryId
+ * Delete a ledger entry (creates reversal adjustment for audit)
+ */
+export const deleteLedgerEntry = asyncHandler(async (req: Request, res: Response) => {
+  const { customerId, entryId } = req.params;
+  const { reason } = req.body ?? {};
+
+  const result = await ledgerService.deleteLedgerEntry({
+    customerId,
+    entryId,
+    deletedBy: req.user!.id,
+    reason,
+  });
+
+  new ApiResponse(result, 'Ledger entry deleted successfully').send(res);
+});

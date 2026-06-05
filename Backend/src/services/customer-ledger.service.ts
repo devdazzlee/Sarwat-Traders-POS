@@ -246,6 +246,308 @@ class CustomerLedgerService {
     });
   }
 
+  private computeSignedDelta(
+    entry: { entry_type: LedgerEntryType; amount: Prisma.Decimal; balance_after: Prisma.Decimal },
+    prevBalance: number
+  ): number {
+    const amt = Number(entry.amount);
+    switch (entry.entry_type) {
+      case LedgerEntryType.CREDIT_SALE:
+        return amt;
+      case LedgerEntryType.PAYMENT_RECEIVED:
+      case LedgerEntryType.REFUND:
+        return -amt;
+      case LedgerEntryType.ADJUSTMENT:
+        return Number(entry.balance_after) - prevBalance;
+      default:
+        return 0;
+    }
+  }
+
+  private async recalculateRunningBalances(tx: TxClient, customerId: string) {
+    const entries = await tx.customerLedger.findMany({
+      where: { customer_id: customerId },
+      orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
+    });
+
+    let running = 0;
+    for (const entry of entries) {
+      const delta = this.computeSignedDelta(entry, running);
+      running = Number((running + delta).toFixed(3));
+      if (Math.abs(Number(entry.balance_after) - running) > 0.009) {
+        await tx.customerLedger.update({
+          where: { id: entry.id },
+          data: { balance_after: running },
+        });
+      }
+    }
+
+    await tx.customer.update({
+      where: { id: customerId },
+      data: { outstanding_balance: running },
+    });
+
+    return running;
+  }
+
+  private async reapplyAllPaymentAllocations(tx: TxClient, customerId: string) {
+    const creditSales = await tx.sale.findMany({
+      where: { customer_id: customerId, payment_method: 'CREDIT' },
+      select: { id: true, total_amount: true },
+    });
+
+    for (const sale of creditSales) {
+      await tx.sale.update({
+        where: { id: sale.id },
+        data: {
+          payment_received: 0,
+          payment_status: 'PENDING',
+        },
+      });
+    }
+
+    const payments = await tx.customerLedger.findMany({
+      where: { customer_id: customerId, entry_type: LedgerEntryType.PAYMENT_RECEIVED },
+      orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
+    });
+
+    for (const payment of payments) {
+      let remaining = new Prisma.Decimal(payment.amount);
+      const saleRef = payment.sale_id?.trim();
+
+      if (saleRef) {
+        const sale = await tx.sale.findFirst({
+          where: {
+            customer_id: customerId,
+            OR: [{ id: saleRef }, { sale_number: saleRef }],
+          },
+          select: {
+            id: true,
+            total_amount: true,
+            payment_received: true,
+          },
+        });
+
+        if (sale) {
+          const dueBefore = new Prisma.Decimal(sale.total_amount).minus(sale.payment_received);
+          if (dueBefore.gt(0)) {
+            const applied = Prisma.Decimal.min(dueBefore, remaining);
+            const paymentReceivedAfter = new Prisma.Decimal(sale.payment_received).plus(applied);
+            const dueAfter = new Prisma.Decimal(sale.total_amount).minus(paymentReceivedAfter);
+
+            await tx.sale.update({
+              where: { id: sale.id },
+              data: {
+                payment_received: paymentReceivedAfter,
+                payment_status: dueAfter.lte(0)
+                  ? 'PAID'
+                  : paymentReceivedAfter.gt(0)
+                    ? 'PARTIAL'
+                    : 'PENDING',
+              },
+            });
+
+            remaining = remaining.minus(applied);
+          }
+        }
+      }
+
+      if (remaining.gt(0)) {
+        await this.applyPaymentFifo(tx, customerId, remaining);
+      }
+    }
+  }
+
+  private assertEntryEditable(entry: {
+    entry_type: LedgerEntryType;
+    sale_id: string | null;
+  }) {
+    if (entry.entry_type === LedgerEntryType.CREDIT_SALE) {
+      throw new AppError(
+        409,
+        'Credit sale entries cannot be edited here. Update or delete the sale from Sales History instead.'
+      );
+    }
+    if (entry.entry_type === LedgerEntryType.REFUND) {
+      throw new AppError(
+        409,
+        'Refund entries cannot be edited here. Manage the related return or exchange record instead.'
+      );
+    }
+  }
+
+  private assertEntryDeletable(entry: {
+    entry_type: LedgerEntryType;
+    sale_id: string | null;
+  }) {
+    this.assertEntryEditable(entry);
+  }
+
+  /**
+   * Update an existing ledger entry (payments and adjustments)
+   */
+  async updateLedgerEntry({
+    customerId,
+    entryId,
+    amount,
+    description,
+    referenceNo,
+    date,
+    direction,
+    updatedBy,
+  }: {
+    customerId: string;
+    entryId: string;
+    amount?: number;
+    description?: string;
+    referenceNo?: string;
+    date?: Date;
+    direction?: 'debit' | 'credit';
+    updatedBy: string;
+  }) {
+    return prisma.$transaction(async (tx) => {
+      const entry = await tx.customerLedger.findFirst({
+        where: { id: entryId, customer_id: customerId },
+      });
+      if (!entry) throw new AppError(404, 'Ledger entry not found');
+
+      this.assertEntryEditable(entry);
+
+      const updateData: Prisma.CustomerLedgerUpdateInput = {};
+
+      if (description !== undefined) {
+        updateData.description = description.trim() || null;
+      }
+
+      if (referenceNo !== undefined) {
+        updateData.reference_no = referenceNo.trim() || null;
+      }
+
+      if (date !== undefined) {
+        if (Number.isNaN(date.getTime())) {
+          throw new AppError(400, 'Invalid date');
+        }
+        updateData.created_at = date;
+      }
+
+      if (amount !== undefined) {
+        if (amount <= 0) throw new AppError(400, 'Amount must be positive');
+        updateData.amount = new Prisma.Decimal(amount);
+
+        if (entry.entry_type === LedgerEntryType.ADJUSTMENT) {
+          const priorEntries = await tx.customerLedger.findMany({
+            where: { customer_id: customerId },
+            orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
+          });
+          const entryIndex = priorEntries.findIndex((e) => e.id === entryId);
+          const prevBalance =
+            entryIndex > 0 ? Number(priorEntries[entryIndex - 1].balance_after) : 0;
+          const currentDelta = this.computeSignedDelta(entry, prevBalance);
+          const sign =
+            direction === 'debit'
+              ? 1
+              : direction === 'credit'
+                ? -1
+                : Math.sign(currentDelta) || 1;
+          const newBalance = Number((prevBalance + sign * amount).toFixed(3));
+          updateData.balance_after = newBalance;
+        }
+      } else if (
+        entry.entry_type === LedgerEntryType.ADJUSTMENT &&
+        (direction === 'debit' || direction === 'credit')
+      ) {
+        const priorEntries = await tx.customerLedger.findMany({
+          where: { customer_id: customerId },
+          orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
+        });
+        const entryIndex = priorEntries.findIndex((e) => e.id === entryId);
+        const prevBalance =
+          entryIndex > 0 ? Number(priorEntries[entryIndex - 1].balance_after) : 0;
+        const sign = direction === 'debit' ? 1 : -1;
+        const newBalance = Number((prevBalance + sign * Number(entry.amount)).toFixed(3));
+        updateData.balance_after = newBalance;
+      }
+
+      const updated = await tx.customerLedger.update({
+        where: { id: entryId },
+        data: updateData,
+      });
+
+      await this.recalculateRunningBalances(tx, customerId);
+
+      if (entry.entry_type === LedgerEntryType.PAYMENT_RECEIVED) {
+        await this.reapplyAllPaymentAllocations(tx, customerId);
+      }
+
+      return { entry: updated };
+    });
+  }
+
+  /**
+   * Delete a ledger entry and recalculate balances.
+   * Creates a reversal adjustment entry for audit trail before removal.
+   */
+  async deleteLedgerEntry({
+    customerId,
+    entryId,
+    deletedBy,
+    reason,
+  }: {
+    customerId: string;
+    entryId: string;
+    deletedBy: string;
+    reason?: string;
+  }) {
+    return prisma.$transaction(async (tx) => {
+      const entry = await tx.customerLedger.findFirst({
+        where: { id: entryId, customer_id: customerId },
+      });
+      if (!entry) throw new AppError(404, 'Ledger entry not found');
+
+      this.assertEntryDeletable(entry);
+
+      const allEntries = await tx.customerLedger.findMany({
+        where: { customer_id: customerId },
+        orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
+      });
+      const entryIndex = allEntries.findIndex((e) => e.id === entryId);
+      const prevBalance = entryIndex > 0 ? Number(allEntries[entryIndex - 1].balance_after) : 0;
+      const signedDelta = this.computeSignedDelta(entry, prevBalance);
+      const deletedAmount = Number(entry.amount);
+      const deletedDescription = entry.description;
+      const deletedType = entry.entry_type;
+
+      await tx.customerLedger.delete({ where: { id: entryId } });
+
+      const runningBalance = await this.recalculateRunningBalances(tx, customerId);
+
+      if (entry.entry_type === LedgerEntryType.PAYMENT_RECEIVED) {
+        await this.reapplyAllPaymentAllocations(tx, customerId);
+      }
+
+      if (Math.abs(signedDelta) > 0.009) {
+        await tx.customerLedger.create({
+          data: {
+            customer_id: customerId,
+            entry_type: LedgerEntryType.ADJUSTMENT,
+            amount: new Prisma.Decimal(Math.abs(signedDelta)),
+            description:
+              reason?.trim() ||
+              `Deleted ${deletedType.toLowerCase().replace(/_/g, ' ')}${
+                deletedDescription ? `: ${deletedDescription}` : ''
+              } (${deletedAmount.toLocaleString()} reversed)`,
+            sale_id: entry.sale_id,
+            reference_no: entry.reference_no,
+            balance_after: runningBalance,
+            created_by: deletedBy,
+          },
+        });
+      }
+
+      return { deletedEntryId: entryId };
+    });
+  }
+
   /**
    * Get ledger entries for a customer with optional date filtering
    */
@@ -382,6 +684,9 @@ class CustomerLedgerService {
 
       const amounts = debitCreditById.get(e.id) ?? { debit: 0, credit: 0 };
 
+      const isCreditSale = e.entry_type === 'CREDIT_SALE';
+      const isRefund = e.entry_type === 'REFUND';
+
       return {
         id: e.id,
         date: e.created_at.toISOString(),
@@ -391,12 +696,20 @@ class CustomerLedgerService {
         debit: amounts.debit,
         credit: amounts.credit,
         balance: Number(e.balance_after),
+        amount: Number(e.amount),
         invoiceTotal,
         invoicePaid,
         invoiceDue,
         saleId: saleInfo?.id ?? null,
         paymentStatus: saleInfo?.payment_status ?? null,
         isCollectable: e.entry_type === 'CREDIT_SALE' && invoiceDue > 0.009,
+        isEditable: !isCreditSale && !isRefund,
+        isDeletable: !isCreditSale && !isRefund,
+        editRestrictedReason: isCreditSale
+          ? 'Edit this from Sales History'
+          : isRefund
+            ? 'Manage from Returns & Exchanges'
+            : null,
         payment_method:
           e.entry_type === 'CREDIT_SALE' ? saleInfo?.payment_method ?? 'CREDIT' : null,
       };

@@ -20,6 +20,16 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   ArrowLeft,
   Download,
   Search,
@@ -31,6 +41,8 @@ import {
   Plus,
   Loader2,
   Printer,
+  Pencil,
+  Trash2,
 } from "lucide-react";
 import apiClient from "@/lib/apiClient";
 import { API_BASE } from "@/config/constants";
@@ -50,12 +62,16 @@ interface LedgerEntry {
   debit: number;
   credit: number;
   balance: number;
+  amount?: number;
   invoiceDue?: number;
   invoicePaid?: number;
   invoiceTotal?: number;
   saleId?: string | null;
   paymentStatus?: string | null;
   isCollectable?: boolean;
+  isEditable?: boolean;
+  isDeletable?: boolean;
+  editRestrictedReason?: string | null;
   payment_method: string | null;
 }
 
@@ -157,8 +173,19 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
   const [paymentSaleKey, setPaymentSaleKey] = useState<string>("");
   const [isSubmittingPayment, setIsSubmittingPayment] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editingEntry, setEditingEntry] = useState<LedgerEntry | null>(null);
+  const [editAmount, setEditAmount] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editReferenceNo, setEditReferenceNo] = useState("");
+  const [editDate, setEditDate] = useState<Date | undefined>(undefined);
+  const [editDirection, setEditDirection] = useState<"debit" | "credit">("debit");
+  const [isSubmittingEdit, setIsSubmittingEdit] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<LedgerEntry | null>(null);
+  const [deleteReason, setDeleteReason] = useState("");
+  const [isDeletingEntry, setIsDeletingEntry] = useState(false);
 
-  const fetchLedgerData = useCallback(async (options?: { silent?: boolean }) => {
+  const fetchLedgerData = useCallback(async (options?: { silent?: boolean }): Promise<boolean> => {
     const silent = options?.silent ?? false;
     if (silent) {
       setIsRefreshing(true);
@@ -192,12 +219,14 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
         balanceDue: data.summary?.balanceDue ?? Math.max(0, bal),
         advanceBalance: data.summary?.advanceBalance ?? Math.max(0, -bal),
       });
+      return true;
     } catch (error: any) {
       toast({
         title: "Error",
         description: error.response?.data?.message || "Failed to load ledger",
         variant: "destructive",
       });
+      return false;
     } finally {
       if (silent) {
         setIsRefreshing(false);
@@ -538,13 +567,15 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
         headers: { "X-Operation-Id": operationId },
       });
 
+      const synced = await fetchLedgerData({ silent: true });
+      if (!synced) return;
+
       toast({
         title: "Success",
         description: "Payment recorded successfully",
       });
       setIsPaymentModalOpen(false);
       resetPaymentModal();
-      await fetchLedgerData({ silent: true });
     } catch (error: any) {
       toast({
         title: "Error",
@@ -553,6 +584,103 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
       });
     } finally {
       setIsSubmittingPayment(false);
+    }
+  };
+
+  const openEditModal = (entry: LedgerEntry) => {
+    setEditingEntry(entry);
+    setEditAmount(String(entry.amount ?? entry.debit ?? entry.credit ?? ""));
+    setEditDescription(entry.description);
+    setEditReferenceNo(entry.reference_no ?? "");
+    setEditDate(new Date(entry.date));
+    setEditDirection(entry.debit > 0.009 ? "debit" : "credit");
+    setIsEditModalOpen(true);
+  };
+
+  const resetEditModal = () => {
+    setEditingEntry(null);
+    setEditAmount("");
+    setEditDescription("");
+    setEditReferenceNo("");
+    setEditDate(undefined);
+    setEditDirection("debit");
+  };
+
+  const handleEditSubmit = async () => {
+    if (!editingEntry) return;
+    if (!editAmount || isNaN(Number(editAmount)) || Number(editAmount) <= 0) {
+      toast({
+        title: "Error",
+        description: "Please enter a valid amount",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsSubmittingEdit(true);
+    try {
+      await apiClient.patch(
+        `${API_BASE}/customer-ledger/${customerId}/entries/${editingEntry.id}`,
+        {
+          amount: Number(editAmount),
+          description: editDescription,
+          referenceNo: editReferenceNo,
+          date: editDate ? format(editDate, "yyyy-MM-dd") : undefined,
+          ...(editingEntry.type === "ADJUSTMENT" ? { direction: editDirection } : {}),
+        },
+        { headers: { "X-Skip-Offline-Cache": "true" } },
+      );
+
+      const synced = await fetchLedgerData({ silent: true });
+      if (!synced) return;
+
+      toast({
+        title: "Updated",
+        description: "Ledger entry updated successfully",
+      });
+      setIsEditModalOpen(false);
+      resetEditModal();
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.response?.data?.message || "Failed to update entry",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSubmittingEdit(false);
+    }
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteTarget) return;
+
+    setIsDeletingEntry(true);
+    try {
+      await apiClient.delete(
+        `${API_BASE}/customer-ledger/${customerId}/entries/${deleteTarget.id}`,
+        {
+          data: { reason: deleteReason.trim() || undefined },
+          headers: { "X-Skip-Offline-Cache": "true" },
+        },
+      );
+
+      const synced = await fetchLedgerData({ silent: true });
+      if (!synced) return;
+
+      toast({
+        title: "Deleted",
+        description: "Entry removed. A reversal record was added for audit.",
+      });
+      setDeleteTarget(null);
+      setDeleteReason("");
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.response?.data?.message || "Failed to delete entry",
+        variant: "destructive",
+      });
+    } finally {
+      setIsDeletingEntry(false);
     }
   };
 
@@ -573,6 +701,8 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
 
   const netBalance = getNetBalancePresentation(summary.balance);
   const selectedTarget = paymentTargets.find((t) => t.key === paymentSaleKey);
+  const isLedgerBusy =
+    isRefreshing || isSubmittingPayment || isSubmittingEdit || isDeletingEntry;
 
   return (
     <div className="flex flex-col min-h-0 flex-1 bg-slate-100 h-full">
@@ -625,9 +755,17 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
       </div>
 
       <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 lg:p-6">
-        <div className="max-w-[1400px] mx-auto w-full space-y-5">
+        <div className="max-w-[1400px] mx-auto w-full space-y-5 relative">
+        {isLedgerBusy && (
+          <div className="absolute inset-0 z-20 flex items-start justify-center rounded-xl bg-slate-100/75 pt-24 backdrop-blur-[1px]">
+            <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
+              <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
+              <span className="text-sm font-medium text-slate-700">Syncing ledger...</span>
+            </div>
+          </div>
+        )}
 
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className={`grid grid-cols-2 lg:grid-cols-4 gap-3 transition-opacity ${isLedgerBusy ? "opacity-50" : ""}`}>
           <div className="bg-white rounded-xl border border-slate-200 p-3.5">
             <p className="text-[11px] font-medium text-slate-500 uppercase">Total Debits</p>
             <p className="text-lg font-semibold text-rose-600 mt-1 tabular-nums">{money(summary.totalDebits)}</p>
@@ -650,7 +788,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
           </div>
         </div>
 
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
+        <div className={`bg-white rounded-xl border border-slate-200 shadow-sm transition-opacity ${isLedgerBusy ? "opacity-50" : ""}`}>
           <div className="px-4 py-3 border-b border-slate-100">
             <div className="flex items-center justify-between gap-2">
               <h2 className="text-sm font-semibold text-slate-800">Statement of Account</h2>
@@ -692,7 +830,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                   <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 w-[100px]">Debit</th>
                   <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 w-[100px]">Credit</th>
                   <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 w-[120px]">Balance</th>
-                  <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 w-[88px]"></th>
+                  <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 w-[120px]">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -752,16 +890,45 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                         })()}
                       </td>
                       <td className="px-4 py-3 text-right align-top">
-                        {entry.isCollectable && (entry.invoiceDue ?? 0) > 0 && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-8 text-xs text-emerald-700 border-emerald-200 hover:bg-emerald-50"
-                            onClick={() => openPaymentModal(entry)}
-                          >
-                            Collect
-                          </Button>
-                        )}
+                        <div className="flex items-center justify-end gap-1">
+                          {entry.isCollectable && (entry.invoiceDue ?? 0) > 0 && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-8 text-xs text-emerald-700 border-emerald-200 hover:bg-emerald-50"
+                              onClick={() => openPaymentModal(entry)}
+                              disabled={isLedgerBusy}
+                            >
+                              Collect
+                            </Button>
+                          )}
+                          {(entry.isEditable ??
+                            (entry.type !== "CREDIT_SALE" && entry.type !== "REFUND")) && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 w-8 p-0 text-slate-500 hover:text-blue-700 hover:bg-blue-50"
+                              title="Edit entry"
+                              onClick={() => openEditModal(entry)}
+                              disabled={isLedgerBusy}
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
+                          {(entry.isDeletable ??
+                            (entry.type !== "CREDIT_SALE" && entry.type !== "REFUND")) && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 w-8 p-0 text-slate-500 hover:text-red-600 hover:bg-red-50"
+                              title="Delete entry"
+                              onClick={() => setDeleteTarget(entry)}
+                              disabled={isLedgerBusy}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -795,11 +962,16 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
       <Dialog
         open={isPaymentModalOpen}
         onOpenChange={(open) => {
+          if (!open && isSubmittingPayment) return;
           setIsPaymentModalOpen(open);
           if (!open) resetPaymentModal();
         }}
       >
-        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogContent
+          className="max-w-lg max-h-[90vh] overflow-y-auto"
+          onPointerDownOutside={(e) => isSubmittingPayment && e.preventDefault()}
+          onEscapeKeyDown={(e) => isSubmittingPayment && e.preventDefault()}
+        >
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <DollarSign className="h-5 w-5 text-emerald-600" />
@@ -899,7 +1071,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
               {isSubmittingPayment ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Processing...
+                  {isRefreshing ? "Syncing ledger..." : "Saving payment..."}
                 </>
               ) : (
                 "Save Payment"
@@ -908,6 +1080,196 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog
+        open={isEditModalOpen}
+        onOpenChange={(open) => {
+          if (!open && isSubmittingEdit) return;
+          setIsEditModalOpen(open);
+          if (!open) resetEditModal();
+        }}
+      >
+        <DialogContent
+          className="max-w-lg max-h-[90vh] overflow-y-auto"
+          onPointerDownOutside={(e) => isSubmittingEdit && e.preventDefault()}
+          onEscapeKeyDown={(e) => isSubmittingEdit && e.preventDefault()}
+        >
+          {isSubmittingEdit && (
+            <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-2 rounded-lg bg-white/85 backdrop-blur-[1px]">
+              <Loader2 className="h-6 w-6 animate-spin text-blue-600" />
+              <p className="text-sm font-medium text-slate-700">
+                {isRefreshing ? "Updating ledger..." : "Saving changes..."}
+              </p>
+            </div>
+          )}
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Pencil className="h-5 w-5 text-blue-600" />
+              Edit Transaction
+            </DialogTitle>
+            <DialogDescription>
+              {editingEntry
+                ? `${entryTypeLabel(editingEntry.type)} · ${formatDate(editingEntry.date)}`
+                : "Update ledger entry details"}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-date">Date</Label>
+              <DatePicker
+                date={editDate}
+                onDateChange={setEditDate}
+                placeholder="Transaction date"
+                disabled={isSubmittingEdit}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-amount">Amount (Rs)</Label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">
+                  Rs
+                </span>
+                <Input
+                  id="edit-amount"
+                  type="number"
+                  className="pl-10"
+                  value={editAmount}
+                  onChange={(e) => setEditAmount(e.target.value)}
+                  disabled={isSubmittingEdit}
+                />
+              </div>
+            </div>
+            {editingEntry?.type === "ADJUSTMENT" && (
+              <div className="space-y-1.5">
+                <Label>Direction</Label>
+                <Select
+                  value={editDirection}
+                  onValueChange={(v) => setEditDirection(v as "debit" | "credit")}
+                  disabled={isSubmittingEdit}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="debit">Debit (increases amount due)</SelectItem>
+                    <SelectItem value="credit">Credit (reduces amount due)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-description">Description</Label>
+              <Input
+                id="edit-description"
+                value={editDescription}
+                onChange={(e) => setEditDescription(e.target.value)}
+                disabled={isSubmittingEdit}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-reference">Reference No.</Label>
+              <Input
+                id="edit-reference"
+                value={editReferenceNo}
+                onChange={(e) => setEditReferenceNo(e.target.value)}
+                placeholder="Optional"
+                disabled={isSubmittingEdit}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsEditModalOpen(false)} disabled={isSubmittingEdit}>
+              Cancel
+            </Button>
+            <Button onClick={handleEditSubmit} disabled={isSubmittingEdit || !editAmount}>
+              {isSubmittingEdit ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  {isRefreshing ? "Syncing ledger..." : "Saving changes..."}
+                </>
+              ) : (
+                "Save Changes"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => {
+          if (!open && isDeletingEntry) return;
+          if (!open) {
+            setDeleteTarget(null);
+            setDeleteReason("");
+          }
+        }}
+      >
+        <AlertDialogContent className="max-h-[90vh] overflow-y-auto">
+          {isDeletingEntry && (
+            <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-2 rounded-lg bg-white/85 backdrop-blur-[1px]">
+              <Loader2 className="h-6 w-6 animate-spin text-red-600" />
+              <p className="text-sm font-medium text-slate-700">
+                {isRefreshing ? "Updating ledger..." : "Deleting entry..."}
+              </p>
+            </div>
+          )}
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this transaction?</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-3 text-sm text-muted-foreground">
+                <p>
+                  This will remove the entry and add a reversal adjustment for audit. Customer
+                  balance and invoice allocations will be recalculated.
+                </p>
+                {deleteTarget && (
+                  <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-slate-700">
+                    <p className="font-medium">{cleanDisplayText(deleteTarget.description)}</p>
+                    <p className="mt-1 text-xs">
+                      {entryTypeLabel(deleteTarget.type)} · {formatDate(deleteTarget.date)} ·{" "}
+                      {deleteTarget.debit > 0
+                        ? `Debit ${money(deleteTarget.debit)}`
+                        : deleteTarget.credit > 0
+                          ? `Credit ${money(deleteTarget.credit)}`
+                          : money(deleteTarget.amount ?? 0)}
+                    </p>
+                  </div>
+                )}
+                <div className="space-y-1.5">
+                  <Label htmlFor="delete-reason">Reason (optional)</Label>
+                  <Input
+                    id="delete-reason"
+                    value={deleteReason}
+                    onChange={(e) => setDeleteReason(e.target.value)}
+                    placeholder="e.g. Duplicate entry, wrong amount recorded"
+                    disabled={isDeletingEntry}
+                  />
+                </div>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeletingEntry}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                handleDeleteConfirm();
+              }}
+              disabled={isDeletingEntry}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              {isDeletingEntry ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  {isRefreshing ? "Syncing ledger..." : "Deleting..."}
+                </>
+              ) : (
+                "Delete Entry"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
