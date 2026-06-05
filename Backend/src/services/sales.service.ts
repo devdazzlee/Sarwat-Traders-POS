@@ -505,12 +505,28 @@ class SaleService {
       ? await prisma.customer.findUnique({ where: { id: customerId } })
       : null;
     if (customerId && !customer) throw new AppError(400, 'Invalid customer');
+
+    // Authoritative balance from ledger (customer.outstanding_balance can drift)
+    let ledgerBalance = customer
+      ? new Prisma.Decimal(customer.outstanding_balance)
+      : new Prisma.Decimal(0);
+    if (customerId) {
+      const lastLedgerEntry = await prisma.customerLedger.findFirst({
+        where: { customer_id: customerId },
+        orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
+        select: { balance_after: true },
+      });
+      if (lastLedgerEntry) {
+        ledgerBalance = new Prisma.Decimal(lastLedgerEntry.balance_after);
+      }
+    }
+
     if (!items.length) throw new AppError(400, 'No items provided');
 
     // Warn if over credit limit (but allow — per business decision)
     if (isCreditSale && customer) {
       const creditLimit = new Prisma.Decimal(customer.credit_limit);
-      const currentBalance = new Prisma.Decimal(customer.outstanding_balance);
+      const currentBalance = ledgerBalance;
       const subtotalCheck = items.reduce((s, it) => s + it.price * it.quantity, 0);
       const finalTotalCheck = Math.max(0, subtotalCheck - (discountAmount ?? 0));
       const newBalance = currentBalance.plus(finalTotalCheck);
@@ -588,9 +604,7 @@ class SaleService {
       : 'PAID';
 
     // Snapshot the customer's unpaid balance BEFORE this sale settles
-    const previousBalanceSnapshot = customer
-      ? new Prisma.Decimal(customer.outstanding_balance)
-      : new Prisma.Decimal(0);
+    const previousBalanceSnapshot = ledgerBalance;
 
     // (a) Sale + items
     ops.push(
@@ -661,7 +675,7 @@ class SaleService {
 
     // (d) Credit ledger entries — record credit owed + any upfront partial payment
     if (isCreditSale && customerId && customer && creditOwedAmount > 0) {
-      const baseBalance = new Prisma.Decimal(customer.outstanding_balance);
+      const baseBalance = ledgerBalance;
       // After adding the full credit owed and subtracting any upfront payment
       const balanceAfterCredit = baseBalance.plus(creditOwedAmount);
       const finalBalance = creditPaidAmount > 0

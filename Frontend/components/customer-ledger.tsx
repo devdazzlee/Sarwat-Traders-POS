@@ -44,6 +44,7 @@ import {
   Pencil,
   Trash2,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import apiClient from "@/lib/apiClient";
 import { API_BASE } from "@/config/constants";
 import { useToast } from "@/hooks/use-toast";
@@ -91,7 +92,13 @@ interface CustomerLedgerProps {
 }
 
 const money = (n: number) =>
-  `Rs ${Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+  Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
+
+const formatSignedMoney = (n: number, direction: "increase" | "decrease" | "none") => {
+  if (direction === "none") return "—";
+  const prefix = direction === "increase" ? "+" : "−";
+  return `${prefix}${money(n)}`;
+};
 
 /** Replace em/en dashes in API copy with simpler punctuation for display */
 function cleanDisplayText(text: string) {
@@ -144,10 +151,193 @@ function getNetBalancePresentation(balance: number) {
 function formatRunningBalance(running: number) {
   const net = getNetBalancePresentation(running);
   return {
-    text: net.variant === "settled" ? "Rs 0" : money(net.amount),
+    text: net.variant === "settled" ? "0" : money(net.amount),
     className: net.className,
     hint: net.hint,
   };
+}
+
+type EnrichedLedgerEntry = LedgerEntry & {
+  balanceBefore: number;
+  changeAmount: number;
+  changeDirection: "increase" | "decrease" | "none";
+  humanType: string;
+  humanChangeLabel: string;
+  humanExplanation: string;
+  statusLabel: string;
+  statusClass: string;
+  changeClass: string;
+  borderClass: string;
+  badgeClass: string;
+  relatedRef: string | null;
+  relatedEntries: LedgerEntry[];
+};
+
+function extractSaleRef(entry: LedgerEntry): string | null {
+  if (entry.reference_no?.trim()) return entry.reference_no.trim();
+  if (entry.saleId?.trim()) return entry.saleId.trim();
+  const match = entry.description.match(/SALE-\d+/i);
+  return match ? match[0].toUpperCase() : null;
+}
+
+function enrichLedgerEntry(entry: LedgerEntry, allEntries: LedgerEntry[]): EnrichedLedgerEntry {
+  const balanceBefore = Number((entry.balance - entry.debit + entry.credit).toFixed(2));
+  const changeAmount =
+    entry.debit > 0.009 ? entry.debit : entry.credit > 0.009 ? entry.credit : entry.amount ?? 0;
+  const changeDirection =
+    entry.debit > 0.009 ? "increase" : entry.credit > 0.009 ? "decrease" : "none";
+
+  const relatedRef = extractSaleRef(entry);
+  const relatedEntries = relatedRef
+    ? allEntries.filter((e) => e.id !== entry.id && extractSaleRef(e) === relatedRef)
+    : [];
+
+  const desc = cleanDisplayText(entry.description).toLowerCase();
+  const isOpening = desc.includes("opening balance");
+  const isDeletedAudit = desc.includes("deleted");
+  const isSaleEdit =
+    desc.includes("sale edit") || desc.includes("credit removed") || desc.includes("credit assigned");
+
+  let humanType = entryTypeLabel(entry.type);
+  let humanExplanation = "This entry updated the customer account balance.";
+  let statusLabel = "Recorded";
+  let statusClass = "text-slate-500";
+  let changeClass = "text-slate-700";
+  let borderClass = "border-l-slate-200";
+
+  if (entry.type === "CREDIT_SALE") {
+    humanType = "Credit Sale";
+    humanExplanation =
+      "Customer purchased on credit. This amount was added to what they owe you.";
+    changeClass = "text-rose-700";
+    borderClass = "border-l-rose-400";
+    if (entry.paymentStatus === "PAID") {
+      statusLabel = "Paid";
+      statusClass = "text-emerald-600";
+    } else if (entry.paymentStatus === "PARTIAL") {
+      statusLabel = "Partially Paid";
+      statusClass = "text-amber-600";
+    } else if ((entry.invoiceDue ?? 0) > 0.009) {
+      statusLabel = "Unpaid";
+      statusClass = "text-rose-600";
+    }
+  } else if (entry.type === "PAYMENT_RECEIVED") {
+    humanType = "Payment Received";
+    humanExplanation = "Customer paid this amount. It reduced their outstanding balance.";
+    statusLabel = "Received";
+    statusClass = "text-emerald-600";
+    changeClass = "text-emerald-700";
+    borderClass = "border-l-emerald-400";
+  } else if (entry.type === "REFUND") {
+    humanType = "Refund";
+    humanExplanation = "Refund or return credit. It reduced what the customer owes.";
+    statusLabel = "Refunded";
+    statusClass = "text-emerald-600";
+    changeClass = "text-emerald-700";
+    borderClass = "border-l-emerald-400";
+  } else if (entry.type === "ADJUSTMENT") {
+    if (isOpening) {
+      humanType = "Opening Balance";
+      humanExplanation = "Existing amount the customer owed before this POS system was used.";
+      changeClass = "text-rose-700";
+      borderClass = "border-l-slate-400";
+    } else if (isDeletedAudit) {
+      humanType = "Audit Note";
+      humanExplanation = "Record of a deleted or reversed entry. Balance was already recalculated.";
+      statusLabel = "Audit";
+      statusClass = "text-slate-500";
+      borderClass = "border-l-slate-300";
+    } else if (isSaleEdit && relatedRef) {
+      humanType = "Sale Adjustment";
+      humanExplanation = `Linked to ${relatedRef} from a sale edit or customer change.`;
+      statusLabel = "Linked";
+      statusClass = "text-blue-600";
+      changeClass = changeDirection === "decrease" ? "text-emerald-700" : "text-rose-700";
+      borderClass = changeDirection === "decrease" ? "border-l-emerald-400" : "border-l-blue-400";
+    } else {
+      humanType = "Adjustment";
+      humanExplanation =
+        changeDirection === "increase"
+          ? "Manual correction that increased what the customer owes."
+          : changeDirection === "decrease"
+            ? "Manual correction that reduced what the customer owes."
+            : "Manual balance correction on this account.";
+      statusLabel = "Adjusted";
+      statusClass = "text-blue-600";
+      changeClass = changeDirection === "decrease" ? "text-emerald-700" : "text-rose-700";
+      borderClass = changeDirection === "decrease" ? "border-l-emerald-400" : "border-l-rose-400";
+    }
+  }
+
+  if (changeDirection === "decrease" && entry.type !== "PAYMENT_RECEIVED" && entry.type !== "REFUND") {
+    if (!isSaleEdit || !relatedRef) {
+      changeClass = "text-emerald-700";
+    }
+  } else if (changeDirection === "increase" && entry.type === "ADJUSTMENT" && !isOpening && !isDeletedAudit && !(isSaleEdit && relatedRef)) {
+    changeClass = "text-rose-700";
+  }
+
+  const humanChangeLabel = formatSignedMoney(changeAmount, changeDirection);
+
+  return {
+    ...entry,
+    balanceBefore,
+    changeAmount,
+    changeDirection,
+    humanType,
+    humanChangeLabel,
+    humanExplanation,
+    statusLabel,
+    statusClass,
+    changeClass,
+    borderClass,
+    badgeClass: "",
+    relatedRef,
+    relatedEntries,
+  };
+}
+
+function BalanceFlow({
+  before,
+  change,
+  after,
+  direction,
+}: {
+  before: number;
+  change: number;
+  after: number;
+  direction: "increase" | "decrease" | "none";
+}) {
+  return (
+    <div className="grid grid-cols-3 gap-2 text-sm tabular-nums">
+      <div>
+        <p className="text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">Before</p>
+        <p className="font-medium text-slate-800">{money(before)}</p>
+      </div>
+      <div>
+        <p className="text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">Change</p>
+        <p
+          className={cn(
+            "font-semibold",
+            direction === "increase"
+              ? "text-rose-700"
+              : direction === "decrease"
+                ? "text-emerald-700"
+                : "text-slate-700",
+          )}
+        >
+          {direction === "increase" ? "+" : direction === "decrease" ? "−" : ""}
+          {money(change)}
+        </p>
+      </div>
+      <div>
+        <p className="text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">After</p>
+        <p className={cn("font-semibold tabular-nums", formatRunningBalance(after).className)}>
+          {formatRunningBalance(after).text}
+        </p>
+      </div>
+    </div>
+  );
 }
 
 export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
@@ -184,6 +374,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
   const [deleteTarget, setDeleteTarget] = useState<LedgerEntry | null>(null);
   const [deleteReason, setDeleteReason] = useState("");
   const [isDeletingEntry, setIsDeletingEntry] = useState(false);
+  const [viewEntry, setViewEntry] = useState<EnrichedLedgerEntry | null>(null);
 
   const fetchLedgerData = useCallback(async (options?: { silent?: boolean }): Promise<boolean> => {
     const silent = options?.silent ?? false;
@@ -255,6 +446,11 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
       const db = new Date(b.date).getTime();
       return sortOrder === "desc" ? db - da : da - db;
     });
+
+  const enrichedEntries = useMemo(
+    () => filteredEntries.map((e) => enrichLedgerEntry(e, entries)),
+    [filteredEntries, entries],
+  );
 
   type PaymentTarget = {
     key: string;
@@ -476,7 +672,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
 
     autoTable(doc, {
       startY: 115,
-      head: [["Date & Time", "Description", "Reference", "Debit", "Credit", "Running Balance"]],
+      head: [["Date & Time", "Description", "Reference", "Added", "Paid", "Balance Due"]],
       body: tableData,
       theme: 'striped',
       headStyles: { 
@@ -695,10 +891,6 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
     );
   }
 
-  const creditUsed = customer.credit_limit > 0
-    ? Math.min(100, Math.round((Math.max(0, summary.balance) / customer.credit_limit) * 100))
-    : 0;
-
   const netBalance = getNetBalancePresentation(summary.balance);
   const selectedTarget = paymentTargets.find((t) => t.key === paymentSaleKey);
   const isLedgerBusy =
@@ -743,7 +935,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
             </Button>
             <Button
               size="sm"
-              className="h-9 bg-emerald-600 hover:bg-emerald-700 text-white"
+              className="h-9 bg-emerald-700 hover:bg-emerald-800 text-white"
               onClick={() => openPaymentModal(null)}
             >
               <Plus className="h-4 w-4 sm:mr-1.5" />
@@ -766,33 +958,42 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
         )}
 
         <div className={`grid grid-cols-2 lg:grid-cols-4 gap-3 transition-opacity ${isLedgerBusy ? "opacity-50" : ""}`}>
-          <div className="bg-white rounded-xl border border-slate-200 p-3.5">
-            <p className="text-[11px] font-medium text-slate-500 uppercase">Total Debits</p>
-            <p className="text-lg font-semibold text-rose-600 mt-1 tabular-nums">{money(summary.totalDebits)}</p>
+          <div className="bg-white rounded-lg border border-rose-100 border-l-4 border-l-rose-500 p-4">
+            <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">Added to Balance</p>
+            <p className="text-xl font-semibold text-rose-700 mt-1 tabular-nums">{money(summary.totalDebits)}</p>
+            <p className="text-[10px] text-slate-400 mt-1">Sales &amp; charges</p>
           </div>
-          <div className="bg-white rounded-xl border border-slate-200 p-3.5">
-            <p className="text-[11px] font-medium text-slate-500 uppercase">Total Credits</p>
-            <p className="text-lg font-semibold text-emerald-600 mt-1 tabular-nums">{money(summary.totalCredits)}</p>
+          <div className="bg-white rounded-lg border border-emerald-100 border-l-4 border-l-emerald-500 p-4">
+            <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">Paid by Customer</p>
+            <p className="text-xl font-semibold text-emerald-700 mt-1 tabular-nums">{money(summary.totalCredits)}</p>
+            <p className="text-[10px] text-slate-400 mt-1">Payments received</p>
           </div>
-          <div className={`rounded-xl border p-3.5 ${netBalance.cardClass}`}>
-            <p className={`text-[11px] font-medium uppercase ${netBalance.labelClass}`}>{netBalance.label}</p>
-            <p className={`text-lg font-semibold mt-1 tabular-nums ${netBalance.className}`}>
-              {netBalance.variant === "settled" ? "Rs 0" : money(netBalance.amount)}
+          <div className={cn("rounded-lg border p-4 border-l-4", netBalance.cardClass, netBalance.variant === "due" ? "border-l-amber-500" : netBalance.variant === "credit" ? "border-l-emerald-500" : "border-l-slate-400")}>
+            <p className={cn("text-[11px] font-medium uppercase tracking-wide", netBalance.labelClass)}>{netBalance.label}</p>
+            <p className={cn("text-xl font-semibold mt-1 tabular-nums", netBalance.className)}>
+              {netBalance.variant === "settled" ? "0" : money(netBalance.amount)}
             </p>
           </div>
-          <div className="bg-white rounded-xl border border-slate-200 p-3.5">
-            <p className="text-[11px] font-medium text-slate-500 uppercase">Credit Limit</p>
-            <p className="text-lg font-semibold text-slate-900 mt-1 tabular-nums">
+          <div className="bg-white rounded-lg border border-slate-200 border-l-4 border-l-slate-400 p-4">
+            <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">Credit Limit</p>
+            <p className="text-xl font-semibold text-slate-900 mt-1 tabular-nums">
               {money(Number(customer.credit_limit))}
             </p>
           </div>
         </div>
 
-        <div className={`bg-white rounded-xl border border-slate-200 shadow-sm transition-opacity ${isLedgerBusy ? "opacity-50" : ""}`}>
-          <div className="px-4 py-3 border-b border-slate-100">
+        <div className={`flex flex-wrap items-center gap-x-5 gap-y-1 rounded-lg border border-slate-200 bg-slate-50/80 px-4 py-2 text-[11px] text-slate-600 transition-opacity ${isLedgerBusy ? "opacity-50" : ""}`}>
+          <span className="font-medium text-slate-700">Legend:</span>
+          <span><span className="inline-block w-2 h-2 rounded-full bg-rose-500 mr-1.5 align-middle" />Added to balance</span>
+          <span><span className="inline-block w-2 h-2 rounded-full bg-emerald-500 mr-1.5 align-middle" />Paid / reduced</span>
+          <span><span className="inline-block w-2 h-2 rounded-full bg-amber-500 mr-1.5 align-middle" />Amount due</span>
+        </div>
+
+        <div className={`bg-white rounded-lg border border-slate-200 transition-opacity ${isLedgerBusy ? "opacity-50" : ""}`}>
+          <div className="px-4 py-3 border-b border-slate-200">
             <div className="flex items-center justify-between gap-2">
-              <h2 className="text-sm font-semibold text-slate-800">Statement of Account</h2>
-              <span className="text-xs text-slate-500">{entries.length} entries</span>
+              <h2 className="text-sm font-semibold text-slate-900">Statement of Account</h2>
+              <span className="text-xs text-slate-500">{entries.length} transactions</span>
             </div>
           </div>
 
@@ -821,81 +1022,103 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
             </div>
           </div>
 
-          <div className="overflow-x-auto overscroll-x-contain">
-            <table className="w-full min-w-[720px] text-sm border-collapse">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[1120px] text-sm border-collapse table-fixed">
+              <colgroup>
+                <col className="w-[108px]" />
+                <col className="w-[130px]" />
+                <col />
+                <col className="w-[150px]" />
+                <col className="w-[104px]" />
+                <col className="w-[104px]" />
+                <col className="w-[104px]" />
+                <col className="w-[148px]" />
+              </colgroup>
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50">
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 w-[110px]">Date</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 min-w-[200px]">Details</th>
-                  <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 w-[100px]">Debit</th>
-                  <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 w-[100px]">Credit</th>
-                  <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 w-[120px]">Balance</th>
-                  <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 w-[120px]">Actions</th>
+                  <th className="text-left px-3 py-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Date</th>
+                  <th className="text-left px-3 py-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Type</th>
+                  <th className="text-left px-3 py-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Description</th>
+                  <th className="text-left px-3 py-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Reference</th>
+                  <th className="text-right px-3 py-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Before</th>
+                  <th className="text-right px-3 py-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Change</th>
+                  <th className="text-right px-3 py-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">After</th>
+                  <th className="text-right px-3 py-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredEntries.length === 0 ? (
+                {enrichedEntries.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="py-16 text-center">
-                      <div className="flex flex-col items-center gap-2 text-slate-400">
-                        <Receipt className="h-8 w-8 opacity-20" />
-                        <p className="text-sm font-medium">No transactions found</p>
-                        {search && <p className="text-xs">Try clearing the search filter</p>}
-                      </div>
+                    <td colSpan={8} className="py-16 text-center text-slate-400">
+                      <Receipt className="h-8 w-8 opacity-20 mx-auto mb-2" />
+                      <p className="text-sm">No transactions found</p>
                     </td>
                   </tr>
                 ) : (
-                  filteredEntries.map((entry) => (
-                    <tr key={entry.id} className="border-b border-slate-100 hover:bg-slate-50/50">
-                      <td className="px-4 py-3 align-top whitespace-nowrap">
-                        <p className="font-medium text-slate-800 text-xs">{formatDate(entry.date)}</p>
-                        <p className="text-[11px] text-slate-400">{formatTime(entry.date)}</p>
+                  enrichedEntries.map((entry) => (
+                    <tr
+                      key={entry.id}
+                      className={cn(
+                        "border-b border-slate-100 hover:bg-slate-50/80 border-l-[3px]",
+                        entry.borderClass,
+                      )}
+                    >
+                      <td className="px-3 py-3 align-middle">
+                        <p className="text-xs font-medium text-slate-800 leading-tight whitespace-nowrap">
+                          {formatDate(entry.date)}
+                        </p>
+                        <p className="text-[11px] text-slate-500 mt-0.5 leading-tight whitespace-nowrap">
+                          {formatTime(entry.date)}
+                        </p>
                       </td>
-                      <td className="px-4 py-3 align-top min-w-0">
-                        <p className="text-sm text-slate-800 leading-snug break-words">
+                      <td className="px-3 py-3 align-middle whitespace-nowrap">
+                        <p className="text-xs font-medium text-slate-800">{entry.humanType}</p>
+                        <p className={cn("text-[11px] mt-0.5 whitespace-nowrap", entry.statusClass)}>
+                          {entry.statusLabel}
+                        </p>
+                      </td>
+                      <td className="px-3 py-3 align-middle">
+                        <p className="text-sm text-slate-800 leading-snug truncate" title={cleanDisplayText(entry.description)}>
                           {cleanDisplayText(entry.description)}
                         </p>
-                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1">
-                          <span className="text-[11px] text-slate-500">{entryTypeLabel(entry.type)}</span>
-                          {entry.reference_no && (
-                            <>
-                              <span className="text-slate-300">·</span>
-                              <span className="text-[11px] font-mono text-slate-600">{entry.reference_no}</span>
-                            </>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-right align-top tabular-nums whitespace-nowrap">
-                        {entry.debit > 0 ? (
-                          <span className="font-semibold text-rose-600">{money(entry.debit)}</span>
-                        ) : (
-                          <span className="text-slate-300">-</span>
+                        {entry.relatedEntries.length > 0 && (
+                          <p className="text-[11px] text-slate-400 mt-0.5 whitespace-nowrap">
+                            {entry.relatedEntries.length} related
+                          </p>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-right align-top tabular-nums whitespace-nowrap">
-                        {entry.credit > 0 ? (
-                          <span className="font-semibold text-emerald-600">{money(entry.credit)}</span>
-                        ) : (
-                          <span className="text-slate-300">-</span>
-                        )}
+                      <td className="px-3 py-3 align-middle whitespace-nowrap">
+                        <span className="text-[11px] font-mono text-slate-600">
+                          {entry.relatedRef || entry.reference_no || "—"}
+                        </span>
                       </td>
-                      <td className="px-4 py-3 text-right align-top tabular-nums whitespace-nowrap">
-                        {(() => {
-                          const rb = formatRunningBalance(entry.balance);
-                          return (
-                            <span className={`font-semibold text-sm ${rb.className}`} title={rb.hint}>
-                              {rb.text}
-                            </span>
-                          );
-                        })()}
+                      <td className="px-3 py-3 text-right align-middle tabular-nums text-slate-700 whitespace-nowrap">
+                        {money(entry.balanceBefore)}
                       </td>
-                      <td className="px-4 py-3 text-right align-top">
-                        <div className="flex items-center justify-end gap-1">
+                      <td className="px-3 py-3 text-right align-middle tabular-nums font-semibold whitespace-nowrap">
+                        <span className={entry.changeClass}>{entry.humanChangeLabel}</span>
+                      </td>
+                      <td className="px-3 py-3 text-right align-middle tabular-nums font-semibold whitespace-nowrap">
+                        <span className={formatRunningBalance(entry.balance).className}>
+                          {formatRunningBalance(entry.balance).text}
+                        </span>
+                      </td>
+                      <td className="px-3 py-3 text-right align-middle whitespace-nowrap">
+                        <div className="flex items-center justify-end gap-0.5 flex-nowrap">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 px-2 text-xs text-slate-600 hover:text-slate-900"
+                            onClick={() => setViewEntry(entry)}
+                            disabled={isLedgerBusy}
+                          >
+                            View
+                          </Button>
                           {entry.isCollectable && (entry.invoiceDue ?? 0) > 0 && (
                             <Button
                               variant="outline"
                               size="sm"
-                              className="h-8 text-xs text-emerald-700 border-emerald-200 hover:bg-emerald-50"
+                              className="h-8 px-2 text-xs text-emerald-700 border-emerald-200 hover:bg-emerald-50"
                               onClick={() => openPaymentModal(entry)}
                               disabled={isLedgerBusy}
                             >
@@ -907,8 +1130,8 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                             <Button
                               variant="ghost"
                               size="sm"
-                              className="h-8 w-8 p-0 text-slate-500 hover:text-blue-700 hover:bg-blue-50"
-                              title="Edit entry"
+                              className="h-8 w-8 p-0 text-slate-500 hover:text-slate-800"
+                              title="Edit"
                               onClick={() => openEditModal(entry)}
                               disabled={isLedgerBusy}
                             >
@@ -920,8 +1143,8 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                             <Button
                               variant="ghost"
                               size="sm"
-                              className="h-8 w-8 p-0 text-slate-500 hover:text-red-600 hover:bg-red-50"
-                              title="Delete entry"
+                              className="h-8 w-8 p-0 text-slate-500 hover:text-slate-800"
+                              title="Delete"
                               onClick={() => setDeleteTarget(entry)}
                               disabled={isLedgerBusy}
                             >
@@ -934,20 +1157,29 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                   ))
                 )}
               </tbody>
-              {filteredEntries.length > 0 && (
+              {enrichedEntries.length > 0 && (
                 <tfoot>
-                  <tr className="bg-slate-50 border-t border-slate-200">
-                    <td colSpan={2} className="px-4 py-3 text-xs font-semibold text-slate-600">
+                  <tr className="border-t-2 border-slate-300 bg-slate-100/80">
+                    <td colSpan={4} className="px-3 py-4 text-sm font-bold uppercase tracking-wide text-slate-700">
                       Totals
                     </td>
-                    <td className="px-4 py-3 text-right font-semibold text-rose-600 tabular-nums">
-                      {money(filteredEntries.reduce((s, e) => s + e.debit, 0))}
+                    <td className="px-3 py-4 text-right text-sm text-slate-500 tabular-nums">—</td>
+                    <td className="px-3 py-4 text-right text-sm font-bold tabular-nums whitespace-nowrap">
+                      {summary.totalDebits > 0.009 && (
+                        <span className="text-rose-600">+{money(summary.totalDebits)}</span>
+                      )}
+                      {summary.totalDebits > 0.009 && summary.totalCredits > 0.009 && (
+                        <span className="text-slate-400 mx-1">/</span>
+                      )}
+                      {summary.totalCredits > 0.009 && (
+                        <span className="text-emerald-600">−{money(summary.totalCredits)}</span>
+                      )}
+                      {summary.totalDebits <= 0.009 && summary.totalCredits <= 0.009 && (
+                        <span className="text-slate-400">0</span>
+                      )}
                     </td>
-                    <td className="px-4 py-3 text-right font-semibold text-emerald-600 tabular-nums">
-                      {money(filteredEntries.reduce((s, e) => s + e.credit, 0))}
-                    </td>
-                    <td className={`px-4 py-3 text-right font-semibold tabular-nums ${netBalance.className}`}>
-                      {netBalance.variant === "settled" ? "Rs 0" : money(netBalance.amount)}
+                    <td className={cn("px-3 py-4 text-right text-base font-bold tabular-nums whitespace-nowrap", netBalance.className)}>
+                      {netBalance.variant === "settled" ? "0" : money(netBalance.amount)}
                     </td>
                     <td />
                   </tr>
@@ -958,6 +1190,148 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
         </div>
         </div>
       </div>
+
+      <Dialog open={!!viewEntry} onOpenChange={(open) => !open && setViewEntry(null)}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          {viewEntry && (
+            <>
+              <DialogHeader>
+                <DialogTitle>Transaction Details</DialogTitle>
+                <DialogDescription>
+                  {viewEntry.humanType} · {viewEntry.statusLabel} · {formatDate(viewEntry.date)} at{" "}
+                  {formatTime(viewEntry.date)}
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-4 py-2">
+                <div className="border border-slate-200 p-4 space-y-2">
+                  <p className="text-sm font-medium text-slate-900">
+                    {cleanDisplayText(viewEntry.description)}
+                  </p>
+                  <p className="text-xs text-slate-500">{viewEntry.humanExplanation}</p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-px bg-slate-200 border border-slate-200 text-sm">
+                  <div className="bg-white p-3">
+                    <p className="text-[10px] uppercase tracking-wide text-slate-500">Reference</p>
+                    <p className="font-mono text-xs mt-1 text-slate-800">
+                      {viewEntry.relatedRef || viewEntry.reference_no || "—"}
+                    </p>
+                  </div>
+                  <div className="bg-white p-3">
+                    <p className="text-[10px] uppercase tracking-wide text-slate-500">Amount</p>
+                    <p className="font-semibold mt-1 tabular-nums text-slate-900">
+                      {money(viewEntry.amount ?? viewEntry.changeAmount)}
+                    </p>
+                  </div>
+                  <div className="bg-white p-3">
+                    <p className="text-[10px] uppercase tracking-wide text-slate-500">Balance Before</p>
+                    <p className="font-semibold mt-1 tabular-nums text-slate-900">
+                      {money(viewEntry.balanceBefore)}
+                    </p>
+                  </div>
+                  <div className="bg-white p-3">
+                    <p className="text-[10px] uppercase tracking-wide text-slate-500">Balance After</p>
+                    <p className="font-semibold mt-1 tabular-nums text-slate-900">
+                      {formatRunningBalance(viewEntry.balance).text}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="border border-slate-200 p-4">
+                  <p className="text-[10px] uppercase tracking-wide text-slate-500 mb-3">Balance impact</p>
+                  <BalanceFlow
+                    before={viewEntry.balanceBefore}
+                    change={viewEntry.changeAmount}
+                    after={viewEntry.balance}
+                    direction={viewEntry.changeDirection}
+                  />
+                </div>
+
+                {viewEntry.type === "CREDIT_SALE" && (viewEntry.invoiceTotal ?? 0) > 0 && (
+                  <div className="border border-slate-200 p-3 text-xs space-y-1 text-slate-700">
+                    <p className="text-[10px] uppercase tracking-wide text-slate-500 font-medium">Invoice</p>
+                    <p>Total: {money(viewEntry.invoiceTotal ?? 0)}</p>
+                    <p>Paid: {money(viewEntry.invoicePaid ?? 0)}</p>
+                    <p className="font-semibold text-slate-900">
+                      Due: {money(viewEntry.invoiceDue ?? 0)}
+                    </p>
+                  </div>
+                )}
+
+                {viewEntry.relatedEntries.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-[10px] uppercase tracking-wide text-slate-500 font-medium">
+                      Related — {viewEntry.relatedRef}
+                    </p>
+                    <div className="border border-slate-200 divide-y divide-slate-100">
+                      {viewEntry.relatedEntries.map((rel) => {
+                        const relEnriched = enrichLedgerEntry(rel, entries);
+                        return (
+                          <button
+                            key={rel.id}
+                            type="button"
+                            className="w-full px-3 py-2.5 text-left text-xs hover:bg-slate-50 transition-colors"
+                            onClick={() => setViewEntry(relEnriched)}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-medium text-slate-800 truncate">
+                                {cleanDisplayText(rel.description)}
+                              </span>
+                              <span className="shrink-0 font-semibold tabular-nums text-slate-900">
+                                {relEnriched.humanChangeLabel}
+                              </span>
+                            </div>
+                            <p className="text-slate-500 mt-0.5">
+                              {relEnriched.humanType} · {formatDate(rel.date)}
+                            </p>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {viewEntry.editRestrictedReason && (
+                  <p className="text-xs text-slate-600 border border-slate-200 rounded px-3 py-2">
+                    {viewEntry.editRestrictedReason}
+                  </p>
+                )}
+              </div>
+
+              <DialogFooter className="flex-col sm:flex-row gap-2">
+                {viewEntry.isCollectable && (viewEntry.invoiceDue ?? 0) > 0 && (
+                  <Button
+                    variant="outline"
+                    className="sm:mr-auto border-slate-300"
+                    onClick={() => {
+                      setViewEntry(null);
+                      openPaymentModal(viewEntry);
+                    }}
+                  >
+                    Collect {money(viewEntry.invoiceDue ?? 0)}
+                  </Button>
+                )}
+                {(viewEntry.isEditable ??
+                  (viewEntry.type !== "CREDIT_SALE" && viewEntry.type !== "REFUND")) && (
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setViewEntry(null);
+                      openEditModal(viewEntry);
+                    }}
+                  >
+                    Edit
+                  </Button>
+                )}
+                <Button variant="outline" onClick={() => setViewEntry(null)}>
+                  Close
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={isPaymentModalOpen}
@@ -1026,19 +1400,14 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
               )}
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="amount">Amount (Rs)</Label>
-              <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">
-                  Rs
-                </span>
-                <Input
+              <Label htmlFor="amount">Amount</Label>
+              <Input
                   id="amount"
                   type="number"
-                  className="pl-10"
+                  className="h-10"
                   value={paymentAmount}
                   onChange={(e) => setPaymentAmount(e.target.value)}
                 />
-              </div>
               {selectedTarget && selectedTarget.suggestedAmount > 0 && (
                 <p className="text-xs text-muted-foreground">
                   Due on selection: {money(selectedTarget.suggestedAmount)}
@@ -1124,20 +1493,15 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="edit-amount">Amount (Rs)</Label>
-              <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">
-                  Rs
-                </span>
-                <Input
+              <Label htmlFor="edit-amount">Amount</Label>
+              <Input
                   id="edit-amount"
                   type="number"
-                  className="pl-10"
+                  className="h-10"
                   value={editAmount}
                   onChange={(e) => setEditAmount(e.target.value)}
                   disabled={isSubmittingEdit}
                 />
-              </div>
             </div>
             {editingEntry?.type === "ADJUSTMENT" && (
               <div className="space-y-1.5">
@@ -1151,8 +1515,8 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="debit">Debit (increases amount due)</SelectItem>
-                    <SelectItem value="credit">Credit (reduces amount due)</SelectItem>
+                    <SelectItem value="debit">Amount added (customer owes more)</SelectItem>
+                    <SelectItem value="credit">Amount paid / reduced</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

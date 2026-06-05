@@ -264,6 +264,14 @@ class CustomerLedgerService {
     }
   }
 
+  /** Rebuild running balances from entry amounts and sync customer outstanding_balance. */
+  async syncCustomerBalances(customerId: string) {
+    return prisma.$transaction(async (tx) => {
+      const balance = await this.recalculateRunningBalances(tx, customerId);
+      return { balance };
+    });
+  }
+
   private async recalculateRunningBalances(tx: TxClient, customerId: string) {
     const entries = await tx.customerLedger.findMany({
       where: { customer_id: customerId },
@@ -610,14 +618,14 @@ class CustomerLedgerService {
       }),
     ]);
 
-    // Derive debit/credit from running balance deltas (works for sales, payments, adjustments, refunds)
+    // Derive debit/credit from entry amounts (not balance_after deltas — avoids stale balance bugs)
     const debitCreditById = new Map<string, { debit: number; credit: number }>();
-    let prevBalance = 0;
+    const runningBalances = new Map<string, number>();
+    let running = 0;
     let totalDebits = 0;
     let totalCredits = 0;
     for (const e of allEntries) {
-      const bal = Number(e.balance_after);
-      const delta = bal - prevBalance;
+      const delta = this.computeSignedDelta(e, running);
       let debit = 0;
       let credit = 0;
       if (delta > 0.009) {
@@ -627,8 +635,9 @@ class CustomerLedgerService {
         credit = Math.abs(delta);
         totalCredits += Math.abs(delta);
       }
+      running = Number((running + delta).toFixed(3));
       debitCreditById.set(e.id, { debit, credit });
-      prevBalance = bal;
+      runningBalances.set(e.id, running);
     }
 
     let totalSales = 0;
@@ -695,7 +704,7 @@ class CustomerLedgerService {
         reference_no: e.reference_no ?? saleInfo?.sale_number ?? null,
         debit: amounts.debit,
         credit: amounts.credit,
-        balance: Number(e.balance_after),
+        balance: runningBalances.get(e.id) ?? Number(e.balance_after),
         amount: Number(e.amount),
         invoiceTotal,
         invoicePaid,
