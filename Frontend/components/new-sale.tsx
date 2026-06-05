@@ -215,7 +215,9 @@ export function NewSale() {
   const quantityPlusRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const quickQtyPlusRef = useRef<HTMLButtonElement | null>(null);
   const quickQtyInputRef = useRef<HTMLInputElement | null>(null);
+  const quantityEnterConfirmedRef = useRef<string | null>(null);
   const searchDropdownRef = useRef<HTMLDivElement | null>(null);
+  const searchDropdownItemRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const [quickQtyFocusTick, setQuickQtyFocusTick] = useState(0);
   const [productSearchOpen, setProductSearchOpen] = useState(false);
   const [highlightedProductIndex, setHighlightedProductIndex] = useState(0);
@@ -508,6 +510,13 @@ export function NewSale() {
     if (!searchTerm.trim()) return 0;
     return Math.max(0, filteredProducts.length - SEARCH_DROPDOWN_LIMIT);
   }, [filteredProducts.length, searchTerm]);
+
+  useEffect(() => {
+    if (!productSearchOpen) return;
+    const highlightedEl = searchDropdownItemRefs.current[highlightedProductIndex];
+    if (!highlightedEl) return;
+    highlightedEl.scrollIntoView({ block: "nearest" });
+  }, [highlightedProductIndex, productSearchOpen, searchDropdownProducts.length]);
 
   const focusSearchInput = useCallback((options?: { clear?: boolean }) => {
     setProductSearchOpen(false);
@@ -825,6 +834,22 @@ export function NewSale() {
     setCart((prev) =>
       prev.map((line) => (line.id === id ? { ...line, quantity: validQuantity } : line)),
     );
+  };
+
+  const finalizeQuantityInput = (id: string, rawValue: string, unitName?: string) => {
+    const minQuantity = isPieceUnit(unitName) ? 1 : 0.01;
+    const trimmed = rawValue.trim();
+    const parsed = trimmed ? parseCustomQuantityInput(trimmed, unitName) : null;
+    if (!trimmed || parsed === null || parsed <= 0) {
+      updateQuantityManual(id, minQuantity, unitName);
+    } else {
+      updateQuantityManual(id, parsed, unitName);
+    }
+    setQuantityInputs((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
   };
 
   const parseCustomQuantityInput = (rawValue: string, unitName?: string): number | null => {
@@ -1765,19 +1790,15 @@ export function NewSale() {
     const line = quickAdjustLine;
     if (line) {
       const unitName = line.unitName || line.unit;
-      const raw = quantityInputs[line.id];
-      const parsed = raw ? parseCustomQuantityInput(raw, unitName) : null;
-      if (raw && parsed !== null && parsed > 0) {
-        updateQuantityManual(line.id, parsed, unitName);
-      }
-      setQuantityInputs((prev) => {
-        const next = { ...prev };
-        delete next[line.id];
-        return next;
-      });
+      const domValue =
+        quickQtyInputRef.current?.value ||
+        (quantityInputRefs.current[line.id] as HTMLInputElement | null)?.value ||
+        "";
+      quantityEnterConfirmedRef.current = line.id;
+      finalizeQuantityInput(line.id, domValue, unitName);
     }
     focusSearchInput({ clear: true });
-  }, [quickAdjustLine, quantityInputs, focusSearchInput]);
+  }, [quickAdjustLine, focusSearchInput]);
 
   // After adding a product, focus quantity input (keyboard sale flow)
   useEffect(() => {
@@ -1987,6 +2008,9 @@ export function NewSale() {
                   {searchDropdownProducts.map((product, index) => (
                     <button
                       key={product.id}
+                      ref={(el) => {
+                        searchDropdownItemRefs.current[index] = el;
+                      }}
                       type="button"
                       role="option"
                       aria-selected={index === highlightedProductIndex}
@@ -2075,29 +2099,17 @@ export function NewSale() {
                     if (parsed === null) return;
                     updateQuantityManual(quickAdjustLine.id, parsed, unitName);
                   }}
-                  onBlur={() => {
+                  onBlur={(e) => {
                     if (!quickAdjustLine) return;
-                    const unitName = quickAdjustLine.unitName || quickAdjustLine.unit;
-                    const minQuantity = isPieceUnit(unitName) ? 1 : 0.01;
-                    const currentValue = quantityInputs[quickAdjustLine.id];
-                    const parsed = currentValue
-                      ? parseCustomQuantityInput(currentValue, unitName)
-                      : null;
-                    if (!currentValue || parsed === null || parsed <= 0) {
-                      setQuantityInputs((prev) => {
-                        const next = { ...prev };
-                        delete next[quickAdjustLine.id];
-                        return next;
-                      });
-                      updateQuantityManual(quickAdjustLine.id, minQuantity, unitName);
-                    } else {
-                      updateQuantityManual(quickAdjustLine.id, parsed, unitName);
-                      setQuantityInputs((prev) => {
-                        const next = { ...prev };
-                        delete next[quickAdjustLine.id];
-                        return next;
-                      });
+                    if (quantityEnterConfirmedRef.current === quickAdjustLine.id) {
+                      quantityEnterConfirmedRef.current = null;
+                      setTimeout(() => {
+                        isUserInteractingRef.current = false;
+                      }, 300);
+                      return;
                     }
+                    const unitName = quickAdjustLine.unitName || quickAdjustLine.unit;
+                    finalizeQuantityInput(quickAdjustLine.id, e.currentTarget.value, unitName);
                     setTimeout(() => {
                       isUserInteractingRef.current = false;
                     }, 300);
@@ -2696,26 +2708,15 @@ export function NewSale() {
                                 if (parsed === null) return;
                                 updateQuantityManual(item.id, parsed, unitName);
                               }}
-                              onBlur={() => {
-                                const currentValue = quantityInputs[item.id];
-                                const parsed = currentValue
-                                  ? parseCustomQuantityInput(currentValue, unitName)
-                                  : null;
-                                if (!currentValue || parsed === null || parsed <= 0) {
-                                  setQuantityInputs((prev) => {
-                                    const next = { ...prev };
-                                    delete next[item.id];
-                                    return next;
-                                  });
-                                  updateQuantityManual(item.id, minQuantity, unitName);
-                                } else {
-                                  updateQuantityManual(item.id, parsed, unitName);
-                                  setQuantityInputs((prev) => {
-                                    const next = { ...prev };
-                                    delete next[item.id];
-                                    return next;
-                                  });
+                              onBlur={(e) => {
+                                if (quantityEnterConfirmedRef.current === item.id) {
+                                  quantityEnterConfirmedRef.current = null;
+                                  setTimeout(() => {
+                                    isUserInteractingRef.current = false;
+                                  }, 300);
+                                  return;
                                 }
+                                finalizeQuantityInput(item.id, e.currentTarget.value, unitName);
                                 setTimeout(() => {
                                   isUserInteractingRef.current = false;
                                 }, 300);
