@@ -306,10 +306,13 @@ class CustomerLedgerService {
     entry_type: LedgerEntryType;
     sale_id: string | null;
   }) {
-    if (entry.entry_type === LedgerEntryType.CREDIT_SALE) {
+    if (
+      entry.entry_type === LedgerEntryType.CREDIT_SALE ||
+      entry.entry_type === LedgerEntryType.CASH_SALE
+    ) {
       throw new AppError(
         409,
-        'Credit sale entries cannot be edited here. Update or delete the sale from Sales History instead.'
+        'Sale entries cannot be edited here. Update or delete the sale from Sales History instead.'
       );
     }
     if (entry.entry_type === LedgerEntryType.REFUND) {
@@ -581,6 +584,7 @@ class CustomerLedgerService {
       const amt = Number(e.amount);
       if (e.entry_type === 'CREDIT_SALE') totalSales += amt;
       else if (e.entry_type === 'PAYMENT_RECEIVED') totalPayments += amt;
+      // CASH_SALE: tracked in entries list only — does not affect balance totals
     }
 
     const saleRefs = [
@@ -620,15 +624,18 @@ class CustomerLedgerService {
 
     const entries = rawEntries.map((e) => {
       const saleInfo = e.sale_id ? salesByRef[e.sale_id] : null;
+      const isCreditSale = e.entry_type === 'CREDIT_SALE';
+      const isCashSale = e.entry_type === 'CASH_SALE';
+      const isSaleEntry = isCreditSale || isCashSale;
+
       const invoiceTotal =
-        e.entry_type === 'CREDIT_SALE' && saleInfo ? Number(saleInfo.total_amount) : 0;
+        isSaleEntry && saleInfo ? Number(saleInfo.total_amount) : 0;
       const invoicePaid =
-        e.entry_type === 'CREDIT_SALE' && saleInfo ? Number(saleInfo.payment_received) : 0;
-      const invoiceDue = saleInfo ? Math.max(0, invoiceTotal - invoicePaid) : 0;
+        isCreditSale && saleInfo ? Number(saleInfo.payment_received) : isCashSale ? invoiceTotal : 0;
+      const invoiceDue = isCreditSale && saleInfo ? Math.max(0, invoiceTotal - invoicePaid) : 0;
 
       const amounts = debitCreditById.get(e.id) ?? { debit: 0, credit: 0 };
 
-      const isCreditSale = e.entry_type === 'CREDIT_SALE';
       const isRefund = e.entry_type === 'REFUND';
 
       return {
@@ -646,16 +653,15 @@ class CustomerLedgerService {
         invoiceDue,
         saleId: saleInfo?.id ?? null,
         paymentStatus: saleInfo?.payment_status ?? null,
-        isCollectable: e.entry_type === 'CREDIT_SALE' && invoiceDue > 0.009,
-        isEditable: !isCreditSale && !isRefund,
-        isDeletable: !isCreditSale && !isRefund,
-        editRestrictedReason: isCreditSale
-          ? 'Edit this from Sales History'
+        isCollectable: isCreditSale && invoiceDue > 0.009,
+        isEditable: !isSaleEntry && !isRefund,
+        isDeletable: !isSaleEntry && !isRefund,
+        editRestrictedReason: isSaleEntry
+          ? 'Edit or delete this from Sales History'
           : isRefund
             ? 'Manage from Returns & Exchanges'
             : null,
-        payment_method:
-          e.entry_type === 'CREDIT_SALE' ? saleInfo?.payment_method ?? 'CREDIT' : null,
+        payment_method: isSaleEntry ? saleInfo?.payment_method ?? (isCashSale ? 'CASH' : 'CREDIT') : null,
       };
     });
 

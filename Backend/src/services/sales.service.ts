@@ -689,12 +689,31 @@ class SaleService {
           }),
         );
       }
+    } else if (!isCreditSale && customerId && customer && finalTotal > 0) {
+      const paidLabel = paymentMethod === 'CARD' ? 'Card' : 'Cash';
+      ops.push(
+        prisma.customerLedger.create({
+          data: {
+            customer_id: customerId,
+            entry_type: LedgerEntryType.CASH_SALE,
+            amount: new Prisma.Decimal(finalTotal),
+            description: `${paidLabel} sale - ${saleNumber}`,
+            sale_id: saleNumber,
+            balance_after: 0,
+            created_by: createdBy,
+          },
+        }),
+      );
     }
 
     const [sale] = await prisma.$transaction(ops);
 
-    if (isCreditSale && customerId && creditOwedAmount > 0) {
-      await ledgerBalanceEngine.syncCustomerBalances(customerId);
+    if (customerId && customer) {
+      const needsSync =
+        (isCreditSale && creditOwedAmount > 0) || (!isCreditSale && finalTotal > 0);
+      if (needsSync) {
+        await ledgerBalanceEngine.syncCustomerBalances(customerId);
+      }
     }
 
     return sale as Prisma.SaleGetPayload<{ include: { sale_items: true } }>;

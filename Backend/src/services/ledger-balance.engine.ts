@@ -22,6 +22,8 @@ export class LedgerBalanceEngine {
     switch (entry.entry_type) {
       case LedgerEntryType.CREDIT_SALE:
         return amt;
+      case LedgerEntryType.CASH_SALE:
+        return 0;
       case LedgerEntryType.PAYMENT_RECEIVED:
       case LedgerEntryType.REFUND:
         return -amt;
@@ -106,6 +108,34 @@ export class LedgerBalanceEngine {
 
   private adjustmentReferenceNo(signedDelta: number): 'DEBIT' | 'CREDIT' {
     return signedDelta >= 0 ? 'DEBIT' : 'CREDIT';
+  }
+
+  async postCashSale(
+    tx: TxClient,
+    params: {
+      customerId: string;
+      amount: number;
+      saleId: string;
+      createdBy: string;
+      description?: string;
+    }
+  ) {
+    if (params.amount <= 0) return null;
+
+    const entry = await tx.customerLedger.create({
+      data: {
+        customer_id: params.customerId,
+        entry_type: LedgerEntryType.CASH_SALE,
+        amount: new Prisma.Decimal(params.amount),
+        description: params.description ?? 'Cash sale',
+        sale_id: params.saleId,
+        balance_after: 0,
+        created_by: params.createdBy,
+      },
+    });
+
+    await this.recalculateRunningBalances(tx, params.customerId);
+    return entry;
   }
 
   async postCreditSale(

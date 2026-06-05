@@ -944,6 +944,7 @@ model CustomerLedger {
 
 enum LedgerEntryType {
   CREDIT_SALE     // Customer bought on credit (balance increases)
+  CASH_SALE       // Customer paid in full (cash/card) — history only, no balance change
   PAYMENT_RECEIVED // Customer paid (balance decreases)
   ADJUSTMENT      // Manual adjustment
   REFUND          // Refund issued (balance decreases)

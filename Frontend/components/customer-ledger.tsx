@@ -107,6 +107,7 @@ function cleanDisplayText(text: string) {
 
 function entryTypeLabel(type: string) {
   if (type === "CREDIT_SALE") return "Credit Sale";
+  if (type === "CASH_SALE") return "Cash Sale";
   if (type === "PAYMENT_RECEIVED") return "Payment";
   if (type === "ADJUSTMENT") return "Adjustment";
   if (type === "REFUND") return "Refund";
@@ -221,6 +222,20 @@ function enrichLedgerEntry(entry: LedgerEntry, allEntries: LedgerEntry[]): Enric
       statusLabel = "Unpaid";
       statusClass = "text-rose-600";
     }
+  } else if (entry.type === "CASH_SALE") {
+    const paidVia =
+      entry.payment_method === "CARD"
+        ? "Card"
+        : entry.payment_method === "CASH"
+          ? "Cash"
+          : "Paid";
+    humanType = `${paidVia} Sale`;
+    humanExplanation =
+      "Customer paid in full at the time of sale. This does not change their account balance.";
+    statusLabel = "Paid";
+    statusClass = "text-emerald-600";
+    changeClass = "text-slate-600";
+    borderClass = "border-l-slate-300";
   } else if (entry.type === "PAYMENT_RECEIVED") {
     humanType = "Payment Received";
     humanExplanation = "Customer paid this amount. It reduced their outstanding balance.";
@@ -277,7 +292,10 @@ function enrichLedgerEntry(entry: LedgerEntry, allEntries: LedgerEntry[]): Enric
     changeClass = "text-rose-700";
   }
 
-  const humanChangeLabel = formatSignedMoney(changeAmount, changeDirection);
+  const humanChangeLabel =
+    entry.type === "CASH_SALE"
+      ? money(entry.amount ?? changeAmount)
+      : formatSignedMoney(changeAmount, changeDirection);
 
   return {
     ...entry,
@@ -1126,7 +1144,9 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                             </Button>
                           )}
                           {(entry.isEditable ??
-                            (entry.type !== "CREDIT_SALE" && entry.type !== "REFUND")) && (
+                            (entry.type !== "CREDIT_SALE" &&
+                              entry.type !== "CASH_SALE" &&
+                              entry.type !== "REFUND")) && (
                             <Button
                               variant="ghost"
                               size="sm"
@@ -1139,7 +1159,9 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                             </Button>
                           )}
                           {(entry.isDeletable ??
-                            (entry.type !== "CREDIT_SALE" && entry.type !== "REFUND")) && (
+                            (entry.type !== "CREDIT_SALE" &&
+                              entry.type !== "CASH_SALE" &&
+                              entry.type !== "REFUND")) && (
                             <Button
                               variant="ghost"
                               size="sm"
@@ -1248,7 +1270,8 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                   />
                 </div>
 
-                {viewEntry.type === "CREDIT_SALE" && (viewEntry.invoiceTotal ?? 0) > 0 && (
+                {(viewEntry.type === "CREDIT_SALE" || viewEntry.type === "CASH_SALE") &&
+                  (viewEntry.invoiceTotal ?? 0) > 0 && (
                   <div className="border border-slate-200 p-3 text-xs space-y-1 text-slate-700">
                     <p className="text-[10px] uppercase tracking-wide text-slate-500 font-medium">Invoice</p>
                     <p>Total: {money(viewEntry.invoiceTotal ?? 0)}</p>
@@ -1313,7 +1336,9 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                   </Button>
                 )}
                 {(viewEntry.isEditable ??
-                  (viewEntry.type !== "CREDIT_SALE" && viewEntry.type !== "REFUND")) && (
+                  (viewEntry.type !== "CREDIT_SALE" &&
+                    viewEntry.type !== "CASH_SALE" &&
+                    viewEntry.type !== "REFUND")) && (
                   <Button
                     variant="outline"
                     onClick={() => {
