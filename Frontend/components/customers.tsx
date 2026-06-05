@@ -148,7 +148,7 @@ export function Customers({ onViewLedger }: CustomersProps) {
     loadData();
   }, []);
 
-  const buildCustomerPayload = (data: Partial<Customer & { billing_address?: string }>) => {
+  const buildCustomerPayload = (data: Partial<Customer & { billing_address?: string }>, includeBalance = true) => {
     const name = data.name?.trim() || "";
     const phone_number = data.phone_number?.trim() || "";
     return {
@@ -160,12 +160,14 @@ export function Customers({ onViewLedger }: CustomersProps) {
         billing_address: (data as { billing_address?: string }).billing_address!.trim(),
       }),
       credit_limit: data.credit_limit ? Number(data.credit_limit) : 0,
-      outstanding_balance:
-        data.outstanding_balance !== undefined &&
-        data.outstanding_balance !== null &&
-        String(data.outstanding_balance).trim() !== ""
-          ? Math.max(0, Number(data.outstanding_balance))
-          : 0,
+      ...(includeBalance && {
+        outstanding_balance:
+          data.outstanding_balance !== undefined &&
+          data.outstanding_balance !== null &&
+          String(data.outstanding_balance).trim() !== ""
+            ? Math.max(0, Number(data.outstanding_balance))
+            : 0,
+      }),
     };
   };
 
@@ -216,7 +218,7 @@ export function Customers({ onViewLedger }: CustomersProps) {
     }
     setIsEditing(true);
     try {
-      const payload = buildCustomerPayload(editingCustomer);
+      const payload = buildCustomerPayload(editingCustomer, false);
       const { queued } = await queueMutation('PUT', `/customer/${editingCustomer.id}`, payload, 'customer');
       setEditingCustomer(null);
       if (queued) {
@@ -745,30 +747,18 @@ export function Customers({ onViewLedger }: CustomersProps) {
                 </div>
                 <div>
                   <Label htmlFor="edit-outstanding-balance">
-                    Credit balance (Rs){" "}
+                    Credit balance{" "}
                     <span className="text-gray-400 font-normal">(amount owed)</span>
                   </Label>
                   <Input
                     id="edit-outstanding-balance"
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={
-                      editingCustomer.outstanding_balance !== undefined &&
-                      editingCustomer.outstanding_balance !== null
-                        ? String(editingCustomer.outstanding_balance)
-                        : ""
-                    }
-                    onChange={(e) =>
-                      setEditingCustomer({
-                        ...editingCustomer,
-                        outstanding_balance: e.target.value,
-                      })
-                    }
-                    placeholder="0"
+                    type="text"
+                    readOnly
+                    value={Number(editingCustomer.outstanding_balance || 0).toLocaleString()}
+                    className="bg-slate-50"
                   />
                   <p className="text-xs text-muted-foreground mt-1">
-                    Adjust only if correcting balance; use Customer Ledger for payments.
+                    Balance is managed through Customer Ledger. Use Receive Payment or opening balance entries there.
                   </p>
                 </div>
               </div>

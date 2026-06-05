@@ -1,6 +1,7 @@
-import { Prisma, SaleItemType, SaleStatus, StockMovementType, LedgerEntryType } from '@prisma/client';
+import { LedgerEntryType, Prisma, SaleItemType, SaleStatus, StockMovementType } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { AppError } from '../utils/apiError';
+import { ledgerBalanceEngine } from './ledger-balance.engine';
 
 interface ReturnItem {
   productId: string;
@@ -506,19 +507,10 @@ class SaleService {
       : null;
     if (customerId && !customer) throw new AppError(400, 'Invalid customer');
 
-    // Authoritative balance from ledger (customer.outstanding_balance can drift)
-    let ledgerBalance = customer
-      ? new Prisma.Decimal(customer.outstanding_balance)
-      : new Prisma.Decimal(0);
+    // Authoritative balance from ledger entries (never trust customer.outstanding_balance alone)
+    let ledgerBalance = 0;
     if (customerId) {
-      const lastLedgerEntry = await prisma.customerLedger.findFirst({
-        where: { customer_id: customerId },
-        orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
-        select: { balance_after: true },
-      });
-      if (lastLedgerEntry) {
-        ledgerBalance = new Prisma.Decimal(lastLedgerEntry.balance_after);
-      }
+      ledgerBalance = await ledgerBalanceEngine.getRunningBalance(prisma, customerId);
     }
 
     if (!items.length) throw new AppError(400, 'No items provided');
@@ -526,7 +518,7 @@ class SaleService {
     // Warn if over credit limit (but allow — per business decision)
     if (isCreditSale && customer) {
       const creditLimit = new Prisma.Decimal(customer.credit_limit);
-      const currentBalance = ledgerBalance;
+      const currentBalance = new Prisma.Decimal(ledgerBalance);
       const subtotalCheck = items.reduce((s, it) => s + it.price * it.quantity, 0);
       const finalTotalCheck = Math.max(0, subtotalCheck - (discountAmount ?? 0));
       const newBalance = currentBalance.plus(finalTotalCheck);
@@ -585,28 +577,24 @@ class SaleService {
       }
     }
   
-    // 5) Prepare all writes as a single non-interactive transaction
+    // 5) Atomic sale + stock + ledger transaction
     const subtotalAmt = items.reduce((s, it) => s + it.price * it.quantity, 0);
     const finalDiscount = discountAmount ?? 0;
     const finalTotal = Math.max(0, subtotalAmt - finalDiscount);
-  
-    const ops: Prisma.PrismaPromise<any>[] = [];
-  
-    // Determine payment_method and payment_status for DB
+
     const dbPaymentMethod = isCreditSale ? 'CREDIT' : paymentMethod as Prisma.SaleCreateInput['payment_method'];
     const saleNumber = `SALE-${Date.now()}`;
 
-    // For credit sales: compute how much is actually paid vs going to credit
     const creditPaidAmount = isCreditSale ? Math.min(Math.max(0, paidAmount ?? 0), finalTotal) : finalTotal;
     const creditOwedAmount = isCreditSale ? finalTotal - creditPaidAmount : 0;
     const dbPaymentStatus = isCreditSale
       ? creditPaidAmount >= finalTotal ? 'PAID' : creditPaidAmount > 0 ? 'PARTIAL' : 'PENDING'
       : 'PAID';
 
-    // Snapshot the customer's unpaid balance BEFORE this sale settles
-    const previousBalanceSnapshot = ledgerBalance;
+    const previousBalanceSnapshot = new Prisma.Decimal(ledgerBalance);
 
-    // (a) Sale + items
+    const ops: Prisma.PrismaPromise<unknown>[] = [];
+
     ops.push(
       prisma.sale.create({
         data: {
@@ -632,10 +620,9 @@ class SaleService {
           },
         },
         include: { sale_items: true },
-      })
+      }),
     );
-  
-    // (b) Stock upserts — only if we have a branch to track stock against
+
     if (effectiveBranchId) {
       for (const m of movements) {
         const decAbs = m.quantity_change.abs();
@@ -651,12 +638,8 @@ class SaleService {
               maximum_quantity: new Prisma.Decimal(1000),
               reserved_quantity: new Prisma.Decimal(0),
             },
-          })
+          }),
         );
-      }
-
-      // (c) Stock movements
-      for (const m of movements) {
         ops.push(
           prisma.stockMovement.create({
             data: {
@@ -668,46 +651,29 @@ class SaleService {
               new_qty: m.new_qty,
               created_by: createdBy,
             },
-          })
+          }),
         );
       }
     }
 
-    // (d) Credit ledger entries — record credit owed + any upfront partial payment
     if (isCreditSale && customerId && customer && creditOwedAmount > 0) {
-      const baseBalance = ledgerBalance;
-      // After adding the full credit owed and subtracting any upfront payment
-      const balanceAfterCredit = baseBalance.plus(creditOwedAmount);
-      const finalBalance = creditPaidAmount > 0
-        ? balanceAfterCredit.minus(creditPaidAmount)
-        : balanceAfterCredit;
-
-      // Single customer balance update (net effect)
-      ops.push(
-        prisma.customer.update({
-          where: { id: customerId },
-          data: { outstanding_balance: finalBalance },
-        })
-      );
-
-      // CREDIT_SALE row: the full owed amount is debited against the customer
       ops.push(
         prisma.customerLedger.create({
           data: {
             customer_id: customerId,
             entry_type: LedgerEntryType.CREDIT_SALE,
             amount: new Prisma.Decimal(creditOwedAmount),
-            description: creditPaidAmount > 0
-              ? `Partial credit sale - ${saleNumber}`
-              : `Credit sale - ${saleNumber}`,
+            description:
+              creditPaidAmount > 0
+                ? `Partial credit sale - ${saleNumber}`
+                : `Credit sale - ${saleNumber}`,
             sale_id: saleNumber,
-            balance_after: balanceAfterCredit,
+            balance_after: 0,
             created_by: createdBy,
           },
-        })
+        }),
       );
 
-      // PAYMENT_RECEIVED row: the upfront paid amount is credited back
       if (creditPaidAmount > 0) {
         ops.push(
           prisma.customerLedger.create({
@@ -717,18 +683,21 @@ class SaleService {
               amount: new Prisma.Decimal(creditPaidAmount),
               description: `Upfront payment on ${saleNumber}`,
               sale_id: saleNumber,
-              balance_after: finalBalance,
+              balance_after: 0,
               created_by: createdBy,
             },
-          })
+          }),
         );
       }
     }
-  
+
     const [sale] = await prisma.$transaction(ops);
-    const saleResult = sale as Prisma.SaleGetPayload<{ include: { sale_items: true } }>;
-    
-    return saleResult;
+
+    if (isCreditSale && customerId && creditOwedAmount > 0) {
+      await ledgerBalanceEngine.syncCustomerBalances(customerId);
+    }
+
+    return sale as Prisma.SaleGetPayload<{ include: { sale_items: true } }>;
   }
   
 
@@ -1154,15 +1123,11 @@ class SaleService {
       );
 
     if (shouldPostToLedger && resolvedCustomerId) {
-      const acctCustomer = await prisma.customer.findUnique({
-        where: { id: resolvedCustomerId },
-        select: { outstanding_balance: true },
-      });
-      if (acctCustomer) {
-        returnAdjustsAccount = true;
-        returnPreviousBalance = new Prisma.Decimal(acctCustomer.outstanding_balance);
-        returnUpdatedBalance = returnPreviousBalance.plus(total);
-      }
+      returnAdjustsAccount = true;
+      returnPreviousBalance = new Prisma.Decimal(
+        await ledgerBalanceEngine.getRunningBalance(prisma, resolvedCustomerId),
+      );
+      returnUpdatedBalance = returnPreviousBalance.plus(total);
     }
 
     if (hasExchange && total.isPositive() && resolvedExchangePaymentMethod === 'CREDIT' && !resolvedCustomerId) {
@@ -1205,32 +1170,6 @@ class SaleService {
         },
       }),
     );
-
-    // Adjust customer ledger based on settlement mode.
-    if (returnAdjustsAccount && resolvedCustomerId && !total.isZero()) {
-      const isNetRefund = total.isNegative();
-      ops.push(
-        prisma.customer.update({
-          where: { id: resolvedCustomerId },
-          data: { outstanding_balance: returnUpdatedBalance },
-        }),
-      );
-      ops.push(
-        prisma.customerLedger.create({
-          data: {
-            customer_id: resolvedCustomerId,
-            entry_type: isNetRefund ? LedgerEntryType.REFUND : LedgerEntryType.ADJUSTMENT,
-            amount: total.abs(),
-            description: isNetRefund
-              ? `Return refund credited to account - ${returnSaleNumber}`
-              : `Exchange balance adjustment - ${returnSaleNumber}`,
-            sale_id: returnSaleNumber,
-            balance_after: returnUpdatedBalance,
-            created_by: createdBy,
-          },
-        }),
-      );
-    }
 
     for (const [productId, quantityChange] of stockNetChanges.entries()) {
       ops.push(
@@ -1278,6 +1217,29 @@ class SaleService {
     }
 
     const [sale] = await prisma.$transaction(ops);
+
+    if (returnAdjustsAccount && resolvedCustomerId && !total.isZero()) {
+      await prisma.$transaction(async (tx) => {
+        if (total.isNegative()) {
+          await ledgerBalanceEngine.postRefund(tx, {
+            customerId: resolvedCustomerId,
+            amount: Number(total.abs()),
+            createdBy,
+            description: `Return refund credited to account - ${returnSaleNumber}`,
+            saleId: returnSaleNumber,
+          });
+        } else {
+          await ledgerBalanceEngine.postCreditSale(tx, {
+            customerId: resolvedCustomerId,
+            amount: Number(total),
+            createdBy,
+            description: `Exchange on credit - ${returnSaleNumber}`,
+            saleId: returnSaleNumber,
+          });
+        }
+      });
+    }
+
     return sale as Prisma.SaleGetPayload<{ include: { sale_items: true } }>;
   }
 
@@ -1488,24 +1450,14 @@ class SaleService {
         delta: Prisma.Decimal,
         description: string,
       ) => {
-        if (delta.isZero()) return;
-        const customer = await tx.customer.findUnique({ where: { id: customerId } });
-        if (!customer) return;
-        const newBalance = new Prisma.Decimal(customer.outstanding_balance).plus(delta);
-        await tx.customer.update({
-          where: { id: customerId },
-          data: { outstanding_balance: newBalance },
-        });
-        await tx.customerLedger.create({
-          data: {
-            customer_id: customerId,
-            entry_type: LedgerEntryType.ADJUSTMENT,
-            amount: delta.abs(),
-            description,
-            sale_id: oldSale.sale_number,
-            balance_after: newBalance,
-            created_by: data.createdBy,
-          },
+        const signedDelta = Number(delta.toFixed(3));
+        if (Math.abs(signedDelta) <= 0.009) return;
+        await ledgerBalanceEngine.postSignedAdjustment(tx, {
+          customerId,
+          signedDelta,
+          description,
+          saleId: oldSale.sale_number,
+          createdBy: data.createdBy,
         });
       };
 
@@ -1631,39 +1583,13 @@ class SaleService {
         }
 
         if (sale.customer_id) {
-          const customer = await tx.customer.findUnique({
-            where: { id: sale.customer_id },
-          });
-          if (customer) {
-            const total = new Prisma.Decimal(sale.total_amount);
-            const paid = new Prisma.Decimal(sale.payment_received);
-            let newBalance: Prisma.Decimal;
-
-            if (isReturnOrExchangeRecord) {
-              // createExchangeOrReturnSale: balance += total (total may be negative)
-              newBalance = new Prisma.Decimal(customer.outstanding_balance).minus(total);
-            } else if (sale.payment_method === 'CREDIT') {
-              const creditOwed = total.minus(paid);
-              newBalance = new Prisma.Decimal(customer.outstanding_balance)
-                .minus(creditOwed)
-                .plus(paid);
-            } else {
-              newBalance = new Prisma.Decimal(customer.outstanding_balance);
-            }
-
-            if (!newBalance.equals(customer.outstanding_balance)) {
-              await tx.customer.update({
-                where: { id: sale.customer_id },
-                data: { outstanding_balance: newBalance },
-              });
-            }
-          }
           await tx.customerLedger.deleteMany({
             where: {
               customer_id: sale.customer_id,
               sale_id: sale.sale_number,
             },
           });
+          await ledgerBalanceEngine.recalculateRunningBalances(tx, sale.customer_id);
         }
 
         await tx.sale.delete({ where: { id: saleId } });

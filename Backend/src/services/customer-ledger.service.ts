@@ -1,8 +1,7 @@
 import { Prisma, LedgerEntryType } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { AppError } from '../utils/apiError';
-
-type TxClient = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
+import { ledgerBalanceEngine, TxClient } from './ledger-balance.engine';
 
 class CustomerLedgerService {
   /**
@@ -103,36 +102,24 @@ class CustomerLedgerService {
     return prisma.$transaction(async (tx) => {
       const customer = await tx.customer.findUnique({
         where: { id: customerId },
-        select: { id: true, name: true, credit_limit: true, outstanding_balance: true },
+        select: { id: true, name: true, credit_limit: true },
       });
       if (!customer) throw new AppError(404, 'Customer not found');
 
-      const newBalance = new Prisma.Decimal(customer.outstanding_balance).plus(amount);
+      const runningBefore = await ledgerBalanceEngine.getRunningBalance(tx, customerId);
+      const entry = await ledgerBalanceEngine.postCreditSale(tx, {
+        customerId,
+        amount,
+        saleId,
+        createdBy,
+        description,
+      });
+      const newBalance = await ledgerBalanceEngine.getRunningBalance(tx, customerId);
 
-      // Warn if over credit limit (but don't block — per user preference)
       const creditLimit = new Prisma.Decimal(customer.credit_limit);
-      const overLimit = creditLimit.gt(0) && newBalance.gt(creditLimit);
+      const overLimit = creditLimit.gt(0) && new Prisma.Decimal(newBalance).gt(creditLimit);
 
-      // Update outstanding balance
-      await tx.customer.update({
-        where: { id: customerId },
-        data: { outstanding_balance: newBalance },
-      });
-
-      // Create ledger entry
-      const entry = await tx.customerLedger.create({
-        data: {
-          customer_id: customerId,
-          entry_type: LedgerEntryType.CREDIT_SALE,
-          amount: new Prisma.Decimal(amount),
-          description: description ?? 'Credit sale',
-          sale_id: saleId,
-          balance_after: newBalance,
-          created_by: createdBy,
-        },
-      });
-
-      return { entry, newBalance, overLimit };
+      return { entry, newBalance, overLimit, runningBefore };
     });
   }
 
@@ -217,85 +204,34 @@ class CustomerLedgerService {
         await this.applyPaymentFifo(tx, customerId, remaining);
       }
 
-      // Important: allow negative outstanding balance to represent customer advance/credit.
-      const finalBalance = new Prisma.Decimal(customer.outstanding_balance).minus(amount);
-
-      await tx.customer.update({
-        where: { id: customerId },
-        data: { outstanding_balance: finalBalance },
+      const entry = await ledgerBalanceEngine.postPayment(tx, {
+        customerId,
+        amount,
+        createdBy,
+        description:
+          description ??
+          (resolvedSaleNumber
+            ? `Payment received against ${resolvedSaleNumber}`
+            : 'Payment received'),
+        referenceNo: referenceNo?.trim() || resolvedSaleNumber,
+        saleId: resolvedSaleNumber,
       });
 
-      const entry = await tx.customerLedger.create({
-        data: {
-          customer_id: customerId,
-          entry_type: LedgerEntryType.PAYMENT_RECEIVED,
-          amount: new Prisma.Decimal(amount),
-          description:
-            description ??
-            (resolvedSaleNumber
-              ? `Payment received against ${resolvedSaleNumber}`
-              : 'Payment received'),
-          sale_id: resolvedSaleNumber,
-          reference_no: referenceNo?.trim() || resolvedSaleNumber || null,
-          balance_after: finalBalance,
-          created_by: createdBy,
-        },
-      });
-
-      return { entry, newBalance: finalBalance };
+      const newBalance = await ledgerBalanceEngine.getRunningBalance(tx, customerId);
+      return { entry, newBalance };
     });
-  }
-
-  private computeSignedDelta(
-    entry: { entry_type: LedgerEntryType; amount: Prisma.Decimal; balance_after: Prisma.Decimal },
-    prevBalance: number
-  ): number {
-    const amt = Number(entry.amount);
-    switch (entry.entry_type) {
-      case LedgerEntryType.CREDIT_SALE:
-        return amt;
-      case LedgerEntryType.PAYMENT_RECEIVED:
-      case LedgerEntryType.REFUND:
-        return -amt;
-      case LedgerEntryType.ADJUSTMENT:
-        return Number(entry.balance_after) - prevBalance;
-      default:
-        return 0;
-    }
   }
 
   /** Rebuild running balances from entry amounts and sync customer outstanding_balance. */
   async syncCustomerBalances(customerId: string) {
-    return prisma.$transaction(async (tx) => {
-      const balance = await this.recalculateRunningBalances(tx, customerId);
-      return { balance };
-    });
+    const balance = await ledgerBalanceEngine.syncCustomerBalances(customerId);
+    return { balance };
   }
 
-  private async recalculateRunningBalances(tx: TxClient, customerId: string) {
-    const entries = await tx.customerLedger.findMany({
-      where: { customer_id: customerId },
-      orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
-    });
+  private computeSignedDelta = ledgerBalanceEngine.computeSignedDelta.bind(ledgerBalanceEngine);
 
-    let running = 0;
-    for (const entry of entries) {
-      const delta = this.computeSignedDelta(entry, running);
-      running = Number((running + delta).toFixed(3));
-      if (Math.abs(Number(entry.balance_after) - running) > 0.009) {
-        await tx.customerLedger.update({
-          where: { id: entry.id },
-          data: { balance_after: running },
-        });
-      }
-    }
-
-    await tx.customer.update({
-      where: { id: customerId },
-      data: { outstanding_balance: running },
-    });
-
-    return running;
+  private recalculateRunningBalances(tx: TxClient, customerId: string) {
+    return ledgerBalanceEngine.recalculateRunningBalances(tx, customerId);
   }
 
   private async reapplyAllPaymentAllocations(tx: TxClient, customerId: string) {
@@ -443,37 +379,21 @@ class CustomerLedgerService {
         updateData.amount = new Prisma.Decimal(amount);
 
         if (entry.entry_type === LedgerEntryType.ADJUSTMENT) {
-          const priorEntries = await tx.customerLedger.findMany({
-            where: { customer_id: customerId },
-            orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
-          });
-          const entryIndex = priorEntries.findIndex((e) => e.id === entryId);
-          const prevBalance =
-            entryIndex > 0 ? Number(priorEntries[entryIndex - 1].balance_after) : 0;
-          const currentDelta = this.computeSignedDelta(entry, prevBalance);
           const sign =
             direction === 'debit'
-              ? 1
+              ? 'DEBIT'
               : direction === 'credit'
-                ? -1
-                : Math.sign(currentDelta) || 1;
-          const newBalance = Number((prevBalance + sign * amount).toFixed(3));
-          updateData.balance_after = newBalance;
+                ? 'CREDIT'
+                : entry.reference_no?.trim().toUpperCase() === 'CREDIT'
+                  ? 'CREDIT'
+                  : 'DEBIT';
+          updateData.reference_no = sign;
         }
       } else if (
         entry.entry_type === LedgerEntryType.ADJUSTMENT &&
         (direction === 'debit' || direction === 'credit')
       ) {
-        const priorEntries = await tx.customerLedger.findMany({
-          where: { customer_id: customerId },
-          orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
-        });
-        const entryIndex = priorEntries.findIndex((e) => e.id === entryId);
-        const prevBalance =
-          entryIndex > 0 ? Number(priorEntries[entryIndex - 1].balance_after) : 0;
-        const sign = direction === 'debit' ? 1 : -1;
-        const newBalance = Number((prevBalance + sign * Number(entry.amount)).toFixed(3));
-        updateData.balance_after = newBalance;
+        updateData.reference_no = direction === 'debit' ? 'DEBIT' : 'CREDIT';
       }
 
       const updated = await tx.customerLedger.update({
@@ -545,7 +465,7 @@ class CustomerLedgerService {
                 deletedDescription ? `: ${deletedDescription}` : ''
               } (${deletedAmount.toLocaleString()} reversed)`,
             sale_id: entry.sale_id,
-            reference_no: entry.reference_no,
+            reference_no: 'AUDIT',
             balance_after: runningBalance,
             created_by: deletedBy,
           },
@@ -588,7 +508,22 @@ class CustomerLedgerService {
 
     await prisma.$transaction(async (tx) => {
       await this.reconcileInvoicePayments(tx, customerId);
+      await ledgerBalanceEngine.recalculateRunningBalances(tx, customerId);
     });
+
+    const refreshedCustomer = await prisma.customer.findUnique({
+      where: { id: customerId },
+      select: {
+        id: true,
+        name: true,
+        phone_number: true,
+        mobile_number: true,
+        whatsapp_number: true,
+        outstanding_balance: true,
+        credit_limit: true,
+      },
+    });
+    if (!refreshedCustomer) throw new AppError(404, 'Customer not found');
 
     const where: Prisma.CustomerLedgerWhereInput = {
       customer_id: customerId,
@@ -614,7 +549,7 @@ class CustomerLedgerService {
       prisma.customerLedger.findMany({
         where: { customer_id: customerId },
         orderBy: { created_at: 'asc' },
-        select: { id: true, entry_type: true, amount: true, balance_after: true },
+        select: { id: true, entry_type: true, amount: true, balance_after: true, reference_no: true, description: true },
       }),
     ]);
 
@@ -724,10 +659,10 @@ class CustomerLedgerService {
       };
     });
 
-    const currentBalance = Number(customer.outstanding_balance);
+    const currentBalance = Number(refreshedCustomer.outstanding_balance);
 
     return {
-      customer,
+      customer: refreshedCustomer,
       entries,
       summary: {
         totalSales,

@@ -1,9 +1,10 @@
-import { Customer, LedgerEntryType, Prisma } from '@prisma/client';
+import { Customer, Prisma } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { AppError } from '../utils/apiError';
 import jwt from 'jsonwebtoken';
 import { config } from '../config/app';
 import bcrypt from 'bcryptjs';
+import { ledgerBalanceEngine } from './ledger-balance.engine';
 
 class CustomerService {
     private generateToken(cusId: Customer['id'], email: Customer['email']): string {
@@ -58,24 +59,21 @@ class CustomerService {
             const created = await tx.customer.create({
                 data: {
                     ...data,
-                    outstanding_balance: openingBalance,
+                    outstanding_balance: new Prisma.Decimal(0),
                 },
             });
 
             if (openingBalance.gt(0)) {
-                await tx.customerLedger.create({
-                    data: {
-                        customer_id: created.id,
-                        entry_type: LedgerEntryType.ADJUSTMENT,
-                        amount: openingBalance,
-                        description: 'Opening balance (existing credit before POS)',
-                        balance_after: openingBalance,
-                        created_by: createdBy ?? undefined,
-                    },
+                await ledgerBalanceEngine.postSignedAdjustment(tx, {
+                    customerId: created.id,
+                    signedDelta: Number(openingBalance),
+                    description: 'Opening balance (existing credit before POS)',
+                    referenceNo: 'DEBIT',
+                    createdBy: createdBy ?? undefined,
                 });
             }
 
-            return created;
+            return tx.customer.findUniqueOrThrow({ where: { id: created.id } });
         });
 
         return { customer };
@@ -128,11 +126,44 @@ class CustomerService {
         const existingCustomer = await prisma.customer.findUnique({ where: { id: customerId } });
         if (!existingCustomer) throw new AppError(404, 'Customer not found');
 
-        if (updateData.password) {
-            updateData.password = await bcrypt.hash(updateData.password, 10);
+        const { outstanding_balance, ...profileUpdate } = updateData;
+
+        if (profileUpdate.password) {
+            profileUpdate.password = await bcrypt.hash(profileUpdate.password, 10);
         }
 
-        return prisma.customer.update({ where: { id: customerId }, data: updateData });
+        if (outstanding_balance !== undefined && outstanding_balance !== null) {
+            const requested = Number(outstanding_balance);
+            if (Number.isNaN(requested) || requested < 0) {
+                throw new AppError(400, 'Outstanding balance cannot be negative');
+            }
+
+            const currentRunning = await ledgerBalanceEngine.getRunningBalance(prisma, customerId);
+            const delta = Number((requested - currentRunning).toFixed(3));
+
+            if (Math.abs(delta) > 0.009) {
+                return prisma.$transaction(async (tx) => {
+                    await ledgerBalanceEngine.postSignedAdjustment(tx, {
+                        customerId,
+                        signedDelta: delta,
+                        description: 'Balance correction from customer profile',
+                        referenceNo: delta >= 0 ? 'DEBIT' : 'CREDIT',
+                    });
+
+                    if (Object.keys(profileUpdate).length === 0) {
+                        return tx.customer.findUniqueOrThrow({ where: { id: customerId } });
+                    }
+
+                    return tx.customer.update({ where: { id: customerId }, data: profileUpdate });
+                });
+            }
+        }
+
+        if (Object.keys(profileUpdate).length === 0) {
+            return existingCustomer;
+        }
+
+        return prisma.customer.update({ where: { id: customerId }, data: profileUpdate });
     }
 
     public async deleteCustomer(customerId: Customer['id']) {
