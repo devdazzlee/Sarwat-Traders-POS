@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(node -e \"const p=require\\('./package.json'\\); console.log\\(JSON.stringify\\({scripts:p.scripts, hasTsNode: !!\\(p.devDependencies&&p.devDependencies['ts-node']\\)||!!\\(p.dependencies&&p.dependencies['ts-node']\\), prisma: !!\\(p.dependencies&&p.dependencies['@prisma/client']\\)}, null, 2\\)\\)\")",
-      "Bash(node -e \"console.log\\('dotenv:', require\\('./package.json'\\).dependencies?.dotenv || 'NOT FOUND'\\)\")"
+      "Bash(node -e \"console.log\\('dotenv:', require\\('./package.json'\\).dependencies?.dotenv || 'NOT FOUND'\\)\")",
+      "Bash(cd /c/Users/Lenovo/Documents/Manpasand-Pos-/Frontend && cat package.json | grep -A 20 '\"scripts\"')",
+      "Read(//c/c/Users/Lenovo/Documents/Manpasand-Pos-/Frontend/**)"
     ]
   }
 }

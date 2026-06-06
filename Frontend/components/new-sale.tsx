@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo, useCallback, startTransition } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback, startTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { LoadingButton } from "@/components/ui/loading-button";
@@ -216,6 +216,11 @@ export function NewSale() {
   const quickQtyPlusRef = useRef<HTMLButtonElement | null>(null);
   const quickQtyInputRef = useRef<HTMLInputElement | null>(null);
   const quantityEnterConfirmedRef = useRef<string | null>(null);
+  /** Line id that owns the focused quantity field — survives quick-qty rebind to another line */
+  const quantityFocusLineIdRef = useRef<string | null>(null);
+  const activeCartLineIdRef = useRef<string | null>(null);
+  const cartRef = useRef(cart);
+  const quantityInputsRef = useRef(quantityInputs);
   const searchDropdownRef = useRef<HTMLDivElement | null>(null);
   const searchDropdownItemRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const [quickQtyFocusTick, setQuickQtyFocusTick] = useState(0);
@@ -315,6 +320,18 @@ export function NewSale() {
       }
     };
   }, []); // Empty dependency array since we only want to fetch once on mount
+
+  useEffect(() => {
+    cartRef.current = cart;
+  }, [cart]);
+
+  useEffect(() => {
+    quantityInputsRef.current = quantityInputs;
+  }, [quantityInputs]);
+
+  useEffect(() => {
+    activeCartLineIdRef.current = activeCartLineId;
+  }, [activeCartLineId]);
 
   // Keep search input always focused (professional POS behavior)
   // Uses intelligent focus management: only refocuses when user is idle
@@ -531,12 +548,14 @@ export function NewSale() {
   }, [paymentDialogOpen]);
 
   const focusQuantityInput = useCallback(() => {
-    requestAnimationFrame(() => {
-      const el = quickQtyInputRef.current;
-      if (!el) return;
-      el.focus({ preventScroll: true });
-      el.select();
-    });
+    // Focus synchronously (no rAF) so the quantity box grabs focus before the
+    // browser can deliver the next keystroke. With a deferred (rAF) focus the
+    // search input stayed focused for ~1-2 frames and fast-typed quantity digits
+    // leaked into the search field, leaving the product stuck at qty 1.
+    const el = quickQtyInputRef.current;
+    if (!el) return;
+    el.focus({ preventScroll: true });
+    el.select();
   }, []);
 
   useEffect(() => {
@@ -588,38 +607,38 @@ export function NewSale() {
     }
     
     const isBarcodeLine = customPrice !== undefined && originalProductPrice > 0;
-    let affectedLineId: string | null = null;
 
-    setCart((prevCart) => {
-      if (!isBarcodeLine) {
-        const lastLineIndex = prevCart.findLastIndex(
+    // Decide merge-vs-new and the resulting cart deterministically BEFORE setState.
+    // Reading cartRef.current (kept in sync by setCartSync) keeps the updater pure so
+    // the affected line id is reliable — it must not be derived from a reducer side
+    // effect, which React may run asynchronously and leave the active line stale.
+    const prevCart = cartRef.current;
+    let affectedLineId: string;
+    let nextCart: CartItem[];
+
+    const lastLineIndex = isBarcodeLine
+      ? -1
+      : prevCart.findLastIndex(
           (line) => line.productId === product.id || line.id === product.id,
         );
-        if (lastLineIndex >= 0) {
-          const existing = prevCart[lastLineIndex];
-          const unitName = existing.unitName || existing.unit;
-          const bumpBy = isPieceUnit(unitName) ? 1 : getQuantityIncrement(unitName);
-          const nextQty = isPieceUnit(unitName)
-            ? Math.round(existing.quantity + bumpBy)
-            : Number((existing.quantity + bumpBy).toFixed(3));
-          const minQ = isPieceUnit(unitName) ? 1 : 0.01;
-          const updated = [...prevCart];
-          updated[lastLineIndex] = {
-            ...existing,
-            quantity: Math.max(minQ, nextQty),
-          };
-          affectedLineId = existing.id;
-          return updated;
-        }
-      }
 
-      const uniqueCartItemId = `${product.id}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      affectedLineId = uniqueCartItemId;
-
-      return [
+    if (lastLineIndex >= 0) {
+      const existing = prevCart[lastLineIndex];
+      const unitName = existing.unitName || existing.unit;
+      const bumpBy = isPieceUnit(unitName) ? 1 : getQuantityIncrement(unitName);
+      const nextQty = isPieceUnit(unitName)
+        ? Math.round(existing.quantity + bumpBy)
+        : Number((existing.quantity + bumpBy).toFixed(3));
+      const minQ = isPieceUnit(unitName) ? 1 : 0.01;
+      nextCart = [...prevCart];
+      nextCart[lastLineIndex] = { ...existing, quantity: Math.max(minQ, nextQty) };
+      affectedLineId = existing.id;
+    } else {
+      affectedLineId = `${product.id}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      nextCart = [
         ...prevCart,
         {
-          id: uniqueCartItemId,
+          id: affectedLineId,
           productId: product.id,
           name: product.name,
           price: displayPrice,
@@ -632,18 +651,13 @@ export function NewSale() {
           unit: product.unitName,
         },
       ];
-    });
-
-    if (affectedLineId) {
-      lastAddedProductId.current = affectedLineId;
-      setActiveCartLineId(affectedLineId);
-      setQuantityInputs((prev) => {
-        const next = { ...prev };
-        delete next[affectedLineId!];
-        return next;
-      });
     }
-    
+
+    setCartSync(() => nextCart);
+
+    lastAddedProductId.current = affectedLineId;
+    activeCartLineIdRef.current = affectedLineId;
+    setActiveCartLineId(affectedLineId);
     setQuickQtyFocusTick((n) => n + 1);
 
     // Toast removed as per user request - no toast when selecting products
@@ -805,53 +819,6 @@ export function NewSale() {
     return Math.max(minQuantity, normalizedQuantity);
   };
 
-  const bumpQuantity = (id: string, direction: 1 | -1) => {
-    setActiveCartLineId(id);
-    setQuantityInputs((prev) => {
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
-    setCart((prev) =>
-      prev.map((line) => {
-        if (line.id !== id) return line;
-        const unitName = line.unitName || line.unit;
-        const mode = quantityModes[id] ?? "preset";
-        return {
-          ...line,
-          quantity: computeQuantityAfterChange(line.quantity, direction, unitName, mode),
-        };
-      }),
-    );
-  };
-
-  const updateQuantityManual = (id: string, newQuantity: number, unitName?: string) => {
-    const minQuantity = isPieceUnit(unitName) ? 1 : 0.01;
-    const normalizedQuantity = isPieceUnit(unitName)
-      ? Math.round(Number(newQuantity))
-      : Number(newQuantity);
-    const validQuantity = Math.max(minQuantity, normalizedQuantity);
-    setCart((prev) =>
-      prev.map((line) => (line.id === id ? { ...line, quantity: validQuantity } : line)),
-    );
-  };
-
-  const finalizeQuantityInput = (id: string, rawValue: string, unitName?: string) => {
-    const minQuantity = isPieceUnit(unitName) ? 1 : 0.01;
-    const trimmed = rawValue.trim();
-    const parsed = trimmed ? parseCustomQuantityInput(trimmed, unitName) : null;
-    if (!trimmed || parsed === null || parsed <= 0) {
-      updateQuantityManual(id, minQuantity, unitName);
-    } else {
-      updateQuantityManual(id, parsed, unitName);
-    }
-    setQuantityInputs((prev) => {
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
-  };
-
   const parseCustomQuantityInput = (rawValue: string, unitName?: string): number | null => {
     const value = rawValue.trim().toLowerCase().replace(/\s+/g, "");
     if (!value) return null;
@@ -885,6 +852,74 @@ export function NewSale() {
     const parsed = parseFloat(numericOnly[1]);
     if (Number.isNaN(parsed) || parsed < 0) return null;
     return parsed;
+  };
+
+  const setCartSync = (updater: (prev: CartItem[]) => CartItem[]) => {
+    setCart((prev) => {
+      const next = updater(prev);
+      cartRef.current = next;
+      return next;
+    });
+  };
+
+  const updateQuantityManual = (id: string, newQuantity: number, unitName?: string) => {
+    const minQuantity = isPieceUnit(unitName) ? 1 : 0.01;
+    const normalizedQuantity = isPieceUnit(unitName)
+      ? Math.round(Number(newQuantity))
+      : Number(newQuantity);
+    const validQuantity = Math.max(minQuantity, normalizedQuantity);
+    setCartSync((prev) =>
+      prev.map((line) => (line.id === id ? { ...line, quantity: validQuantity } : line)),
+    );
+  };
+
+  const clearQuantityOverlay = (lineId: string) => {
+    setQuantityInputs((prev) => {
+      if (!(lineId in prev)) return prev;
+      const next = { ...prev };
+      delete next[lineId];
+      quantityInputsRef.current = next;
+      return next;
+    });
+  };
+
+  /** Merge typed overlay into cart only when user is mid-edit (non-empty string). */
+  const applyTypedOverlayToCart = (lineId: string) => {
+    const pending = quantityInputsRef.current[lineId];
+    if (pending === undefined || pending.trim() === "") return;
+    const line = cartRef.current.find((l) => l.id === lineId);
+    if (!line) return;
+    const unitName = line.unitName || line.unit;
+    const parsed = parseCustomQuantityInput(pending.trim(), unitName);
+    if (parsed === null || parsed <= 0) return;
+    updateQuantityManual(lineId, parsed, unitName);
+  };
+
+  const switchActiveCartLine = (newId: string | null) => {
+    const prevId = activeCartLineIdRef.current;
+    if (prevId && prevId !== newId) {
+      applyTypedOverlayToCart(prevId);
+      clearQuantityOverlay(prevId);
+    }
+    activeCartLineIdRef.current = newId;
+    setActiveCartLineId(newId);
+  };
+
+  const bumpQuantity = (id: string, direction: 1 | -1) => {
+    activeCartLineIdRef.current = id;
+    setActiveCartLineId(id);
+    clearQuantityOverlay(id);
+    setCartSync((prev) =>
+      prev.map((line) => {
+        if (line.id !== id) return line;
+        const unitName = line.unitName || line.unit;
+        const mode = quantityModes[id] ?? "preset";
+        return {
+          ...line,
+          quantity: computeQuantityAfterChange(line.quantity, direction, unitName, mode),
+        };
+      }),
+    );
   };
 
   const updateItemPrice = (id: string, newPrice: number) => {
@@ -1667,6 +1702,11 @@ export function NewSale() {
   const selectProductForSale = (product: Product) => {
     addToCart(product, 1);
     setProductSearchOpen(false);
+    // Clear the search field immediately so the focus handoff to the quantity box
+    // (which happens one animation frame later) can't leak typed quantity digits
+    // into the search input — that leak left products stuck at qty 1.
+    setSearchTerm("");
+    setHighlightedProductIndex(0);
   };
 
   const handleProductClick = (product: Product) => {
@@ -1786,27 +1826,25 @@ export function NewSale() {
     return cart[cart.length - 1];
   }, [cart, activeCartLineId]);
 
-  const confirmQuantityAndReturnToSearch = useCallback(() => {
-    const line = quickAdjustLine;
-    if (line) {
-      const unitName = line.unitName || line.unit;
-      const domValue =
-        quickQtyInputRef.current?.value ||
-        (quantityInputRefs.current[line.id] as HTMLInputElement | null)?.value ||
-        "";
-      quantityEnterConfirmedRef.current = line.id;
-      finalizeQuantityInput(line.id, domValue, unitName);
+  const confirmQuantityAndReturnToSearch = useCallback((lineId?: string) => {
+    const id = lineId ?? quantityFocusLineIdRef.current ?? activeCartLineIdRef.current;
+    if (id) {
+      quantityEnterConfirmedRef.current = id;
+      // Cart already holds +/- and onChange updates — only drop typed overlay, never re-read stale values.
+      applyTypedOverlayToCart(id);
+      clearQuantityOverlay(id);
     }
+    quantityFocusLineIdRef.current = null;
     focusSearchInput({ clear: true });
-  }, [quickAdjustLine, focusSearchInput]);
+  }, [focusSearchInput]);
 
-  // After adding a product, focus quantity input (keyboard sale flow)
-  useEffect(() => {
+  // After adding a product, focus quantity input (keyboard sale flow).
+  // useLayoutEffect runs synchronously after the DOM commit and before paint, so
+  // focus moves to the qty box within the same event flush — before the next
+  // keystroke arrives — preventing quantity digits from leaking into the search box.
+  useLayoutEffect(() => {
     if (quickQtyFocusTick === 0) return;
-    const frame = requestAnimationFrame(() => {
-      focusQuantityInput();
-    });
-    return () => cancelAnimationFrame(frame);
+    focusQuantityInput();
   }, [quickQtyFocusTick, focusQuantityInput]);
 
   return (
@@ -1887,7 +1925,7 @@ export function NewSale() {
                   setSearchTerm(value);
                   setHighlightedProductIndex(0);
                   setProductSearchOpen(value.trim().length > 0);
-                  
+
                   // Clear any pending scan timeout
                   if (scanTimeoutRef.current) {
                     clearTimeout(scanTimeoutRef.current);
@@ -2082,34 +2120,52 @@ export function NewSale() {
                   }
                   onFocus={() => {
                     if (!quickAdjustLine) return;
+                    quantityFocusLineIdRef.current = quickAdjustLine.id;
                     isUserInteractingRef.current = true;
-                    setActiveCartLineId(quickAdjustLine.id);
+                    switchActiveCartLine(quickAdjustLine.id);
                   }}
                   onChange={(e) => {
-                    if (!quickAdjustLine) return;
-                    const unitName = quickAdjustLine.unitName || quickAdjustLine.unit;
+                    // Always edit the line this box is actually displaying, never a
+                    // stale shared ref — otherwise typing could update a different line.
+                    const lineId = quickAdjustLine?.id;
+                    if (!lineId) return;
+                    const line =
+                      cartRef.current.find((l) => l.id === lineId) ?? quickAdjustLine;
+                    if (!line) return;
+                    const unitName = line.unitName || line.unit;
                     const value = e.target.value.trim();
-                    setQuantityModes((prev) => ({ ...prev, [quickAdjustLine.id]: "custom" }));
+                    setQuantityModes((prev) => ({ ...prev, [lineId]: "custom" }));
                     if (value === "") {
-                      setQuantityInputs((prev) => ({ ...prev, [quickAdjustLine.id]: "" }));
+                      setQuantityInputs((prev) => {
+                        const next = { ...prev, [lineId]: "" };
+                        quantityInputsRef.current = next;
+                        return next;
+                      });
                       return;
                     }
-                    setQuantityInputs((prev) => ({ ...prev, [quickAdjustLine.id]: value }));
+                    setQuantityInputs((prev) => {
+                      const next = { ...prev, [lineId]: value };
+                      quantityInputsRef.current = next;
+                      return next;
+                    });
                     const parsed = parseCustomQuantityInput(value, unitName);
                     if (parsed === null) return;
-                    updateQuantityManual(quickAdjustLine.id, parsed, unitName);
+                    updateQuantityManual(lineId, parsed, unitName);
                   }}
-                  onBlur={(e) => {
-                    if (!quickAdjustLine) return;
-                    if (quantityEnterConfirmedRef.current === quickAdjustLine.id) {
+                  onBlur={() => {
+                    const lineId = quantityFocusLineIdRef.current;
+                    if (!lineId) return;
+                    if (quantityEnterConfirmedRef.current === lineId) {
                       quantityEnterConfirmedRef.current = null;
+                      quantityFocusLineIdRef.current = null;
                       setTimeout(() => {
                         isUserInteractingRef.current = false;
                       }, 300);
                       return;
                     }
-                    const unitName = quickAdjustLine.unitName || quickAdjustLine.unit;
-                    finalizeQuantityInput(quickAdjustLine.id, e.currentTarget.value, unitName);
+                    applyTypedOverlayToCart(lineId);
+                    clearQuantityOverlay(lineId);
+                    quantityFocusLineIdRef.current = null;
                     setTimeout(() => {
                       isUserInteractingRef.current = false;
                     }, 300);
@@ -2118,7 +2174,9 @@ export function NewSale() {
                     if (!quickAdjustLine) return;
                     if (e.key === "Enter") {
                       e.preventDefault();
-                      confirmQuantityAndReturnToSearch();
+                      // Pin the confirm to the displayed line (matches per-line input).
+                      quantityFocusLineIdRef.current = quickAdjustLine.id;
+                      confirmQuantityAndReturnToSearch(quickAdjustLine.id);
                       return;
                     }
                     if (e.key === "ArrowUp") {
@@ -2513,7 +2571,7 @@ export function NewSale() {
                     ref={(el) => {
                       cartItemRefs.current[item.id] = el;
                     }}
-                    onClick={() => setActiveCartLineId(item.id)}
+                    onClick={() => switchActiveCartLine(item.id)}
                     className={cn(
                       "rounded-lg border bg-white p-2.5 shadow-sm transition-shadow",
                       activeCartLineId === item.id
@@ -2588,7 +2646,7 @@ export function NewSale() {
                         }
                         onFocus={() => {
                           isUserInteractingRef.current = true;
-                          setActiveCartLineId(item.id);
+                          switchActiveCartLine(item.id);
                         }}
                         onKeyDown={(e) => {
                           if (e.key === "Enter" || e.key === "Tab") {
@@ -2693,30 +2751,44 @@ export function NewSale() {
                               placeholder="Qty"
                               value={quantityInputs[item.id] ?? formatQuantityValue(item.quantity)}
                               onFocus={() => {
+                                quantityFocusLineIdRef.current = item.id;
                                 isUserInteractingRef.current = true;
-                                setActiveCartLineId(item.id);
+                                switchActiveCartLine(item.id);
                               }}
                               onChange={(e) => {
                                 const value = e.target.value.trim();
                                 setQuantityModes((prev) => ({ ...prev, [item.id]: "custom" }));
                                 if (value === "") {
-                                  setQuantityInputs((prev) => ({ ...prev, [item.id]: "" }));
+                                  setQuantityInputs((prev) => {
+                                    const next = { ...prev, [item.id]: "" };
+                                    quantityInputsRef.current = next;
+                                    return next;
+                                  });
                                   return;
                                 }
-                                setQuantityInputs((prev) => ({ ...prev, [item.id]: value }));
+                                setQuantityInputs((prev) => {
+                                  const next = { ...prev, [item.id]: value };
+                                  quantityInputsRef.current = next;
+                                  return next;
+                                });
                                 const parsed = parseCustomQuantityInput(value, unitName);
                                 if (parsed === null) return;
                                 updateQuantityManual(item.id, parsed, unitName);
                               }}
-                              onBlur={(e) => {
-                                if (quantityEnterConfirmedRef.current === item.id) {
+                              onBlur={() => {
+                                const lineId = quantityFocusLineIdRef.current;
+                                if (!lineId) return;
+                                if (quantityEnterConfirmedRef.current === lineId) {
                                   quantityEnterConfirmedRef.current = null;
+                                  quantityFocusLineIdRef.current = null;
                                   setTimeout(() => {
                                     isUserInteractingRef.current = false;
                                   }, 300);
                                   return;
                                 }
-                                finalizeQuantityInput(item.id, e.currentTarget.value, unitName);
+                                applyTypedOverlayToCart(lineId);
+                                clearQuantityOverlay(lineId);
+                                quantityFocusLineIdRef.current = null;
                                 setTimeout(() => {
                                   isUserInteractingRef.current = false;
                                 }, 300);
@@ -2724,8 +2796,8 @@ export function NewSale() {
                               onKeyDown={(e) => {
                                 if (e.key === "Enter") {
                                   e.preventDefault();
-                                  setActiveCartLineId(item.id);
-                                  confirmQuantityAndReturnToSearch();
+                                  quantityFocusLineIdRef.current = item.id;
+                                  confirmQuantityAndReturnToSearch(item.id);
                                   return;
                                 }
                                 if (e.key === "ArrowUp") {
