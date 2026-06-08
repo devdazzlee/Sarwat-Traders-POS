@@ -21,12 +21,19 @@ import {
   CreditCard,
   Banknote,
   Receipt,
+  Wallet,
   ChevronRight,
   type LucideIcon,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { StatCardSkeleton } from "@/components/ui/stat-card-skeleton"
 import apiClient from "@/lib/apiClient"
+import {
+  DASHBOARD_STATS_REFRESH_EVENT,
+  fetchDashboardStatsFresh,
+  invalidateDashboardStatsCaches,
+} from "@/lib/dashboard-stats-sync"
+import { isAdminRole } from "@/lib/branch-utils"
 import { normalizeUserRole, type UserRole } from "@/lib/role-utils"
 
 const PURCHASE_ENTRY_ROLES: UserRole[] = ["SUPER_ADMIN", "ADMIN"]
@@ -68,6 +75,8 @@ interface DashboardStats {
   dailyRevenue: number
   dailyCredit: number
   dailyCash: number
+  dailyCollections: number
+  dailyCashReceived: number
   dailyExpense: number
 }
 
@@ -226,12 +235,9 @@ export function DashboardHome({ onNavigate }: DashboardHomeProps) {
 
   const getStats = async () => {
     try {
-      const response = await apiClient.get('/dashboard/stats')
-      if (response?.data?.success) {
-        setStats(response.data.data || null)
-      } else {
-        setStats(null)
-      }
+      await invalidateDashboardStatsCaches()
+      const data = await fetchDashboardStatsFresh()
+      setStats(data)
     } catch (error: any) {
       console.error("❌ Error fetching stats:", error.response?.data || error.message)
       setStats(null)
@@ -252,8 +258,20 @@ export function DashboardHome({ onNavigate }: DashboardHomeProps) {
     loadAllData()
   }, [])
 
+  useEffect(() => {
+    const refreshFinancials = () => {
+      void getStats()
+      void getRecentSales()
+    }
+    window.addEventListener(DASHBOARD_STATS_REFRESH_EVENT, refreshFinancials)
+    return () => window.removeEventListener(DASHBOARD_STATS_REFRESH_EVENT, refreshFinancials)
+  }, [])
+
   const formatCurrency = (n: number) =>
     `Rs ${Number(n).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+
+  const isAdminView = isAdminRole(role);
+  const moneyScopeLabel = isAdminView ? "All locations · last 24h" : "Last 24h";
 
   const handleRefreshData = async () => {
     await withRefreshLoading(async () => {
@@ -307,7 +325,7 @@ export function DashboardHome({ onNavigate }: DashboardHomeProps) {
       `- Low Stock Items: ${stats.lowStockProducts.length}`,
       `- Today's Transactions: ${stats.todaySales.length}`,
       `- Daily Revenue: Rs ${(stats.dailyRevenue || 0).toFixed(2)}`,
-      `- Daily Cash: Rs ${(stats.dailyCash || 0).toFixed(2)}`,
+      `- Cash Received: Rs ${(stats.dailyCashReceived || 0).toFixed(2)}`,
       `- Daily Credit: Rs ${(stats.dailyCredit || 0).toFixed(2)}`,
       `- Daily Expenses: Rs ${(stats.dailyExpense || 0).toFixed(2)}`,
     ]
@@ -467,25 +485,25 @@ export function DashboardHome({ onNavigate }: DashboardHomeProps) {
             <DashboardStatCard
               title="Total Revenue (Today)"
               value={formatCurrency(stats?.dailyRevenue || 0)}
-              subtitle="All cash + credit sales"
+              subtitle={`All completed sales · ${moneyScopeLabel}`}
               linkLabel="Open revenue page"
               icon={Banknote}
               tone="blue"
               onClick={onNavigate ? () => goTo("today-revenue") : undefined}
             />
             <DashboardStatCard
-              title="Cash Sales (Today)"
-              value={formatCurrency(stats?.dailyCash || 0)}
-              subtitle="Paid cash transactions"
+              title="Cash Received (Today)"
+              value={formatCurrency(stats?.dailyCashReceived || 0)}
+              subtitle={`Cash/card sales + ledger payments · ${moneyScopeLabel}`}
               linkLabel="Open cash sales page"
-              icon={DollarSign}
+              icon={Wallet}
               tone="emerald"
               onClick={onNavigate ? () => goTo("today-cash-sales") : undefined}
             />
             <DashboardStatCard
               title="Credit Sales (Today)"
               value={formatCurrency(stats?.dailyCredit || 0)}
-              subtitle="Unpaid credit transactions"
+              subtitle={`Credit invoices created · ${moneyScopeLabel}`}
               linkLabel="Open credit sales page"
               icon={CreditCard}
               tone="amber"
@@ -494,7 +512,7 @@ export function DashboardHome({ onNavigate }: DashboardHomeProps) {
             <DashboardStatCard
               title="Expenses (Today)"
               value={formatCurrency(stats?.dailyExpense || 0)}
-              subtitle="Total outgoing cash"
+              subtitle={`Outgoing cash · ${moneyScopeLabel}`}
               linkLabel="Open expenses page"
               icon={Receipt}
               tone="red"

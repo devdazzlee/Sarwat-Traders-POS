@@ -79,6 +79,7 @@ import { Check, ChevronsUpDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useHoldSales } from "@/hooks/use-hold-sales";
 import { normalizeBranchId } from "@/lib/branch-utils";
+import { notifyDashboardStatsChanged } from "@/lib/dashboard-stats-sync";
 
 type SalePaymentMethod = "Cash" | "Credit" | "Card";
 
@@ -1233,6 +1234,7 @@ export function NewSale() {
             const saleResponse = await apiClient.post("/sale", payload);
             saleData = saleResponse.data.data;
             transactionId = saleData.sale_number || generateTransactionId();
+            notifyDashboardStatsChanged();
           } catch (error: any) {
             // Distinguish real API errors (validation, business rules) from network failures.
             // - 4xx/5xx with a server response → surface the actual error to the user, do NOT silently queue

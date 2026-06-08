@@ -32,6 +32,7 @@ import { PageLoader } from "@/components/ui/page-loader";
 import { useToast } from "@/hooks/use-toast";
 import { DatePicker } from "@/components/ui/date-picker";
 import apiClient from "@/lib/apiClient";
+import { notifyDashboardStatsChanged } from "@/lib/dashboard-stats-sync";
 
 interface ExpenseRow {
   id: string;
@@ -180,6 +181,7 @@ export function Expenses() {
       setIsAddDialogOpen(false);
       setPage(1);
       await fetchExpenses();
+      notifyDashboardStatsChanged();
     } catch (error: any) {
       toast({
         variant: "destructive",
@@ -210,6 +212,7 @@ export function Expenses() {
       setDeleteTarget(null);
       if (viewExpense?.id === deleteTarget.id) setViewExpense(null);
       await fetchExpenses();
+      notifyDashboardStatsChanged();
     } catch (error: any) {
       toast({
         variant: "destructive",

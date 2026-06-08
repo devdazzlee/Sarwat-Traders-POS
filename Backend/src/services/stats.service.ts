@@ -1,6 +1,14 @@
+import { LedgerEntryType, Prisma } from "@prisma/client";
 import { prisma } from "../prisma/client";
 
 export class StatsService {
+    private saleBaseWhere(branchId?: string, past24Hours?: Date): Prisma.SaleWhereInput {
+        return {
+            status: "COMPLETED",
+            ...(past24Hours ? { created_at: { gte: past24Hours } } : {}),
+            ...(branchId && branchId !== "Not Found" ? { branch_id: branchId } : {}),
+        };
+    }
     private async totalCustomers(branchId?: string) {
         const total = await prisma.customer.count();
         return total;
@@ -37,12 +45,7 @@ export class StatsService {
         const past24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
         const sales = await prisma.sale.findMany({
-            where: {
-                created_at: {
-                    gte: past24Hours,
-                },
-                ...(branchId && branchId !== "Not Found" ? { branch_id: branchId } : {})
-            },
+            where: this.saleBaseWhere(branchId, past24Hours),
             select: {
                 id: true,
                 total_amount: true,
@@ -70,10 +73,7 @@ export class StatsService {
         const past24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000);
         const revenue = await prisma.sale.aggregate({
             _sum: { total_amount: true },
-            where: {
-                created_at: { gte: past24Hours },
-                ...(branchId && branchId !== "Not Found" ? { branch_id: branchId } : {})
-            }
+            where: this.saleBaseWhere(branchId, past24Hours),
         });
         return revenue._sum.total_amount ? Number(revenue._sum.total_amount) : 0;
     }
@@ -83,10 +83,9 @@ export class StatsService {
         const credit = await prisma.sale.aggregate({
             _sum: { total_amount: true },
             where: {
-                payment_method: 'CREDIT',
-                created_at: { gte: past24Hours },
-                ...(branchId && branchId !== "Not Found" ? { branch_id: branchId } : {})
-            }
+                ...this.saleBaseWhere(branchId, past24Hours),
+                payment_method: "CREDIT",
+            },
         });
         return credit._sum.total_amount ? Number(credit._sum.total_amount) : 0;
     }
@@ -96,12 +95,78 @@ export class StatsService {
         const cash = await prisma.sale.aggregate({
             _sum: { total_amount: true },
             where: {
-                payment_method: 'CASH',
-                created_at: { gte: past24Hours },
-                ...(branchId && branchId !== "Not Found" ? { branch_id: branchId } : {})
-            }
+                ...this.saleBaseWhere(branchId, past24Hours),
+                payment_method: { in: ["CASH", "CARD"] },
+            },
         });
         return cash._sum.total_amount ? Number(cash._sum.total_amount) : 0;
+    }
+
+    private collectionsWhere(startDate?: Date, endDate?: Date): Prisma.CustomerLedgerWhereInput {
+        const past24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const start = startDate ?? past24Hours;
+        const end = endDate ?? new Date();
+
+        return {
+            entry_type: LedgerEntryType.PAYMENT_RECEIVED,
+            created_at: {
+                gte: start,
+                lte: end,
+            },
+        };
+    }
+
+    private async dailyCollections(startDate?: Date, endDate?: Date) {
+        const collections = await prisma.customerLedger.aggregate({
+            _sum: { amount: true },
+            where: this.collectionsWhere(startDate, endDate),
+        });
+        return collections._sum.amount ? Number(collections._sum.amount) : 0;
+    }
+
+    async getCollectionEntries({
+        startDate,
+        endDate,
+        search,
+    }: {
+        startDate?: Date;
+        endDate?: Date;
+        search?: string;
+    }) {
+        const rows = await prisma.customerLedger.findMany({
+            where: this.collectionsWhere(startDate, endDate),
+            select: {
+                id: true,
+                amount: true,
+                description: true,
+                reference_no: true,
+                created_at: true,
+                customer: {
+                    select: {
+                        id: true,
+                        name: true,
+                        phone_number: true,
+                    },
+                },
+            },
+            orderBy: { created_at: "desc" },
+        });
+
+        if (!search?.trim()) return rows;
+
+        const q = search.trim().toLowerCase();
+        return rows.filter((row) => {
+            const haystack = [
+                row.customer?.name,
+                row.customer?.phone_number,
+                row.description,
+                row.reference_no,
+            ]
+                .filter(Boolean)
+                .join(" ")
+                .toLowerCase();
+            return haystack.includes(q);
+        });
     }
 
     private async dailyExpense(branchId?: string) {
@@ -117,15 +182,18 @@ export class StatsService {
     }
 
     public async getDashboardStats(branchId?: string) {
-        const [totalCustomers, lowStockProducts, todaySales, dailyRevenue, dailyCredit, dailyCash, dailyExpense] = await Promise.all([
+        const [totalCustomers, lowStockProducts, todaySales, dailyRevenue, dailyCredit, dailyCash, dailyCollections, dailyExpense] = await Promise.all([
             this.totalCustomers(branchId),
             this.lowStockProducts(branchId),
             this.todaySales(branchId),
             this.dailyRevenue(branchId),
             this.dailyCredit(branchId),
             this.dailyCash(branchId),
+            this.dailyCollections(),
             this.dailyExpense(branchId),
         ]);
+
+        const cashReceived = dailyCash + dailyCollections;
 
         return {
             totalCustomers,
@@ -134,6 +202,8 @@ export class StatsService {
             dailyRevenue,
             dailyCredit,
             dailyCash,
+            dailyCollections,
+            dailyCashReceived: cashReceived,
             dailyExpense,
         };
     }

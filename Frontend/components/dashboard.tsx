@@ -78,6 +78,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
     return preferredTab || "dashboard";
   });
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [dashboardVisit, setDashboardVisit] = useState(0);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(() => {
     if (typeof window === "undefined") return null;
     return sessionStorage.getItem(LEDGER_CUSTOMER_KEY);
@@ -100,20 +101,47 @@ export function Dashboard({ onLogout }: DashboardProps) {
     if (activeTab !== "customer-ledger") {
       sessionStorage.removeItem(LEDGER_CUSTOMER_KEY);
     }
+    if (activeTab === "dashboard") {
+      setDashboardVisit((v) => v + 1);
+    }
   }, [activeTab]);
 
   const renderContent = () => {
     switch (activeTab) {
       case "dashboard":
-        return <DashboardHome onNavigate={setActiveTab} />;
+        return <DashboardHome key={`dashboard-${dashboardVisit}`} onNavigate={setActiveTab} />;
       case "today-revenue":
-        return <DashboardFinancialDetails mode="revenue" onBack={() => setActiveTab("dashboard")} />;
+        return (
+          <DashboardFinancialDetails
+            mode="revenue"
+            onBack={() => setActiveTab("dashboard")}
+            onNavigate={setActiveTab}
+          />
+        );
       case "today-cash-sales":
-        return <DashboardFinancialDetails mode="cash" onBack={() => setActiveTab("dashboard")} />;
+        return (
+          <DashboardFinancialDetails
+            mode="cash"
+            onBack={() => setActiveTab("dashboard")}
+            onNavigate={setActiveTab}
+          />
+        );
       case "today-credit-sales":
-        return <DashboardFinancialDetails mode="credit" onBack={() => setActiveTab("dashboard")} />;
+        return (
+          <DashboardFinancialDetails
+            mode="credit"
+            onBack={() => setActiveTab("dashboard")}
+            onNavigate={setActiveTab}
+          />
+        );
       case "today-expenses":
-        return <DashboardFinancialDetails mode="expenses" onBack={() => setActiveTab("dashboard")} />;
+        return (
+          <DashboardFinancialDetails
+            mode="expenses"
+            onBack={() => setActiveTab("dashboard")}
+            onNavigate={setActiveTab}
+          />
+        );
       case "barcode-generator":
         return <BarcodeGenerator />;
       case "new-sale":

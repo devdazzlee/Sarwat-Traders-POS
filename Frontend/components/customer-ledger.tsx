@@ -46,6 +46,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import apiClient from "@/lib/apiClient";
+import { notifyDashboardStatsChanged } from "@/lib/dashboard-stats-sync";
 import { API_BASE } from "@/config/constants";
 import { useToast } from "@/hooks/use-toast";
 import { PageLoader } from "@/components/ui/page-loader";
@@ -783,6 +784,8 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
 
       const synced = await fetchLedgerData({ silent: true });
       if (!synced) return;
+
+      notifyDashboardStatsChanged();
 
       toast({
         title: "Success",

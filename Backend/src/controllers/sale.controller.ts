@@ -168,7 +168,9 @@ const updateSaleController = asyncHandler(async (req: Request, res: Response) =>
 });
 
 const getTodaySalesController = asyncHandler(async (req: Request, res: Response) => {
-    const sales = await saleService.getTodaySales({ branchId: req.user?.branch_id as string as string });
+    const isAdmin = req.user?.role === "SUPER_ADMIN" || req.user?.role === "ADMIN";
+    const branchId = isAdmin ? undefined : resolveBranchId(req);
+    const sales = await saleService.getTodaySales({ branchId });
     new ApiResponse(sales, "Today's sales fetched successfully").send(res);
 });
 

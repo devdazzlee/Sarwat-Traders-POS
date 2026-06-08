@@ -175,6 +175,14 @@ class OfflineSyncManager {
           const { refreshCustomerListGlobally } = await import('./customer-list-sync');
           await refreshCustomerListGlobally().catch(() => undefined);
         }
+        if (
+          item.url.includes('/sale') ||
+          item.url.includes('/customer-ledger') ||
+          item.url.includes('/expenses')
+        ) {
+          const { notifyDashboardStatsChanged } = await import('./dashboard-stats-sync');
+          notifyDashboardStatsChanged();
+        }
         console.log(`Synced: ${item.method} ${item.url}`);
       } else {
         await offlineDB.markFailed(item.id, `HTTP ${response.status}`);

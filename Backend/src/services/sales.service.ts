@@ -728,7 +728,8 @@ class SaleService {
 
     return prisma.sale.findMany({
       where: {
-        branch_id: branchId,
+        status: "COMPLETED",
+        ...(branchId && branchId !== "Not Found" ? { branch_id: branchId } : {}),
         sale_date: {
           gte: start,
           lte: end,
@@ -1266,10 +1267,13 @@ class SaleService {
     const defaultBranchId = branchId?.trim() || undefined;
 
     const sales = await prisma.sale.findMany({
-      where: defaultBranchId && defaultBranchId !== "Not Found" 
-        ? { branch_id: defaultBranchId } 
-        : undefined,
-      orderBy: { sale_date: 'desc' },
+      where: {
+        status: "COMPLETED",
+        ...(defaultBranchId && defaultBranchId !== "Not Found"
+          ? { branch_id: defaultBranchId }
+          : {}),
+      },
+      orderBy: { created_at: "desc" },
       take: 5,
     });
 
