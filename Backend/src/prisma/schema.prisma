@@ -807,10 +807,11 @@ enum PurchaseOrderStatus {
 }
 
 model Expense {
-  id         String   @id @default(uuid())
-  particular String
-  amount     Decimal
-  created_at DateTime @default(now())
+  id          String   @id @default(uuid())
+  particular  String
+  description String?
+  amount      Decimal
+  created_at  DateTime @default(now())
 
   cashflow_id String?
   cashflow    CashFlow? @relation(fields: [cashflow_id], references: [id])

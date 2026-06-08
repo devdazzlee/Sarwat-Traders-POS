@@ -1496,14 +1496,16 @@ class SaleService {
           );
         }
       } else if (newCustomerId) {
-        const balanceDelta = newCreditOutstanding.minus(oldCreditOutstanding);
-        if (!balanceDelta.isZero()) {
-          await adjustCustomerCredit(
-            newCustomerId,
-            balanceDelta,
-            `Sale edit adjustment - ${oldSale.sale_number}`,
-          );
-        }
+        await ledgerBalanceEngine.syncSaleLedgerEntries(tx, {
+          customerId: newCustomerId,
+          saleNumber: oldSale.sale_number,
+          paymentMethod: normalizedPaymentMethod,
+          creditOwedAmount: Number(newCreditOutstanding.toFixed(3)),
+          upfrontPaymentAmount:
+            newPaymentMethod === 'CREDIT' ? paymentReceived : 0,
+          cashSaleAmount: newPaymentMethod !== 'CREDIT' ? newTotalNumber : 0,
+          createdBy: data.createdBy,
+        });
       }
 
       return await tx.sale.update({

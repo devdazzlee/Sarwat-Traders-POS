@@ -22,6 +22,16 @@ export const listExpenses = asyncHandler(async (req: Request, res: Response) => 
     new ApiResponse(result.data, 'Expenses retrieved successfully', 200, true, result.meta).send(res);
 });
 
+export const getExpenseById = asyncHandler(async (req: Request, res: Response) => {
+    const expense = await expenseService.getExpenseById(req.params.id);
+    new ApiResponse(expense, 'Expense retrieved successfully').send(res);
+});
+
+export const deleteExpense = asyncHandler(async (req: Request, res: Response) => {
+    const result = await expenseService.deleteExpense(req.params.id);
+    new ApiResponse(result, 'Expense deleted successfully').send(res);
+});
+
 export const createEmployeeType = asyncHandler(async (req: Request, res: Response) => {
   const data = await expenseService.create(req.body);
   new ApiResponse(data, 'Employee type created successfully', 201).send(res);

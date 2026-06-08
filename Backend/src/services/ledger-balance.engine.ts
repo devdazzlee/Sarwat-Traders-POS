@@ -255,6 +255,135 @@ export class LedgerBalanceEngine {
     await this.recalculateRunningBalances(tx, params.customerId);
     return entry;
   }
+
+  /**
+   * Keep one ledger row per sale (CREDIT_SALE / CASH_SALE / upfront PAYMENT_RECEIVED).
+   * Sale edits update those rows in place — never append delta ADJUSTMENT rows.
+   */
+  async syncSaleLedgerEntries(
+    tx: TxClient,
+    params: {
+      customerId: string;
+      saleNumber: string;
+      paymentMethod: string;
+      creditOwedAmount: number;
+      upfrontPaymentAmount: number;
+      cashSaleAmount: number;
+      createdBy?: string;
+    },
+  ) {
+    const { customerId, saleNumber } = params;
+    const method = params.paymentMethod.toUpperCase();
+    const isCredit = method === 'CREDIT';
+
+    const existing = await tx.customerLedger.findMany({
+      where: { customer_id: customerId, sale_id: saleNumber },
+      orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
+    });
+
+    const creditSale = existing.find((e) => e.entry_type === LedgerEntryType.CREDIT_SALE);
+    const upfrontPayment = existing.find(
+      (e) =>
+        e.entry_type === LedgerEntryType.PAYMENT_RECEIVED &&
+        e.description?.toLowerCase().startsWith('upfront payment on'),
+    );
+    const cashSale = existing.find((e) => e.entry_type === LedgerEntryType.CASH_SALE);
+    const staleAdjustments = existing.filter(
+      (e) =>
+        e.entry_type === LedgerEntryType.ADJUSTMENT &&
+        (e.description?.toLowerCase().includes('sale edit') ?? false),
+    );
+
+    for (const row of staleAdjustments) {
+      await tx.customerLedger.delete({ where: { id: row.id } });
+    }
+
+    if (isCredit) {
+      const owed = Math.max(0, params.creditOwedAmount);
+      const paid = Math.max(0, params.upfrontPaymentAmount);
+      const creditDesc =
+        paid > 0.009 ? `Partial credit sale - ${saleNumber}` : `Credit sale - ${saleNumber}`;
+
+      if (owed > 0.009) {
+        if (creditSale) {
+          await tx.customerLedger.update({
+            where: { id: creditSale.id },
+            data: { amount: new Prisma.Decimal(owed), description: creditDesc },
+          });
+        } else {
+          await this.postCreditSale(tx, {
+            customerId,
+            amount: owed,
+            saleId: saleNumber,
+            createdBy: params.createdBy ?? '',
+            description: creditDesc,
+          });
+        }
+      } else if (creditSale) {
+        await tx.customerLedger.delete({ where: { id: creditSale.id } });
+      }
+
+      if (paid > 0.009) {
+        if (upfrontPayment) {
+          await tx.customerLedger.update({
+            where: { id: upfrontPayment.id },
+            data: {
+              amount: new Prisma.Decimal(paid),
+              description: `Upfront payment on ${saleNumber}`,
+            },
+          });
+        } else {
+          await this.postPayment(tx, {
+            customerId,
+            amount: paid,
+            saleId: saleNumber,
+            createdBy: params.createdBy ?? '',
+            description: `Upfront payment on ${saleNumber}`,
+          });
+        }
+      } else if (upfrontPayment) {
+        await tx.customerLedger.delete({ where: { id: upfrontPayment.id } });
+      }
+
+      if (cashSale) {
+        await tx.customerLedger.delete({ where: { id: cashSale.id } });
+      }
+    } else {
+      const cashTotal = Math.max(0, params.cashSaleAmount);
+      const paidLabel = method === 'CARD' ? 'Card' : 'Cash';
+
+      if (cashTotal > 0.009) {
+        if (cashSale) {
+          await tx.customerLedger.update({
+            where: { id: cashSale.id },
+            data: {
+              amount: new Prisma.Decimal(cashTotal),
+              description: `${paidLabel} sale - ${saleNumber}`,
+            },
+          });
+        } else {
+          await this.postCashSale(tx, {
+            customerId,
+            amount: cashTotal,
+            saleId: saleNumber,
+            createdBy: params.createdBy ?? '',
+            description: `${paidLabel} sale - ${saleNumber}`,
+          });
+        }
+      } else if (cashSale) {
+        await tx.customerLedger.delete({ where: { id: cashSale.id } });
+      }
+
+      if (creditSale) {
+        await tx.customerLedger.delete({ where: { id: creditSale.id } });
+      }
+      if (upfrontPayment) {
+        await tx.customerLedger.delete({ where: { id: upfrontPayment.id } });
+      }
+    }
+
+    await this.recalculateRunningBalances(tx, customerId);
+  }
 }
 
 export const ledgerBalanceEngine = new LedgerBalanceEngine();

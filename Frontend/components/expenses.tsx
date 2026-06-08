@@ -1,22 +1,42 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Calendar, Plus, Receipt, RefreshCw, Search, Wallet } from "lucide-react";
+import { format } from "date-fns";
+import { Calendar, Eye, Plus, Receipt, Search, Trash2, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { StatCardSkeleton } from "@/components/ui/stat-card-skeleton";
 import { PageLoader } from "@/components/ui/page-loader";
 import { useToast } from "@/hooks/use-toast";
+import { DatePicker } from "@/components/ui/date-picker";
 import apiClient from "@/lib/apiClient";
 
 interface ExpenseRow {
   id: string;
   particular: string;
+  description?: string | null;
   amount: number | string;
   created_at: string;
 }
@@ -31,19 +51,48 @@ interface ExpenseMeta {
 const money = (n: number) =>
   `Rs ${Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 
+const formatDate = (value: string) => {
+  try {
+    const dt = new Date(value);
+    return isNaN(dt.getTime()) ? "N/A" : format(dt, "dd MMM yyyy");
+  } catch {
+    return "N/A";
+  }
+};
+
+const formatTime = (value: string) => {
+  try {
+    const dt = new Date(value);
+    return isNaN(dt.getTime()) ? "" : format(dt, "hh:mm a");
+  } catch {
+    return "";
+  }
+};
+
+const truncateWords = (text: string, maxWords = 8) => {
+  const trimmed = text.trim();
+  if (!trimmed) return "—";
+  const words = trimmed.split(/\s+/);
+  if (words.length <= maxWords) return trimmed;
+  return `${words.slice(0, maxWords).join(" ")}...`;
+};
+
 export function Expenses() {
   const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
+  const [viewExpense, setViewExpense] = useState<ExpenseRow | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ExpenseRow | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
+  const [dateFrom, setDateFrom] = useState<Date | undefined>(undefined);
+  const [dateTo, setDateTo] = useState<Date | undefined>(undefined);
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(20);
   const [expenses, setExpenses] = useState<ExpenseRow[]>([]);
   const [meta, setMeta] = useState<ExpenseMeta>({ total: 0, page: 1, limit: 20, totalPages: 1 });
-  const [form, setForm] = useState({ particular: "", amount: "" });
+  const [form, setForm] = useState({ particular: "", amount: "", description: "" });
 
   const fetchExpenses = async () => {
     setIsLoading(true);
@@ -53,8 +102,8 @@ export function Expenses() {
         limit,
       };
       if (searchTerm.trim()) params.search = searchTerm.trim();
-      if (dateFrom) params.startDate = dateFrom;
-      if (dateTo) params.endDate = dateTo;
+      if (dateFrom) params.startDate = format(dateFrom, "yyyy-MM-dd");
+      if (dateTo) params.endDate = format(dateTo, "yyyy-MM-dd");
 
       const res = await apiClient.get("/expenses", { params });
       const rows = Array.isArray(res.data?.data) ? res.data.data : [];
@@ -107,6 +156,7 @@ export function Expenses() {
 
   const submitNewExpense = async () => {
     const particular = form.particular.trim();
+    const description = form.description.trim();
     const amount = Number(form.amount);
 
     if (!particular) {
@@ -120,9 +170,13 @@ export function Expenses() {
 
     setIsSubmitting(true);
     try {
-      await apiClient.post("/expenses", { particular, amount });
+      await apiClient.post("/expenses", {
+        particular,
+        amount,
+        description: description || null,
+      });
       toast({ variant: "success", title: "Expense added", description: "Expense saved successfully." });
-      setForm({ particular: "", amount: "" });
+      setForm({ particular: "", amount: "", description: "" });
       setIsAddDialogOpen(false);
       setPage(1);
       await fetchExpenses();
@@ -134,6 +188,36 @@ export function Expenses() {
       });
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const openView = async (expense: ExpenseRow) => {
+    try {
+      const res = await apiClient.get(`/expenses/${expense.id}`);
+      const row = res.data?.data ?? expense;
+      setViewExpense(row);
+    } catch {
+      setViewExpense(expense);
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    setIsDeleting(true);
+    try {
+      await apiClient.delete(`/expenses/${deleteTarget.id}`);
+      toast({ variant: "success", title: "Expense deleted", description: "The expense record was removed." });
+      setDeleteTarget(null);
+      if (viewExpense?.id === deleteTarget.id) setViewExpense(null);
+      await fetchExpenses();
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Failed to delete expense",
+        description: error?.response?.data?.message || "Could not delete expense.",
+      });
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -158,10 +242,6 @@ export function Expenses() {
           <p className="text-sm md:text-base text-gray-600">Track daily expenses with backend-connected records.</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => void fetchExpenses()}>
-            <RefreshCw className="h-4 w-4 mr-2" />
-            Refresh
-          </Button>
           <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
             <DialogTrigger asChild>
               <Button>
@@ -182,6 +262,19 @@ export function Expenses() {
                     value={form.particular}
                     onChange={(e) => setForm((p) => ({ ...p, particular: e.target.value }))}
                   />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="expense-description">Description</Label>
+                  <Textarea
+                    id="expense-description"
+                    placeholder="What was this expense for? e.g. Tea for staff meeting"
+                    rows={3}
+                    value={form.description}
+                    onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Optional — explain the purpose of this expense.
+                  </p>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="expense-amount">Amount *</Label>
@@ -241,7 +334,7 @@ export function Expenses() {
             <div className="relative lg:col-span-2">
               <Search className="h-4 w-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <Input
-                placeholder="Search by particular..."
+                placeholder="Search by particular or description..."
                 className="pl-9"
                 value={searchTerm}
                 onChange={(e) => {
@@ -250,20 +343,20 @@ export function Expenses() {
                 }}
               />
             </div>
-            <Input
-              type="date"
-              value={dateFrom}
-              onChange={(e) => {
+            <DatePicker
+              date={dateFrom}
+              placeholder="From"
+              onDateChange={(date) => {
                 setPage(1);
-                setDateFrom(e.target.value);
+                setDateFrom(date);
               }}
             />
-            <Input
-              type="date"
-              value={dateTo}
-              onChange={(e) => {
+            <DatePicker
+              date={dateTo}
+              placeholder="To"
+              onDateChange={(date) => {
                 setPage(1);
-                setDateTo(e.target.value);
+                setDateTo(date);
               }}
             />
           </div>
@@ -274,24 +367,67 @@ export function Expenses() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Particular</TableHead>
+                  <TableHead>Description</TableHead>
                   <TableHead>Date</TableHead>
                   <TableHead className="text-right">Amount</TableHead>
+                  <TableHead className="text-right w-[100px]">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {expenses.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={3} className="text-center text-muted-foreground py-8">
+                    <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
                       No expense records found.
                     </TableCell>
                   </TableRow>
                 ) : (
                   expenses.map((expense) => (
                     <TableRow key={expense.id}>
-                      <TableCell className="font-medium">{expense.particular}</TableCell>
-                      <TableCell>{new Date(expense.created_at).toLocaleString()}</TableCell>
+                      <TableCell className="font-medium max-w-[180px]">
+                        <p className="truncate" title={expense.particular}>
+                          {expense.particular}
+                        </p>
+                      </TableCell>
+                      <TableCell className="max-w-[220px]">
+                        <p
+                          className="text-sm text-muted-foreground truncate"
+                          title={expense.description?.trim() || undefined}
+                        >
+                          {truncateWords(expense.description || "")}
+                        </p>
+                      </TableCell>
+                      <TableCell>
+                        <p className="text-sm font-medium text-gray-900 whitespace-nowrap">
+                          {formatDate(expense.created_at)}
+                        </p>
+                        <p className="text-[11px] text-muted-foreground mt-0.5 leading-tight whitespace-nowrap">
+                          {formatTime(expense.created_at)}
+                        </p>
+                      </TableCell>
                       <TableCell className="text-right font-semibold">
                         {money(Number(expense.amount || 0))}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 w-8 p-0"
+                            title="View"
+                            onClick={() => void openView(expense)}
+                          >
+                            <Eye className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 w-8 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
+                            title="Delete"
+                            onClick={() => setDeleteTarget(expense)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))
@@ -341,7 +477,72 @@ export function Expenses() {
           </div>
         </CardContent>
       </Card>
+
+      <Dialog open={!!viewExpense} onOpenChange={(open) => !open && setViewExpense(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Expense Details</DialogTitle>
+          </DialogHeader>
+          {viewExpense && (
+            <div className="space-y-4 text-sm">
+              <div>
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Particular</p>
+                <p className="mt-1 text-base font-semibold text-gray-900">{viewExpense.particular}</p>
+              </div>
+              <div>
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Description</p>
+                <p className="mt-1 text-gray-700 whitespace-pre-wrap">
+                  {viewExpense.description?.trim() || "—"}
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Amount</p>
+                  <p className="mt-1 text-lg font-bold text-emerald-700">
+                    {money(Number(viewExpense.amount || 0))}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Date</p>
+                  <p className="mt-1 text-gray-900 font-medium">{formatDate(viewExpense.created_at)}</p>
+                  <p className="text-sm text-muted-foreground">{formatTime(viewExpense.created_at)}</p>
+                </div>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => {
+          if (!isDeleting) setDeleteTarget(open ? deleteTarget : null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete expense?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently remove{" "}
+              <span className="font-medium text-foreground">{deleteTarget?.particular}</span> (
+              {deleteTarget ? money(Number(deleteTarget.amount || 0)) : ""}). This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700"
+              disabled={isDeleting}
+              onClick={(e) => {
+                e.preventDefault();
+                void confirmDelete();
+              }}
+            >
+              {isDeleting ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
-

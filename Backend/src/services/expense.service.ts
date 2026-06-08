@@ -5,7 +5,31 @@ import { Prisma } from '@prisma/client';
 
 export class ExpenseService {
     async createExpense(data: CreateExpenseInput) {
-        return await prisma.expense.create({ data });
+        const description = data.description?.trim() || null;
+        return await prisma.expense.create({
+            data: {
+                particular: data.particular.trim(),
+                amount: data.amount,
+                description,
+            },
+        });
+    }
+
+    async getExpenseById(id: string) {
+        const expense = await prisma.expense.findUnique({ where: { id } });
+        if (!expense) {
+            throw new AppError(404, 'Expense not found');
+        }
+        return expense;
+    }
+
+    async deleteExpense(id: string) {
+        const expense = await prisma.expense.findUnique({ where: { id } });
+        if (!expense) {
+            throw new AppError(404, 'Expense not found');
+        }
+        await prisma.expense.delete({ where: { id } });
+        return { id, message: 'Expense deleted successfully' };
     }
 
     async listExpenses({
@@ -24,10 +48,20 @@ export class ExpenseService {
         const where: Prisma.ExpenseWhereInput = {
             ...(search?.trim()
                 ? {
-                      particular: {
-                          contains: search.trim(),
-                          mode: 'insensitive',
-                      },
+                      OR: [
+                          {
+                              particular: {
+                                  contains: search.trim(),
+                                  mode: 'insensitive',
+                              },
+                          },
+                          {
+                              description: {
+                                  contains: search.trim(),
+                                  mode: 'insensitive',
+                              },
+                          },
+                      ],
                   }
                 : {}),
             ...(startDate || endDate
