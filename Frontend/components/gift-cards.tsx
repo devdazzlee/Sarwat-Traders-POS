@@ -22,6 +22,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Plus, Search, Eye, CreditCard, Gift, DollarSign, Users, Printer } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { PageLoader } from "@/components/ui/page-loader"
+import {
+  formatReportingPeriodStartLabel,
+  getCurrentReportingPeriod,
+  isWithinCurrentReportingPeriod,
+} from "@/lib/reporting-period"
 
 interface GiftCard {
   id: string
@@ -257,11 +262,18 @@ export function GiftCards() {
   // Calculate stats
   const activeCards = giftCards.filter((c) => c.status === "active").length
   const totalValue = giftCards.filter((c) => c.status === "active").reduce((sum, c) => sum + c.balance, 0)
+  const reportingDayLabel = formatReportingPeriodStartLabel(getCurrentReportingPeriod())
   const redeemedToday = giftCards
     .flatMap((c) => c.transactions)
-    .filter((t) => t.type === "redeem" && t.date === today)
+    .filter(
+      (t) =>
+        t.type === "redeem" &&
+        (isWithinCurrentReportingPeriod(t.date) || t.date === reportingDayLabel),
+    )
     .reduce((sum, t) => sum + t.amount, 0)
-  const newCardsToday = giftCards.filter((c) => c.issueDate === today).length
+  const newCardsToday = giftCards.filter(
+    (c) => c.issueDate === reportingDayLabel || isWithinCurrentReportingPeriod(c.issueDate),
+  ).length
 
   // Simulate loading
   useEffect(() => {

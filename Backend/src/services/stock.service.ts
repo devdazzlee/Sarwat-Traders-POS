@@ -2,6 +2,7 @@ import { Stock, StockMovement } from "@prisma/client";
 import { prisma } from '../prisma/client';
 import { AppError } from "../utils/apiError";
 import { addDecimal, asNumber } from "../utils/helpers";
+import { getReportingPeriodCreatedAtFilter } from "../utils/reportingPeriod";
 
 async function resolveDefaultBranchId(branchId?: string): Promise<string> {
     if (branchId) return branchId;
@@ -344,17 +345,13 @@ class StockService {
     }
 
     async getTodayStockMovements(branchId?: string, userRole?: string) {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        
-        const tomorrow = new Date(today);
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        
+        const { gte, lt } = getReportingPeriodCreatedAtFilter();
+
         const whereClause: any = {
             created_at: {
-                gte: today,
-                lt: tomorrow,
-            }
+                gte,
+                lt,
+            },
         };
 
         // Only filter by branch if branchId is provided AND user is not admin

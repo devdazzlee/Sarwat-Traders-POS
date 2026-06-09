@@ -1,6 +1,7 @@
 import { LedgerEntryType, Prisma, SaleItemType, SaleStatus, StockMovementType } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { AppError } from '../utils/apiError';
+import { getReportingPeriodCreatedAtFilter } from '../utils/reportingPeriod';
 import { ledgerBalanceEngine } from './ledger-balance.engine';
 
 interface ReturnItem {
@@ -105,6 +106,8 @@ class SaleService {
     search,
     startDate,
     endDate,
+    dateField = 'sale_date',
+    endExclusive = false,
   }: {
     branchId?: string;
     page?: number;
@@ -112,7 +115,21 @@ class SaleService {
     search?: string;
     startDate?: Date;
     endDate?: Date;
+    dateField?: 'sale_date' | 'created_at';
+    endExclusive?: boolean;
   }) {
+    const dateFilter =
+      startDate || endDate
+        ? {
+            ...(startDate ? { gte: startDate } : {}),
+            ...(endDate
+              ? endExclusive
+                ? { lt: endDate }
+                : { lte: endDate }
+              : {}),
+          }
+        : undefined;
+
     const where: Prisma.SaleWhereInput = {
       ...(branchId ? { branch_id: branchId } : {}),
       ...(search
@@ -124,13 +141,10 @@ class SaleService {
             ],
           }
         : {}),
-      ...(startDate || endDate
-        ? {
-            sale_date: {
-              ...(startDate ? { gte: startDate } : {}),
-              ...(endDate ? { lte: endDate } : {}),
-            },
-          }
+      ...(dateFilter
+        ? dateField === 'created_at'
+          ? { created_at: dateFilter }
+          : { sale_date: dateFilter }
         : {}),
     };
 
@@ -721,18 +735,15 @@ class SaleService {
   
 
   async getTodaySales({ branchId }: { branchId?: string }) {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-    const end = new Date();
-    end.setHours(23, 59, 59, 999);
+    const { gte, lt } = getReportingPeriodCreatedAtFilter();
 
     return prisma.sale.findMany({
       where: {
         status: "COMPLETED",
         ...(branchId && branchId !== "Not Found" ? { branch_id: branchId } : {}),
-        sale_date: {
-          gte: start,
-          lte: end,
+        created_at: {
+          gte,
+          lt,
         },
       },
       include: {

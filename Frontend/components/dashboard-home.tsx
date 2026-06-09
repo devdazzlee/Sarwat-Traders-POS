@@ -35,6 +35,10 @@ import {
 } from "@/lib/dashboard-stats-sync"
 import { isAdminRole } from "@/lib/branch-utils"
 import { normalizeUserRole, type UserRole } from "@/lib/role-utils"
+import {
+  getReportingPeriodDescription,
+  msUntilNextReportingBoundary,
+} from "@/lib/reporting-period"
 
 const PURCHASE_ENTRY_ROLES: UserRole[] = ["SUPER_ADMIN", "ADMIN"]
 const TRANSFER_ENTRY_ROLES: UserRole[] = ["SUPER_ADMIN", "ADMIN"]
@@ -267,11 +271,32 @@ export function DashboardHome({ onNavigate }: DashboardHomeProps) {
     return () => window.removeEventListener(DASHBOARD_STATS_REFRESH_EVENT, refreshFinancials)
   }, [])
 
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+
+    const scheduleReportingBoundaryRefresh = () => {
+      const delay = msUntilNextReportingBoundary() + 1000
+      timer = setTimeout(() => {
+        void getStats()
+        void getRecentSales()
+        scheduleReportingBoundaryRefresh()
+      }, delay)
+    }
+
+    scheduleReportingBoundaryRefresh()
+    return () => {
+      if (timer) clearTimeout(timer)
+    }
+  }, [])
+
   const formatCurrency = (n: number) =>
     `Rs ${Number(n).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
 
   const isAdminView = isAdminRole(role);
-  const moneyScopeLabel = isAdminView ? "All locations · last 24h" : "Last 24h";
+  const reportingPeriodLabel = getReportingPeriodDescription();
+  const moneyScopeLabel = isAdminView
+    ? `All locations · ${reportingPeriodLabel}`
+    : reportingPeriodLabel;
 
   const handleRefreshData = async () => {
     await withRefreshLoading(async () => {
@@ -437,7 +462,7 @@ export function DashboardHome({ onNavigate }: DashboardHomeProps) {
             <DashboardStatCard
               title="Today's Sales"
               value={stats?.todaySales?.length || 0}
-              subtitle="Transactions in last 24h"
+              subtitle={`Transactions · ${reportingPeriodLabel}`}
               linkLabel="View sales history"
               icon={DollarSign}
               onClick={onNavigate ? () => goTo("sales-history") : undefined}

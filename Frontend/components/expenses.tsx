@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { format } from "date-fns";
+import { isWithinCurrentReportingPeriod } from "@/lib/reporting-period";
 import { Calendar, Eye, Plus, Receipt, Search, Trash2, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -135,8 +136,6 @@ export function Expenses() {
 
   const totals = useMemo(() => {
     const now = new Date();
-    const startOfToday = new Date(now);
-    startOfToday.setHours(0, 0, 0, 0);
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
     let todayTotal = 0;
@@ -145,7 +144,7 @@ export function Expenses() {
       const amount = Number(e.amount || 0);
       const created = new Date(e.created_at);
       if (created >= startOfMonth) monthTotal += amount;
-      if (created >= startOfToday) todayTotal += amount;
+      if (isWithinCurrentReportingPeriod(created)) todayTotal += amount;
     }
 
     return {

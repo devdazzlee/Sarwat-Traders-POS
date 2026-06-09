@@ -1,14 +1,39 @@
 import { LedgerEntryType, Prisma } from "@prisma/client";
 import { prisma } from "../prisma/client";
+import {
+    getCurrentReportingPeriod,
+    getReportingPeriodCreatedAtFilter,
+} from "../utils/reportingPeriod";
 
 export class StatsService {
-    private saleBaseWhere(branchId?: string, past24Hours?: Date): Prisma.SaleWhereInput {
+    private saleBaseWhere(
+        branchId?: string,
+        periodStart?: Date,
+        periodEnd?: Date,
+    ): Prisma.SaleWhereInput {
+        const range = this.resolveCreatedAtRange(periodStart, periodEnd);
+
         return {
             status: "COMPLETED",
-            ...(past24Hours ? { created_at: { gte: past24Hours } } : {}),
+            ...(range ? { created_at: range } : {}),
             ...(branchId && branchId !== "Not Found" ? { branch_id: branchId } : {}),
         };
     }
+
+    private resolveCreatedAtRange(
+        startDate?: Date,
+        endDate?: Date,
+    ): Prisma.DateTimeFilter | undefined {
+        if (startDate || endDate) {
+            return {
+                ...(startDate ? { gte: startDate } : {}),
+                ...(endDate ? { lt: endDate } : {}),
+            };
+        }
+
+        return getReportingPeriodCreatedAtFilter();
+    }
+
     private async totalCustomers(branchId?: string) {
         const total = await prisma.customer.count();
         return total;
@@ -23,7 +48,7 @@ export class StatsService {
                 product: {
                     is_active: true,
                 },
-                ...(branchId && branchId !== "Not Found" ? { branch_id: branchId } : {})
+                ...(branchId && branchId !== "Not Found" ? { branch_id: branchId } : {}),
             },
             select: {
                 id: true,
@@ -42,10 +67,10 @@ export class StatsService {
     }
 
     private async todaySales(branchId?: string) {
-        const past24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const { gte, lt } = getReportingPeriodCreatedAtFilter();
 
         const sales = await prisma.sale.findMany({
-            where: this.saleBaseWhere(branchId, past24Hours),
+            where: this.saleBaseWhere(branchId, gte, lt),
             select: {
                 id: true,
                 total_amount: true,
@@ -70,20 +95,20 @@ export class StatsService {
     }
 
     private async dailyRevenue(branchId?: string) {
-        const past24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const { gte, lt } = getReportingPeriodCreatedAtFilter();
         const revenue = await prisma.sale.aggregate({
             _sum: { total_amount: true },
-            where: this.saleBaseWhere(branchId, past24Hours),
+            where: this.saleBaseWhere(branchId, gte, lt),
         });
         return revenue._sum.total_amount ? Number(revenue._sum.total_amount) : 0;
     }
 
     private async dailyCredit(branchId?: string) {
-        const past24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const { gte, lt } = getReportingPeriodCreatedAtFilter();
         const credit = await prisma.sale.aggregate({
             _sum: { total_amount: true },
             where: {
-                ...this.saleBaseWhere(branchId, past24Hours),
+                ...this.saleBaseWhere(branchId, gte, lt),
                 payment_method: "CREDIT",
             },
         });
@@ -91,27 +116,36 @@ export class StatsService {
     }
 
     private async dailyCash(branchId?: string) {
-        const past24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const { gte, lt } = getReportingPeriodCreatedAtFilter();
         const cash = await prisma.sale.aggregate({
             _sum: { total_amount: true },
             where: {
-                ...this.saleBaseWhere(branchId, past24Hours),
+                ...this.saleBaseWhere(branchId, gte, lt),
                 payment_method: { in: ["CASH", "CARD"] },
             },
         });
         return cash._sum.total_amount ? Number(cash._sum.total_amount) : 0;
     }
 
-    private collectionsWhere(startDate?: Date, endDate?: Date): Prisma.CustomerLedgerWhereInput {
-        const past24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000);
-        const start = startDate ?? past24Hours;
-        const end = endDate ?? new Date();
+    private collectionsWhere(
+        startDate?: Date,
+        endDate?: Date,
+        endExclusive = true,
+    ): Prisma.CustomerLedgerWhereInput {
+        const period = getCurrentReportingPeriod();
+        const start = startDate ?? period.start;
+        const end = endDate ?? period.end;
+        const useExclusiveEnd = endDate ? endExclusive : true;
 
         return {
             entry_type: LedgerEntryType.PAYMENT_RECEIVED,
             created_at: {
                 gte: start,
-                lte: end,
+                ...(end
+                    ? useExclusiveEnd
+                        ? { lt: end }
+                        : { lte: end }
+                    : {}),
             },
         };
     }
@@ -128,13 +162,15 @@ export class StatsService {
         startDate,
         endDate,
         search,
+        endExclusive = true,
     }: {
         startDate?: Date;
         endDate?: Date;
         search?: string;
+        endExclusive?: boolean;
     }) {
         const rows = await prisma.customerLedger.findMany({
-            where: this.collectionsWhere(startDate, endDate),
+            where: this.collectionsWhere(startDate, endDate, endExclusive),
             select: {
                 id: true,
                 amount: true,
@@ -170,19 +206,30 @@ export class StatsService {
     }
 
     private async dailyExpense(branchId?: string) {
-        const past24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const { gte, lt } = getReportingPeriodCreatedAtFilter();
         const expenses = await prisma.expense.aggregate({
             _sum: { amount: true },
             where: {
-                created_at: { gte: past24Hours },
-                ...(branchId && branchId !== "Not Found" ? { cashflow: { branch_id: branchId } } : {})
-            }
+                created_at: { gte, lt },
+                ...(branchId && branchId !== "Not Found" ? { cashflow: { branch_id: branchId } } : {}),
+            },
         });
         return expenses._sum.amount ? Number(expenses._sum.amount) : 0;
     }
 
     public async getDashboardStats(branchId?: string) {
-        const [totalCustomers, lowStockProducts, todaySales, dailyRevenue, dailyCredit, dailyCash, dailyCollections, dailyExpense] = await Promise.all([
+        const reportingPeriod = getCurrentReportingPeriod();
+
+        const [
+            totalCustomers,
+            lowStockProducts,
+            todaySales,
+            dailyRevenue,
+            dailyCredit,
+            dailyCash,
+            dailyCollections,
+            dailyExpense,
+        ] = await Promise.all([
             this.totalCustomers(branchId),
             this.lowStockProducts(branchId),
             this.todaySales(branchId),
@@ -205,6 +252,10 @@ export class StatsService {
             dailyCollections,
             dailyCashReceived: cashReceived,
             dailyExpense,
+            reportingPeriod: {
+                start: reportingPeriod.start.toISOString(),
+                end: reportingPeriod.end.toISOString(),
+            },
         };
     }
 }

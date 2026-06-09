@@ -21,6 +21,10 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Plus, Search, Eye, RotateCcw, CreditCard, DollarSign, CheckCircle, XCircle, Loader2, Minus, X, ChevronLeft, ChevronRight, FileText, Printer } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { PageLoader } from "@/components/ui/page-loader"
+import {
+  getCurrentReportingPeriod,
+  getPreviousReportingPeriod,
+} from "@/lib/reporting-period"
 import { StatCardSkeleton } from "@/components/ui/stat-card-skeleton"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -745,18 +749,17 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
   }, [searchTerm])
 
   // Calculate stats
-  const today = new Date()
-  const yesterday = new Date()
-  yesterday.setDate(yesterday.getDate() - 1)
-  const sameDay = (dateValue: string, compareDate: Date) => {
-    const d = new Date(dateValue)
-    return d.toDateString() === compareDate.toDateString()
+  const currentPeriod = getCurrentReportingPeriod()
+  const previousPeriod = getPreviousReportingPeriod()
+  const inPeriod = (dateValue: string, period: { start: Date; end: Date }) => {
+    const ts = new Date(dateValue).getTime()
+    return ts >= period.start.getTime() && ts < period.end.getTime()
   }
-  const todayReturns = returns.filter((r) => sameDay(r.sale_date, today)).length
-  const yesterdayReturns = returns.filter((r) => sameDay(r.sale_date, yesterday)).length
+  const todayReturns = returns.filter((r) => inPeriod(r.sale_date, currentPeriod)).length
+  const yesterdayReturns = returns.filter((r) => inPeriod(r.sale_date, previousPeriod)).length
   // Use Math.abs to ensure return value is always positive (returns are stored as negative in some systems)
   const todayValue = returns
-    .filter((r) => sameDay(r.sale_date, today))
+    .filter((r) => inPeriod(r.sale_date, currentPeriod))
     .reduce((sum, r) => sum + Math.abs(Number(r.total_amount)), 0)
   const pendingReturns = returns.filter((r) => r.status === "PENDING").length
   const returnRate = allSalesForMetrics.length > 0 

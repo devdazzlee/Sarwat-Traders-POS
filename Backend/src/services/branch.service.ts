@@ -2,7 +2,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { AppError } from '../utils/apiError';
 import { CreateBranchInput, UpdateBranchInput } from '../validations/branch.validation';
-import { endOfDay, startOfDay } from 'date-fns';
+import { getReportingPeriodCreatedAtFilter } from '../utils/reportingPeriod';
 
 export class BranchService {
   public async createBranch(data: CreateBranchInput) {
@@ -127,7 +127,7 @@ export class BranchService {
   }
 
   public async getBranchDetails(branchId: string) {
-    const today = new Date();
+    const { gte, lt } = getReportingPeriodCreatedAtFilter();
 
     const branch = await prisma.branch.findUnique({
       where: { id: branchId },
@@ -140,9 +140,9 @@ export class BranchService {
         },
         sales: {
           where: {
-            sale_date: {
-              gte: startOfDay(today),
-              lte: endOfDay(today),
+            created_at: {
+              gte,
+              lt,
             },
           },
           select: {

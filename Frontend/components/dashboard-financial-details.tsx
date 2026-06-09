@@ -25,6 +25,11 @@ import { cn } from "@/lib/utils";
 import { isAdminRole, normalizeBranchId } from "@/lib/branch-utils";
 import apiClient from "@/lib/apiClient";
 import { fetchDashboardStatsFresh } from "@/lib/dashboard-stats-sync";
+import {
+  getCurrentReportingPeriod,
+  getReportingPeriodDescription,
+  msUntilNextReportingBoundary,
+} from "@/lib/reporting-period";
 
 type DetailMode = "revenue" | "cash" | "credit" | "expenses";
 
@@ -80,28 +85,28 @@ const MODE_META: Record<
 > = {
   revenue: {
     heading: "Today Revenue",
-    sub: "All completed sales in the selected period",
+    sub: `All completed sales · ${getReportingPeriodDescription()}`,
     tone: "text-blue-700",
     badge: "bg-blue-100 text-blue-800 border-blue-200",
     icon: Banknote,
   },
   cash: {
     heading: "Today Cash Sales",
-    sub: "Cash/card sales and customer ledger payments received",
+    sub: `Cash/card sales and ledger payments · ${getReportingPeriodDescription()}`,
     tone: "text-emerald-700",
     badge: "bg-emerald-100 text-emerald-800 border-emerald-200",
     icon: Wallet,
   },
   credit: {
     heading: "Today Credit Sales",
-    sub: "Credit invoices created in the selected period",
+    sub: `Credit invoices · ${getReportingPeriodDescription()}`,
     tone: "text-amber-700",
     badge: "bg-amber-100 text-amber-800 border-amber-200",
     icon: CreditCard,
   },
   expenses: {
     heading: "Today Expenses",
-    sub: "Outgoing cash and expense records",
+    sub: `Outgoing cash · ${getReportingPeriodDescription()}`,
     tone: "text-red-700",
     badge: "bg-red-100 text-red-800 border-red-200",
     icon: Receipt,
@@ -130,7 +135,11 @@ const formatTime = (value: string) => {
 };
 
 function getDefaultDateFrom() {
-  return new Date(Date.now() - 24 * 60 * 60 * 1000);
+  return getCurrentReportingPeriod().start;
+}
+
+function getDefaultReportingEndExclusive() {
+  return getCurrentReportingPeriod().end;
 }
 
 function getSaleQueryParams() {
@@ -197,12 +206,17 @@ export function DashboardFinancialDetails({ mode, onBack, onNavigate }: Dashboar
   const isAdminView = typeof window !== "undefined" && isAdminRole(localStorage.getItem("role"));
 
   const dateParams = useMemo(() => {
-    const params: Record<string, string> = {};
+    const params: Record<string, string> = {
+      dateField: "created_at",
+      endExclusive: dateTo ? "false" : "true",
+    };
     if (dateFrom) params.startDate = dateFrom.toISOString();
     if (dateTo) {
       const inclusiveEnd = new Date(dateTo);
       inclusiveEnd.setHours(23, 59, 59, 999);
       params.endDate = inclusiveEnd.toISOString();
+    } else {
+      params.endDate = getDefaultReportingEndExclusive().toISOString();
     }
     return params;
   }, [dateFrom, dateTo]);
@@ -218,8 +232,10 @@ export function DashboardFinancialDetails({ mode, onBack, onNavigate }: Dashboar
             page,
             limit,
             ...(searchTerm.trim() ? { search: searchTerm.trim() } : {}),
-            ...(dateFrom ? { startDate: format(dateFrom, "yyyy-MM-dd") } : {}),
-            ...(dateTo ? { endDate: format(dateTo, "yyyy-MM-dd") } : {}),
+            ...(dateFrom ? { startDate: dateFrom.toISOString() } : {}),
+            ...(dateTo
+              ? { endDate: format(dateTo, "yyyy-MM-dd") }
+              : { endDate: getDefaultReportingEndExclusive().toISOString() }),
           },
           headers: { "X-Skip-Offline-Cache": "true" },
         });
@@ -284,6 +300,23 @@ export function DashboardFinancialDetails({ mode, onBack, onNavigate }: Dashboar
 
   useEffect(() => {
     void loadData();
+  }, [loadData]);
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const scheduleReportingBoundaryRefresh = () => {
+      const delay = msUntilNextReportingBoundary() + 1000;
+      timer = setTimeout(() => {
+        void loadData(true);
+        scheduleReportingBoundaryRefresh();
+      }, delay);
+    };
+
+    scheduleReportingBoundaryRefresh();
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
   }, [loadData]);
 
   const cashRows: CashTableRow[] = useMemo(() => {
