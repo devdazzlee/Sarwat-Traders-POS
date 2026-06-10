@@ -43,7 +43,6 @@ import {
   Printer,
   Pencil,
   Trash2,
-  FileText,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import apiClient from "@/lib/apiClient";
@@ -53,7 +52,6 @@ import { useToast } from "@/hooks/use-toast";
 import { PageLoader } from "@/components/ui/page-loader";
 import { format } from "date-fns";
 import { DatePicker } from "@/components/ui/date-picker";
-import { SaleBillDialog } from "@/components/sale-bill-dialog";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
@@ -70,28 +68,52 @@ interface LedgerEntry {
   invoiceDue?: number;
   invoicePaid?: number;
   invoiceTotal?: number;
-  saleId?: string | null;
+  purchaseId?: string | null;
   paymentStatus?: string | null;
-  isCollectable?: boolean;
+  isPayable?: boolean;
   isEditable?: boolean;
   isDeletable?: boolean;
   editRestrictedReason?: string | null;
   payment_method: string | null;
 }
 
-interface CustomerDetails {
+interface SupplierDetails {
   id: string;
   name: string;
   phone_number: string | null;
   mobile_number: string | null;
-  email: string;
+  email: string | null;
   outstanding_balance: number;
-  credit_limit: number;
+  code: string;
 }
 
-interface CustomerLedgerProps {
-  customerId: string;
-  onBack: () => void;
+interface ProductSummary {
+  productId: string;
+  productName: string;
+  sku: string | null;
+  totalQuantity: number;
+  totalAmount: number;
+  purchaseCount: number;
+  lastPurchaseDate: string;
+  lastRate: number;
+}
+
+interface PurchaseDetail {
+  id: string;
+  purchaseNumber: string | null;
+  invoiceRef: string | null;
+  productName: string;
+  sku: string | null;
+  quantity: number;
+  costPrice: number;
+  lineTotal: number;
+  purchaseDate: string;
+}
+
+interface SupplierLedgerProps {
+  supplierId: string;
+  onBack?: () => void;
+  embedded?: boolean;
 }
 
 const money = (n: number) =>
@@ -109,35 +131,35 @@ function cleanDisplayText(text: string) {
 }
 
 function entryTypeLabel(type: string) {
-  if (type === "CREDIT_SALE") return "Credit Sale";
-  if (type === "CASH_SALE") return "Cash Sale";
-  if (type === "PAYMENT_RECEIVED") return "Payment";
+  if (type === "CREDIT_PURCHASE") return "Credit Purchase";
+  if (type === "CASH_PURCHASE") return "Cash Purchase";
+  if (type === "PAYMENT_MADE") return "Payment";
   if (type === "ADJUSTMENT") return "Adjustment";
   if (type === "REFUND") return "Refund";
   return type.replace(/_/g, " ");
 }
 
-/** Positive outstanding = customer owes you; negative = prepaid credit in customer's favor */
+/** Positive outstanding = we owe the supplier; negative = advance paid to supplier */
 function getNetBalancePresentation(balance: number) {
   if (balance > 0.009) {
     return {
-      label: "Amount Due",
+      label: "Amount Payable",
       amount: balance,
       className: "text-amber-700",
       cardClass: "bg-amber-50 border-amber-200",
       labelClass: "text-amber-600",
-      hint: "Customer owes this amount on the account",
+      hint: "Outstanding amount payable to this supplier",
       variant: "due" as const,
     };
   }
   if (balance < -0.009) {
     return {
-      label: "Available Credit",
+      label: "Advance Paid",
       amount: Math.abs(balance),
       className: "text-emerald-700",
       cardClass: "bg-emerald-50 border-emerald-200",
       labelClass: "text-emerald-600",
-      hint: "Customer has prepaid credit. Not an amount they need to pay now.",
+      hint: "Extra amount paid to supplier beyond current purchases",
       variant: "credit" as const,
     };
   }
@@ -177,24 +199,11 @@ type EnrichedLedgerEntry = LedgerEntry & {
   relatedEntries: LedgerEntry[];
 };
 
-function extractSaleRef(entry: LedgerEntry): string | null {
+function extractPurchaseRef(entry: LedgerEntry): string | null {
   if (entry.reference_no?.trim()) return entry.reference_no.trim();
-  if (entry.saleId?.trim()) return entry.saleId.trim();
-  const match = entry.description.match(/SALE-\d+/i);
+  if (entry.purchaseId?.trim()) return entry.purchaseId.trim();
+  const match = entry.description.match(/PUR-\d+/i);
   return match ? match[0].toUpperCase() : null;
-}
-
-function isSaleBillEntry(entry: LedgerEntry): boolean {
-  return (
-    entry.type === "CREDIT_SALE" ||
-    entry.type === "CASH_SALE" ||
-    entry.type === "REFUND"
-  );
-}
-
-function getSaleBillRef(entry: LedgerEntry): string | null {
-  if (!isSaleBillEntry(entry)) return null;
-  return entry.saleId || extractSaleRef(entry);
 }
 
 function enrichLedgerEntry(entry: LedgerEntry, allEntries: LedgerEntry[]): EnrichedLedgerEntry {
@@ -204,28 +213,28 @@ function enrichLedgerEntry(entry: LedgerEntry, allEntries: LedgerEntry[]): Enric
   const changeDirection =
     entry.debit > 0.009 ? "increase" : entry.credit > 0.009 ? "decrease" : "none";
 
-  const relatedRef = extractSaleRef(entry);
+  const relatedRef = extractPurchaseRef(entry);
   const relatedEntries = relatedRef
-    ? allEntries.filter((e) => e.id !== entry.id && extractSaleRef(e) === relatedRef)
+    ? allEntries.filter((e) => e.id !== entry.id && extractPurchaseRef(e) === relatedRef)
     : [];
 
   const desc = cleanDisplayText(entry.description).toLowerCase();
   const isOpening = desc.includes("opening balance");
   const isDeletedAudit = desc.includes("deleted");
-  const isSaleEdit =
-    desc.includes("sale edit") || desc.includes("credit removed") || desc.includes("credit assigned");
+  const isPurchaseEdit =
+    desc.includes("purchase edit") || desc.includes("credit removed") || desc.includes("credit assigned");
 
   let humanType = entryTypeLabel(entry.type);
-  let humanExplanation = "This entry updated the customer account balance.";
+  let humanExplanation = "This entry updated the supplier account balance.";
   let statusLabel = "Recorded";
   let statusClass = "text-slate-500";
   let changeClass = "text-slate-700";
   let borderClass = "border-l-slate-200";
 
-  if (entry.type === "CREDIT_SALE") {
-    humanType = "Credit Sale";
+  if (entry.type === "CREDIT_PURCHASE") {
+    humanType = "Credit Purchase";
     humanExplanation =
-      "Customer purchased on credit. This amount was added to what they owe you.";
+      "Purchase on credit from supplier. This amount was added to what you owe them.";
     changeClass = "text-rose-700";
     borderClass = "border-l-rose-400";
     if (entry.paymentStatus === "PAID") {
@@ -238,30 +247,30 @@ function enrichLedgerEntry(entry: LedgerEntry, allEntries: LedgerEntry[]): Enric
       statusLabel = "Unpaid";
       statusClass = "text-rose-600";
     }
-  } else if (entry.type === "CASH_SALE") {
+  } else if (entry.type === "CASH_PURCHASE") {
     const paidVia =
       entry.payment_method === "CARD"
         ? "Card"
         : entry.payment_method === "CASH"
           ? "Cash"
           : "Paid";
-    humanType = `${paidVia} Sale`;
+    humanType = `${paidVia} Purchase`;
     humanExplanation =
-      "Customer paid in full at the time of sale. This does not change their account balance.";
+      "Paid in full at the time of purchase. This does not change the supplier payable balance.";
     statusLabel = "Paid";
     statusClass = "text-emerald-600";
     changeClass = "text-slate-600";
     borderClass = "border-l-slate-300";
-  } else if (entry.type === "PAYMENT_RECEIVED") {
-    humanType = "Payment Received";
-    humanExplanation = "Customer paid this amount. It reduced their outstanding balance.";
-    statusLabel = "Received";
+  } else if (entry.type === "PAYMENT_MADE") {
+    humanType = "Payment Made";
+    humanExplanation = "Payment made to supplier. It reduced the outstanding payable balance.";
+    statusLabel = "Paid";
     statusClass = "text-emerald-600";
     changeClass = "text-emerald-700";
     borderClass = "border-l-emerald-400";
   } else if (entry.type === "REFUND") {
     humanType = "Refund";
-    humanExplanation = "Refund or return credit. It reduced what the customer owes.";
+    humanExplanation = "Supplier credit or refund. It reduced what you owe the supplier.";
     statusLabel = "Refunded";
     statusClass = "text-emerald-600";
     changeClass = "text-emerald-700";
@@ -269,7 +278,7 @@ function enrichLedgerEntry(entry: LedgerEntry, allEntries: LedgerEntry[]): Enric
   } else if (entry.type === "ADJUSTMENT") {
     if (isOpening) {
       humanType = "Opening Balance";
-      humanExplanation = "Existing amount the customer owed before this POS system was used.";
+      humanExplanation = "Existing amount owed to supplier before this POS system was used.";
       changeClass = "text-rose-700";
       borderClass = "border-l-slate-400";
     } else if (isDeletedAudit) {
@@ -278,9 +287,9 @@ function enrichLedgerEntry(entry: LedgerEntry, allEntries: LedgerEntry[]): Enric
       statusLabel = "Audit";
       statusClass = "text-slate-500";
       borderClass = "border-l-slate-300";
-    } else if (isSaleEdit && relatedRef) {
-      humanType = "Sale Adjustment";
-      humanExplanation = `Linked to ${relatedRef} from a sale edit or customer change.`;
+    } else if (isPurchaseEdit && relatedRef) {
+      humanType = "Purchase Adjustment";
+      humanExplanation = `Linked to ${relatedRef} from a purchase edit or supplier change.`;
       statusLabel = "Linked";
       statusClass = "text-blue-600";
       changeClass = changeDirection === "decrease" ? "text-emerald-700" : "text-rose-700";
@@ -289,9 +298,9 @@ function enrichLedgerEntry(entry: LedgerEntry, allEntries: LedgerEntry[]): Enric
       humanType = "Adjustment";
       humanExplanation =
         changeDirection === "increase"
-          ? "Manual correction that increased what the customer owes."
+          ? "Manual correction that increased what you owe the supplier."
           : changeDirection === "decrease"
-            ? "Manual correction that reduced what the customer owes."
+            ? "Manual correction that reduced what you owe the supplier."
             : "Manual balance correction on this account.";
       statusLabel = "Adjusted";
       statusClass = "text-blue-600";
@@ -300,16 +309,16 @@ function enrichLedgerEntry(entry: LedgerEntry, allEntries: LedgerEntry[]): Enric
     }
   }
 
-  if (changeDirection === "decrease" && entry.type !== "PAYMENT_RECEIVED" && entry.type !== "REFUND") {
-    if (!isSaleEdit || !relatedRef) {
+  if (changeDirection === "decrease" && entry.type !== "PAYMENT_MADE" && entry.type !== "REFUND") {
+    if (!isPurchaseEdit || !relatedRef) {
       changeClass = "text-emerald-700";
     }
-  } else if (changeDirection === "increase" && entry.type === "ADJUSTMENT" && !isOpening && !isDeletedAudit && !(isSaleEdit && relatedRef)) {
+  } else if (changeDirection === "increase" && entry.type === "ADJUSTMENT" && !isOpening && !isDeletedAudit && !(isPurchaseEdit && relatedRef)) {
     changeClass = "text-rose-700";
   }
 
   const humanChangeLabel =
-    entry.type === "CASH_SALE"
+    entry.type === "CASH_PURCHASE"
       ? money(entry.amount ?? changeAmount)
       : formatSignedMoney(changeAmount, changeDirection);
 
@@ -374,11 +383,11 @@ function BalanceFlow({
   );
 }
 
-export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
+export function SupplierLedger({ supplierId, onBack, embedded = false }: SupplierLedgerProps) {
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [entries, setEntries] = useState<LedgerEntry[]>([]);
-  const [customer, setCustomer] = useState<CustomerDetails | null>(null);
+  const [supplier, setSupplier] = useState<SupplierDetails | null>(null);
   const [search, setSearch] = useState("");
   const [sortOrder, setSortOrder] = useState<"desc" | "asc">("desc");
   const [dateFrom, setDateFrom] = useState<Date | undefined>(undefined);
@@ -394,7 +403,10 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
   const [selectedEntry, setSelectedEntry] = useState<LedgerEntry | null>(null);
   const [paymentAmount, setPaymentAmount] = useState("");
   const [paymentDescription, setPaymentDescription] = useState("");
-  const [paymentSaleKey, setPaymentSaleKey] = useState<string>("");
+  const [paymentPurchaseKey, setPaymentPurchaseKey] = useState<string>("");
+  const [productSummary, setProductSummary] = useState<ProductSummary[]>([]);
+  const [purchaseDetails, setPurchaseDetails] = useState<PurchaseDetail[]>([]);
+  const [purchaseHistoryTotal, setPurchaseHistoryTotal] = useState(0);
   const [isSubmittingPayment, setIsSubmittingPayment] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -409,22 +421,6 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
   const [deleteReason, setDeleteReason] = useState("");
   const [isDeletingEntry, setIsDeletingEntry] = useState(false);
   const [viewEntry, setViewEntry] = useState<EnrichedLedgerEntry | null>(null);
-  const [billSaleRef, setBillSaleRef] = useState<string | null>(null);
-  const [billDialogOpen, setBillDialogOpen] = useState(false);
-
-  const openSaleBill = useCallback((entry: LedgerEntry) => {
-    const ref = getSaleBillRef(entry);
-    if (!ref) {
-      toast({
-        title: "Bill unavailable",
-        description: "This transaction is not linked to a sale invoice.",
-        variant: "destructive",
-      });
-      return;
-    }
-    setBillSaleRef(ref);
-    setBillDialogOpen(true);
-  }, [toast]);
 
   const fetchLedgerData = useCallback(async (options?: { silent?: boolean }): Promise<boolean> => {
     const silent = options?.silent ?? false;
@@ -434,11 +430,11 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
       setLoading(true);
     }
     try {
-      const [custRes, ledgerRes] = await Promise.all([
-        apiClient.get(`${API_BASE}/customer/${customerId}`, {
+      const [supplierRes, ledgerRes] = await Promise.all([
+        apiClient.get(`${API_BASE}/suppliers/${supplierId}`, {
           headers: { "X-Skip-Offline-Cache": "true" },
         }),
-        apiClient.get(`${API_BASE}/customer-ledger/${customerId}`, {
+        apiClient.get(`${API_BASE}/supplier-ledger/${supplierId}`, {
           params: {
             limit: 200,
             ...(dateFrom ? { startDate: format(dateFrom, "yyyy-MM-dd") } : {}),
@@ -448,13 +444,16 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
         }),
       ]);
 
-      setCustomer(custRes.data.data);
+      setSupplier(supplierRes.data.data);
 
       const data = ledgerRes.data.data;
       setEntries(data.entries || []);
+      setProductSummary(data.productSummary || []);
+      setPurchaseDetails(data.purchaseDetails || []);
+      setPurchaseHistoryTotal(data.summary?.purchaseHistoryTotal ?? 0);
       const bal = Number(data.summary?.currentBalance ?? 0);
       setSummary({
-        totalDebits: data.summary?.totalDebits ?? data.summary?.totalSales ?? 0,
+        totalDebits: data.summary?.totalDebits ?? data.summary?.totalPurchases ?? 0,
         totalCredits: data.summary?.totalCredits ?? data.summary?.totalPayments ?? 0,
         balance: bal,
         balanceDue: data.summary?.balanceDue ?? Math.max(0, bal),
@@ -475,7 +474,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
         setLoading(false);
       }
     }
-  }, [customerId, dateFrom, dateTo, toast]);
+  }, [supplierId, dateFrom, dateTo, toast]);
 
   useEffect(() => {
     fetchLedgerData();
@@ -504,7 +503,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
 
   type PaymentTarget = {
     key: string;
-    saleId: string | null;
+    purchaseId: string | null;
     referenceNo: string | null;
     label: string;
     detail: string;
@@ -517,14 +516,14 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
     const targets: PaymentTarget[] = [];
 
     for (const e of entries) {
-      const ref = e.saleId || e.reference_no;
+      const ref = e.purchaseId || e.reference_no;
       if (!ref || seen.has(ref)) continue;
       const due = e.invoiceDue ?? 0;
       if (due <= 0.009) continue;
       seen.add(ref);
       targets.push({
         key: ref,
-        saleId: e.saleId ?? ref,
+        purchaseId: e.purchaseId ?? ref,
         referenceNo: e.reference_no ?? ref,
         label: e.reference_no ?? ref,
         detail: cleanDisplayText(entryTypeLabel(e.type)),
@@ -536,10 +535,10 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
     if (summary.balanceDue > 0.009) {
       targets.push({
         key: "__account__",
-        saleId: null,
+        purchaseId: null,
         referenceNo: null,
         label: "Whole account balance",
-        detail: "Applies to total amount due on this customer account",
+        detail: "Applies to total amount payable on this supplier account",
         suggestedAmount: summary.balanceDue,
         kind: "account",
       });
@@ -551,13 +550,13 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
   const resolvePaymentTarget = useCallback(
     (targetKey: string) => {
       if (!targetKey || targetKey === "__account__") {
-        return { saleId: null as string | null, referenceNo: null as string | null };
+        return { purchaseId: null as string | null, referenceNo: null as string | null };
       }
       const t = paymentTargets.find(
-        (i) => i.key === targetKey || i.saleId === targetKey || i.referenceNo === targetKey
+        (i) => i.key === targetKey || i.purchaseId === targetKey || i.referenceNo === targetKey
       );
       return {
-        saleId: t?.saleId || t?.referenceNo || targetKey,
+        purchaseId: t?.purchaseId || t?.referenceNo || targetKey,
         referenceNo: t?.referenceNo ?? null,
       };
     },
@@ -565,7 +564,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
   );
 
   const applyPaymentTarget = useCallback((targetKey: string) => {
-    setPaymentSaleKey(targetKey);
+    setPaymentPurchaseKey(targetKey);
     const t = paymentTargets.find((x) => x.key === targetKey);
     if (!t) return;
     if (t.kind === "account") {
@@ -581,7 +580,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
     setSelectedEntry(null);
     setPaymentAmount("");
     setPaymentDescription("");
-    setPaymentSaleKey("");
+    setPaymentPurchaseKey("");
   }, []);
 
   const openPaymentModal = useCallback(
@@ -589,25 +588,25 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
       setSelectedEntry(entry ?? null);
 
       if (entry) {
-        const ref = entry.saleId || entry.reference_no || "";
+        const ref = entry.purchaseId || entry.reference_no || "";
         const match = paymentTargets.find(
-          (t) => t.key === ref || t.saleId === ref || t.referenceNo === ref
+          (t) => t.key === ref || t.purchaseId === ref || t.referenceNo === ref
         );
         if (match) {
           applyPaymentTarget(match.key);
         } else if (summary.balanceDue > 0) {
           applyPaymentTarget("__account__");
         } else {
-          setPaymentSaleKey(ref);
+          setPaymentPurchaseKey(ref);
           setPaymentAmount(String(entry.invoiceDue ?? entry.debit ?? ""));
           setPaymentDescription(
-            entry.reference_no ? `Payment for ${entry.reference_no}` : "Payment received"
+            entry.reference_no ? `Payment for ${entry.reference_no}` : "Payment made to supplier"
           );
         }
       } else if (paymentTargets.length === 1) {
         applyPaymentTarget(paymentTargets[0].key);
       } else {
-        setPaymentSaleKey("");
+        setPaymentPurchaseKey("");
         setPaymentAmount("");
         setPaymentDescription("");
       }
@@ -647,27 +646,27 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
     doc.setTextColor(255, 255, 255);
     doc.setFontSize(22);
     doc.setFont("helvetica", "bold");
-    doc.text("STATEMENT OF ACCOUNT", 15, 20);
+    doc.text("SUPPLIER LEDGER STATEMENT", 15, 20);
 
     doc.setFontSize(10);
     doc.setFont("helvetica", "normal");
     doc.text(`Generated on: ${format(new Date(), "dd MMM yyyy, hh:mm a")}`, 15, 30);
 
-    // Customer Info Box
+    // Supplier Info Box
     doc.setFillColor(248, 250, 252); // Slate-50
     doc.roundedRect(15, 45, pageWidth - 30, 35, 3, 3, 'F');
     
     doc.setTextColor(30, 41, 59);
     doc.setFontSize(12);
     doc.setFont("helvetica", "bold");
-    doc.text(customer.name.toUpperCase(), 20, 55);
+    doc.text(supplier.name.toUpperCase(), 20, 55);
     
     doc.setFontSize(9);
     doc.setFont("helvetica", "normal");
     doc.setTextColor(100, 116, 139);
-    doc.text(`Phone: ${customer.phone_number || "N/A"}`, 20, 63);
-    doc.text(`Email: ${customer.email || "N/A"}`, 20, 68);
-    doc.text(`Address: ${customer.mobile_number || "N/A"}`, 20, 73);
+    doc.text(`Phone: ${supplier.phone_number || "N/A"}`, 20, 63);
+    doc.text(`Email: ${supplier.email || "N/A"}`, 20, 68);
+    doc.text(`Address: ${supplier.mobile_number || supplier.phone_number || "N/A"}`, 20, 73);
 
     // Summary Mini-Cards in PDF
     const cardWidth = (pageWidth - 30) / 3;
@@ -678,7 +677,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
     doc.roundedRect(15, 85, cardWidth - 5, 20, 2, 2, 'F');
     doc.setTextColor(225, 29, 72);
     doc.setFontSize(8);
-    doc.text("TOTAL DEBITS", 18, 92);
+    doc.text("TOTAL PAYABLE", 18, 92);
     doc.setFontSize(11);
     doc.text(`Rs ${summary.totalDebits.toLocaleString()}`, 18, 100);
 
@@ -686,7 +685,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
     doc.roundedRect(15 + cardWidth, 85, cardWidth - 5, 20, 2, 2, 'F');
     doc.setTextColor(21, 128, 61);
     doc.setFontSize(8);
-    doc.text("TOTAL CREDITS", 18 + cardWidth, 92);
+    doc.text("TOTAL PAID", 18 + cardWidth, 92);
     doc.setFontSize(11);
     doc.text(`Rs ${summary.totalCredits.toLocaleString()}`, 18 + cardWidth, 100);
 
@@ -722,7 +721,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
 
     autoTable(doc, {
       startY: 115,
-      head: [["Date & Time", "Description", "Reference", "Added", "Paid", "Balance Due"]],
+      head: [["Date & Time", "Description", "Reference", "Purchases", "Paid", "Balance"]],
       body: tableData,
       theme: 'striped',
       headStyles: { 
@@ -757,7 +756,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
 
   const handleDownloadPDF = () => {
     const doc = buildLedgerDoc();
-    doc.save(`${customer.name}_Statement_${format(new Date(), "yyyyMMdd")}.pdf`);
+    doc.save(`${supplier.name}_Statement_${format(new Date(), "yyyyMMdd")}.pdf`);
   };
 
   const handlePrint = () => {
@@ -786,8 +785,8 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
     }
 
     const targetKey =
-      paymentSaleKey ||
-      selectedEntry?.saleId ||
+      paymentPurchaseKey ||
+      selectedEntry?.purchaseId ||
       selectedEntry?.reference_no ||
       "";
 
@@ -800,15 +799,15 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
       return;
     }
 
-    const { saleId } = resolvePaymentTarget(targetKey);
+    const { purchaseId } = resolvePaymentTarget(targetKey);
 
     setIsSubmittingPayment(true);
     try {
       const operationId = crypto.randomUUID();
-      await apiClient.post(`${API_BASE}/customer-ledger/${customerId}/payment`, {
+      await apiClient.post(`${API_BASE}/supplier-ledger/${supplierId}/payment`, {
         amount: Number(paymentAmount),
         description: paymentDescription,
-        saleId,
+        purchaseId,
       }, {
         headers: { "X-Operation-Id": operationId },
       });
@@ -868,7 +867,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
     setIsSubmittingEdit(true);
     try {
       await apiClient.patch(
-        `${API_BASE}/customer-ledger/${customerId}/entries/${editingEntry.id}`,
+        `${API_BASE}/supplier-ledger/${supplierId}/entries/${editingEntry.id}`,
         {
           amount: Number(editAmount),
           description: editDescription,
@@ -905,7 +904,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
     setIsDeletingEntry(true);
     try {
       await apiClient.delete(
-        `${API_BASE}/customer-ledger/${customerId}/entries/${deleteTarget.id}`,
+        `${API_BASE}/supplier-ledger/${supplierId}/entries/${deleteTarget.id}`,
         {
           data: { reason: deleteReason.trim() || undefined },
           headers: { "X-Skip-Offline-Cache": "true" },
@@ -932,27 +931,39 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
     }
   };
 
-  if (loading) return <PageLoader message="Loading ledger..." />;
+  if (loading) {
+    return embedded ? (
+      <div className="flex items-center justify-center py-16">
+        <Loader2 className="h-8 w-8 animate-spin text-sky-600" />
+      </div>
+    ) : (
+      <PageLoader message="Loading ledger..." />
+    );
+  }
 
-  if (!customer) {
+  if (!supplier) {
     return (
       <div className="flex flex-col items-center justify-center h-64 gap-4">
-        <p className="text-gray-500">Customer not found</p>
-        <Button variant="outline" onClick={onBack}>Go Back</Button>
+        <p className="text-gray-500">Supplier not found</p>
+        {onBack && (
+          <Button variant="outline" onClick={onBack}>Go Back</Button>
+        )}
       </div>
     );
   }
 
   const netBalance = getNetBalancePresentation(summary.balance);
-  const selectedTarget = paymentTargets.find((t) => t.key === paymentSaleKey);
+  const selectedTarget = paymentTargets.find((t) => t.key === paymentPurchaseKey);
   const isLedgerBusy =
     isRefreshing || isSubmittingPayment || isSubmittingEdit || isDeletingEntry;
 
   return (
-    <div className="flex flex-col min-h-0 flex-1 bg-slate-100 h-full">
+    <div className={cn("flex flex-col min-h-0 flex-1 bg-slate-100", embedded ? "" : "h-full")}>
+      {!embedded && (
       <div className="bg-white border-b border-slate-200 px-4 lg:px-6 py-3 shrink-0">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between max-w-[1400px] mx-auto w-full">
           <div className="flex items-center gap-3 min-w-0">
+            {onBack && (
             <Button
               size="sm"
               onClick={onBack}
@@ -961,10 +972,11 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
               <ArrowLeft className="h-4 w-4" />
               <span>Back</span>
             </Button>
+            )}
             <div className="min-w-0">
-              <h1 className="text-base sm:text-lg font-semibold text-slate-900 truncate">{customer.name}</h1>
-              {customer.phone_number && (
-                <p className="text-xs text-slate-500 truncate">{customer.phone_number}</p>
+              <h1 className="text-base sm:text-lg font-semibold text-slate-900 truncate">{supplier.name}</h1>
+              {supplier.phone_number && (
+                <p className="text-xs text-slate-500 truncate">{supplier.phone_number}</p>
               )}
             </div>
           </div>
@@ -991,15 +1003,16 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
               onClick={() => openPaymentModal(null)}
             >
               <Plus className="h-4 w-4 sm:mr-1.5" />
-              <span className="hidden sm:inline">Receive Payment</span>
+              <span className="hidden sm:inline">Make Payment</span>
               <span className="sm:hidden">Pay</span>
             </Button>
           </div>
         </div>
       </div>
+      )}
 
-      <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 lg:p-6">
-        <div className="max-w-[1400px] mx-auto w-full space-y-5 relative">
+      <div className={cn("flex-1 overflow-y-auto overflow-x-hidden", embedded ? "" : "p-4 lg:p-6")}>
+        <div className={cn("mx-auto w-full space-y-5 relative", embedded ? "" : "max-w-[1400px]")}>
         {isLedgerBusy && (
           <div className="absolute inset-0 z-20 flex items-start justify-center rounded-xl bg-slate-100/75 pt-24 backdrop-blur-[1px]">
             <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
@@ -1009,16 +1022,17 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
           </div>
         )}
 
+        {!embedded && (
         <div className={`grid grid-cols-2 lg:grid-cols-4 gap-3 transition-opacity ${isLedgerBusy ? "opacity-50" : ""}`}>
           <div className="bg-white rounded-lg border border-rose-100 border-l-4 border-l-rose-500 p-4">
-            <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">Added to Balance</p>
+            <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">Total Purchases</p>
             <p className="text-xl font-semibold text-rose-700 mt-1 tabular-nums">{money(summary.totalDebits)}</p>
-            <p className="text-[10px] text-slate-400 mt-1">Sales &amp; charges</p>
+            <p className="text-[10px] text-slate-400 mt-1">Credit purchases &amp; charges</p>
           </div>
           <div className="bg-white rounded-lg border border-emerald-100 border-l-4 border-l-emerald-500 p-4">
-            <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">Paid by Customer</p>
+            <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">Paid to Supplier</p>
             <p className="text-xl font-semibold text-emerald-700 mt-1 tabular-nums">{money(summary.totalCredits)}</p>
-            <p className="text-[10px] text-slate-400 mt-1">Payments received</p>
+            <p className="text-[10px] text-slate-400 mt-1">Payments made</p>
           </div>
           <div className={cn("rounded-lg border p-4 border-l-4", netBalance.cardClass, netBalance.variant === "due" ? "border-l-amber-500" : netBalance.variant === "credit" ? "border-l-emerald-500" : "border-l-slate-400")}>
             <p className={cn("text-[11px] font-medium uppercase tracking-wide", netBalance.labelClass)}>{netBalance.label}</p>
@@ -1027,24 +1041,28 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
             </p>
           </div>
           <div className="bg-white rounded-lg border border-slate-200 border-l-4 border-l-slate-400 p-4">
-            <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">Credit Limit</p>
+            <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">Purchase History</p>
             <p className="text-xl font-semibold text-slate-900 mt-1 tabular-nums">
-              {money(Number(customer.credit_limit))}
+              {money(purchaseHistoryTotal)}
             </p>
+            <p className="text-[10px] text-slate-400 mt-1">{productSummary.length} products</p>
           </div>
         </div>
+        )}
 
+        {!embedded && (
         <div className={`flex flex-wrap items-center gap-x-5 gap-y-1 rounded-lg border border-slate-200 bg-slate-50/80 px-4 py-2 text-[11px] text-slate-600 transition-opacity ${isLedgerBusy ? "opacity-50" : ""}`}>
           <span className="font-medium text-slate-700">Legend:</span>
-          <span><span className="inline-block w-2 h-2 rounded-full bg-rose-500 mr-1.5 align-middle" />Added to balance</span>
+          <span><span className="inline-block w-2 h-2 rounded-full bg-rose-500 mr-1.5 align-middle" />Purchases / payable</span>
           <span><span className="inline-block w-2 h-2 rounded-full bg-emerald-500 mr-1.5 align-middle" />Paid / reduced</span>
-          <span><span className="inline-block w-2 h-2 rounded-full bg-amber-500 mr-1.5 align-middle" />Amount due</span>
+          <span><span className="inline-block w-2 h-2 rounded-full bg-amber-500 mr-1.5 align-middle" />Amount payable</span>
         </div>
+        )}
 
         <div className={`bg-white rounded-lg border border-slate-200 transition-opacity ${isLedgerBusy ? "opacity-50" : ""}`}>
           <div className="px-4 py-3 border-b border-slate-200">
             <div className="flex items-center justify-between gap-2">
-              <h2 className="text-sm font-semibold text-slate-900">Statement of Account</h2>
+              <h2 className="text-sm font-semibold text-slate-900">Supplier Transaction History</h2>
               <span className="text-xs text-slate-500">{entries.length} transactions</span>
             </div>
           </div>
@@ -1166,19 +1184,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                           >
                             View
                           </Button>
-                          {getSaleBillRef(entry) && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-8 px-2 text-xs text-sky-700 border-sky-200 hover:bg-sky-50"
-                              onClick={() => openSaleBill(entry)}
-                              disabled={isLedgerBusy}
-                            >
-                              <FileText className="h-3.5 w-3.5 mr-1" />
-                              Bill
-                            </Button>
-                          )}
-                          {entry.isCollectable && (entry.invoiceDue ?? 0) > 0 && (
+                          {entry.isPayable && (entry.invoiceDue ?? 0) > 0 && (
                             <Button
                               variant="outline"
                               size="sm"
@@ -1186,12 +1192,12 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                               onClick={() => openPaymentModal(entry)}
                               disabled={isLedgerBusy}
                             >
-                              Collect
+                              Pay
                             </Button>
                           )}
                           {(entry.isEditable ??
-                            (entry.type !== "CREDIT_SALE" &&
-                              entry.type !== "CASH_SALE" &&
+                            (entry.type !== "CREDIT_PURCHASE" &&
+                              entry.type !== "CASH_PURCHASE" &&
                               entry.type !== "REFUND")) && (
                             <Button
                               variant="ghost"
@@ -1205,8 +1211,8 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                             </Button>
                           )}
                           {(entry.isDeletable ??
-                            (entry.type !== "CREDIT_SALE" &&
-                              entry.type !== "CASH_SALE" &&
+                            (entry.type !== "CREDIT_PURCHASE" &&
+                              entry.type !== "CASH_PURCHASE" &&
                               entry.type !== "REFUND")) && (
                             <Button
                               variant="ghost"
@@ -1256,6 +1262,85 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
             </table>
           </div>
         </div>
+
+        {(!embedded && productSummary.length > 0) && (
+          <div className={`bg-white rounded-lg border border-slate-200 transition-opacity ${isLedgerBusy ? "opacity-50" : ""}`}>
+            <div className="px-4 py-3 border-b border-slate-200">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-sm font-semibold text-slate-900">Products Purchased</h2>
+                <span className="text-xs text-slate-500">{productSummary.length} products</span>
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[720px] text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50">
+                    <th className="text-left px-4 py-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Product</th>
+                    <th className="text-left px-4 py-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">SKU</th>
+                    <th className="text-right px-4 py-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Qty</th>
+                    <th className="text-right px-4 py-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Last Rate</th>
+                    <th className="text-right px-4 py-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Total Amount</th>
+                    <th className="text-right px-4 py-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Purchases</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {productSummary.map((p) => (
+                    <tr key={p.productId} className="border-b border-slate-100 hover:bg-slate-50/80">
+                      <td className="px-4 py-3 font-medium text-slate-800">{p.productName}</td>
+                      <td className="px-4 py-3 text-slate-600">{p.sku || "—"}</td>
+                      <td className="px-4 py-3 text-right tabular-nums">{money(p.totalQuantity)}</td>
+                      <td className="px-4 py-3 text-right tabular-nums">{money(p.lastRate)}</td>
+                      <td className="px-4 py-3 text-right tabular-nums font-semibold">{money(p.totalAmount)}</td>
+                      <td className="px-4 py-3 text-right text-slate-600">{p.purchaseCount}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {(!embedded && purchaseDetails.length > 0) && (
+          <div className={`bg-white rounded-lg border border-slate-200 transition-opacity ${isLedgerBusy ? "opacity-50" : ""}`}>
+            <div className="px-4 py-3 border-b border-slate-200">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-sm font-semibold text-slate-900">Purchase Details</h2>
+                <span className="text-xs text-slate-500">{purchaseDetails.length} line items</span>
+              </div>
+            </div>
+            <div className="overflow-x-auto max-h-[420px] overflow-y-auto">
+              <table className="w-full min-w-[900px] text-sm">
+                <thead className="sticky top-0 z-10">
+                  <tr className="border-b border-slate-200 bg-slate-50">
+                    <th className="text-left px-4 py-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Date</th>
+                    <th className="text-left px-4 py-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Product</th>
+                    <th className="text-left px-4 py-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Reference</th>
+                    <th className="text-right px-4 py-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Qty</th>
+                    <th className="text-right px-4 py-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Rate</th>
+                    <th className="text-right px-4 py-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {purchaseDetails.map((p) => (
+                    <tr key={p.id} className="border-b border-slate-100 hover:bg-slate-50/80">
+                      <td className="px-4 py-3 whitespace-nowrap">{formatDate(p.purchaseDate)}</td>
+                      <td className="px-4 py-3">
+                        <p className="font-medium text-slate-800">{p.productName}</p>
+                        {p.sku && <p className="text-xs text-slate-500">{p.sku}</p>}
+                      </td>
+                      <td className="px-4 py-3 font-mono text-xs text-slate-600">
+                        {p.invoiceRef || p.purchaseNumber || "—"}
+                      </td>
+                      <td className="px-4 py-3 text-right tabular-nums">{money(p.quantity)}</td>
+                      <td className="px-4 py-3 text-right tabular-nums">{money(p.costPrice)}</td>
+                      <td className="px-4 py-3 text-right tabular-nums font-semibold">{money(p.lineTotal)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
         </div>
       </div>
 
@@ -1316,7 +1401,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                   />
                 </div>
 
-                {(viewEntry.type === "CREDIT_SALE" || viewEntry.type === "CASH_SALE") &&
+                {(viewEntry.type === "CREDIT_PURCHASE" || viewEntry.type === "CASH_PURCHASE") &&
                   (viewEntry.invoiceTotal ?? 0) > 0 && (
                   <div className="border border-slate-200 p-3 text-xs space-y-1 text-slate-700">
                     <p className="text-[10px] uppercase tracking-wide text-slate-500 font-medium">Invoice</p>
@@ -1369,19 +1454,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
               </div>
 
               <DialogFooter className="flex-col sm:flex-row gap-2">
-                {getSaleBillRef(viewEntry) && (
-                  <Button
-                    variant="outline"
-                    className="sm:mr-auto border-sky-200 text-sky-700 hover:bg-sky-50"
-                    onClick={() => {
-                      openSaleBill(viewEntry);
-                    }}
-                  >
-                    <FileText className="h-4 w-4 mr-1.5" />
-                    View Bill
-                  </Button>
-                )}
-                {viewEntry.isCollectable && (viewEntry.invoiceDue ?? 0) > 0 && (
+                {viewEntry.isPayable && (viewEntry.invoiceDue ?? 0) > 0 && (
                   <Button
                     variant="outline"
                     className="sm:mr-auto border-slate-300"
@@ -1390,12 +1463,12 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                       openPaymentModal(viewEntry);
                     }}
                   >
-                    Collect {money(viewEntry.invoiceDue ?? 0)}
+                    Pay {money(viewEntry.invoiceDue ?? 0)}
                   </Button>
                 )}
                 {(viewEntry.isEditable ??
-                  (viewEntry.type !== "CREDIT_SALE" &&
-                    viewEntry.type !== "CASH_SALE" &&
+                  (viewEntry.type !== "CREDIT_PURCHASE" &&
+                    viewEntry.type !== "CASH_PURCHASE" &&
                     viewEntry.type !== "REFUND")) && (
                   <Button
                     variant="outline"
@@ -1432,7 +1505,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <DollarSign className="h-5 w-5 text-emerald-600" />
-              Receive Payment
+              Make Payment
             </DialogTitle>
             <DialogDescription>
               {netBalance.variant === "due"
@@ -1451,7 +1524,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                 <p className="text-sm text-muted-foreground">No open balance to collect.</p>
               ) : (
                 <Select
-                  value={paymentSaleKey || undefined}
+                  value={paymentPurchaseKey || undefined}
                   onValueChange={applyPaymentTarget}
                 >
                   <SelectTrigger id="payment-target" className="h-10">
@@ -1515,7 +1588,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
               className="bg-emerald-600 hover:bg-emerald-700 text-white"
               disabled={
                 isSubmittingPayment ||
-                (paymentTargets.length > 0 && !paymentSaleKey) ||
+                (paymentTargets.length > 0 && !paymentPurchaseKey) ||
                 !paymentAmount ||
                 Number(paymentAmount) <= 0
               }
@@ -1598,7 +1671,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="debit">Amount added (customer owes more)</SelectItem>
+                    <SelectItem value="debit">Amount added (payable increases)</SelectItem>
                     <SelectItem value="credit">Amount paid / reduced</SelectItem>
                   </SelectContent>
                 </Select>
@@ -1666,8 +1739,8 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
             <AlertDialogDescription asChild>
               <div className="space-y-3 text-sm text-muted-foreground">
                 <p>
-                  This will remove the entry and add a reversal adjustment for audit. Customer
-                  balance and invoice allocations will be recalculated.
+                  This will remove the entry and add a reversal adjustment for audit. Supplier
+                  balance and purchase allocations will be recalculated.
                 </p>
                 {deleteTarget && (
                   <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-slate-700">
@@ -1717,12 +1790,6 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-
-      <SaleBillDialog
-        open={billDialogOpen}
-        onOpenChange={setBillDialogOpen}
-        saleRef={billSaleRef}
-      />
     </div>
   );
 }

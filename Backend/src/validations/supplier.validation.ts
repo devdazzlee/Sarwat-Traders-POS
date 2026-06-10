@@ -8,7 +8,9 @@ const supplierBaseSchema = {
     country: z.string().optional(),
     city: z.string().optional(),
     status: z.string().optional(),
-    email: z.string().email('Invalid email format').optional(),
+    email: z
+        .union([z.string().email('Invalid email format'), z.literal('')])
+        .optional(),
     ntn: z.string().optional(),
     strn: z.string().optional(),
     gov_id: z.string().optional(),

@@ -4,27 +4,30 @@ import { AppError } from '../utils/apiError';
 import { CreateSupplierInput, UpdateSupplierInput } from '../validations/supplier.validation';
 
 export class SupplierService {
+    /** Next numeric supplier code (1000, 1001, …) based on highest existing code. */
+    private async generateNextSupplierCode(): Promise<string> {
+        const suppliers = await prisma.supplier.findMany({ select: { code: true } });
+        let maxNum = 999;
+        for (const { code } of suppliers) {
+            const n = Number.parseInt(code, 10);
+            if (!Number.isNaN(n) && n > maxNum) maxNum = n;
+        }
+        return String(maxNum + 1);
+    }
+
     async createSupplier(data: CreateSupplierInput) {
-        const [existingSupplier, lastSupplier] = await Promise.all([
-            prisma.supplier.findFirst({
-                where: {
-                    name: data.name,
-                },
-            }),
-            prisma.supplier.findFirst({
-                orderBy: { created_at: 'desc' },
-                select: { code: true },
-            }),
-        ]);
+        const existingSupplier = await prisma.supplier.findFirst({
+            where: { name: data.name },
+        });
 
         if (existingSupplier) throw new AppError(400, 'Supplier already exists');
 
-        const newCode = lastSupplier ? (parseInt(lastSupplier.code) + 1).toString() : '1000';
+        const newCode = await this.generateNextSupplierCode();
 
         const supplier = await prisma.supplier.create({
             data: {
                 ...data,
-                code: newCode
+                code: newCode,
             },
         });
 

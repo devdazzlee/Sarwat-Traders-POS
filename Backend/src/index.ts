@@ -41,6 +41,7 @@ import shiftAssignmentRoutes  from './routes/shiftAssignment.routes';
 import barcodeRoutes from './routes/barcode.routes';
 import guestOrderRoutes from './routes/guestOrder.routes';
 import customerLedgerRoutes from './routes/customer-ledger.routes';
+import supplierLedgerRoutes from './routes/supplier-ledger.routes';
 import cron from 'node-cron';
 
 const vAPI = process.env.vAPI || '/api/v1';
@@ -135,6 +136,7 @@ app.use(`${vAPI}/app/customer/order`, customerOrderRoutes);
 app.use(`${vAPI}/customer/device-identity`, deviceIdentityRoutes);
 app.use(`${vAPI}/guest/order`, guestOrderRoutes); // Guest checkout route
 app.use(`${vAPI}/customer-ledger`, customerLedgerRoutes);
+app.use(`${vAPI}/supplier-ledger`, supplierLedgerRoutes);
 
 // Health check
 app.get('/health', (req, res) => {

@@ -2,6 +2,7 @@ import { prisma } from '../prisma/client';
 import { AppError } from '../utils/apiError';
 import { addDecimal, asNumber } from '../utils/helpers';
 import { Prisma } from '@prisma/client';
+import { supplierLedgerBalanceEngine } from './supplier-ledger-balance.engine';
 
 export class PurchaseService {
   async createBulkPurchase(data: {
@@ -11,6 +12,7 @@ export class PurchaseService {
     invoiceRef?: string;
     notes?: string;
     deliveryStatus: "PARTIAL" | "COMPLETE";
+    paymentMethod?: "CREDIT" | "CASH" | "CARD";
     items: Array<{
       productId: string;
       quantity: number;
@@ -36,10 +38,17 @@ export class PurchaseService {
     }
 
     return prisma.$transaction(async (tx) => {
+      const purchaseNumber = `PUR-${Date.now()}`;
+      const paymentMethod = (data.paymentMethod ?? 'CREDIT').toUpperCase();
+      const paymentStatus =
+        paymentMethod === 'CREDIT' ? ('PENDING' as const) : ('PAID' as const);
+      let batchTotal = 0;
       const results = [];
       for (const item of data.items) {
+        batchTotal += item.quantity * item.costPrice;
         const purchase = await (tx.purchase.create as any)({
           data: {
+            purchase_number: purchaseNumber,
             product_id: item.productId,
             supplier_id: data.supplierId || null,
             warehouse_branch_id: finalBranchId,
@@ -48,6 +57,9 @@ export class PurchaseService {
             sale_price: item.salePrice,
             purchase_date: data.purchaseDate,
             invoice_ref: data.invoiceRef,
+            payment_method: paymentMethod,
+            payment_made: 0,
+            payment_status: paymentStatus,
             batch_no: item.batchNo,
             expiry_date: item.expiryDate ? new Date(item.expiryDate) : null,
             notes: data.notes,
@@ -114,6 +126,32 @@ export class PurchaseService {
 
         results.push(purchase);
       }
+
+      if (data.supplierId && batchTotal > 0.009) {
+        const desc =
+          paymentMethod === 'CREDIT'
+            ? `Credit purchase${data.invoiceRef ? ` - ${data.invoiceRef}` : ''} - ${purchaseNumber}`
+            : `Cash purchase${data.invoiceRef ? ` - ${data.invoiceRef}` : ''} - ${purchaseNumber}`;
+
+        if (paymentMethod === 'CREDIT') {
+          await supplierLedgerBalanceEngine.postCreditPurchase(tx, {
+            supplierId: data.supplierId,
+            amount: batchTotal,
+            purchaseId: purchaseNumber,
+            createdBy: data.createdBy,
+            description: desc,
+          });
+        } else {
+          await supplierLedgerBalanceEngine.postCashPurchase(tx, {
+            supplierId: data.supplierId,
+            amount: batchTotal,
+            purchaseId: purchaseNumber,
+            createdBy: data.createdBy,
+            description: desc,
+          });
+        }
+      }
+
       return results;
     });
   }

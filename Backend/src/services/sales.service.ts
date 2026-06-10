@@ -333,15 +333,28 @@ class SaleService {
   }
 
   async getSaleById(saleId: string) {
-    const sale = await prisma.sale.findUnique({
-      where: { id: saleId },
-      include: {
-        sale_items: {
-          include: { product: true },
+    const include = {
+      sale_items: {
+        include: {
+          product: {
+            include: { unit: true },
+          },
         },
-        customer: true,
       },
-    });
+      customer: true,
+      branch: true,
+    } as const;
+
+    let sale =
+      (await prisma.sale.findUnique({
+        where: { id: saleId },
+        include,
+      })) ??
+      (await prisma.sale.findFirst({
+        where: { sale_number: saleId },
+        include,
+      }));
+
     if (!sale) throw new AppError(404, 'Sale not found');
 
     let original_sale: { id: string; sale_number: string } | null = null;
@@ -357,7 +370,7 @@ class SaleService {
       return { ...sale, original_sale };
     }
 
-    const returnedMap = await this.getReturnedQtyByOriginalSaleLineIds(saleId);
+    const returnedMap = await this.getReturnedQtyByOriginalSaleLineIds(sale.id);
     const originalLines = sale.sale_items.filter(
       (item) => !item.item_type || item.item_type === SaleItemType.ORIGINAL,
     );
