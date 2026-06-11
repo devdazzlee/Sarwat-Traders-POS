@@ -1075,7 +1075,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1120px] text-sm border-collapse table-fixed">
+            <table className="w-full min-w-[1180px] text-sm border-collapse table-fixed">
               <colgroup>
                 <col className="w-[108px]" />
                 <col className="w-[130px]" />
@@ -1084,7 +1084,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                 <col className="w-[104px]" />
                 <col className="w-[104px]" />
                 <col className="w-[104px]" />
-                <col className="w-[148px]" />
+                <col className="w-[210px]" />
               </colgroup>
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50">
@@ -1095,7 +1095,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                   <th className="text-right px-3 py-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Before</th>
                   <th className="text-right px-3 py-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Change</th>
                   <th className="text-right px-3 py-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">After</th>
-                  <th className="text-right px-3 py-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Actions</th>
+                  <th className="text-left px-3 py-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -1155,29 +1155,31 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                           {formatRunningBalance(entry.balance).text}
                         </span>
                       </td>
-                      <td className="px-3 py-3 text-right align-middle whitespace-nowrap">
-                        <div className="flex items-center justify-end gap-0.5 flex-nowrap">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-8 px-2 text-xs text-slate-600 hover:text-slate-900"
-                            onClick={() => setViewEntry(entry)}
-                            disabled={isLedgerBusy}
-                          >
-                            View
-                          </Button>
-                          {getSaleBillRef(entry) && (
+                      <td className="px-3 py-3 align-middle">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <div className="inline-flex items-stretch rounded-md border border-slate-200 bg-white shadow-sm overflow-hidden shrink-0">
                             <Button
-                              variant="outline"
+                              variant="ghost"
                               size="sm"
-                              className="h-8 px-2 text-xs text-sky-700 border-sky-200 hover:bg-sky-50"
-                              onClick={() => openSaleBill(entry)}
+                              className="h-8 rounded-none px-2.5 text-xs text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                              onClick={() => setViewEntry(entry)}
                               disabled={isLedgerBusy}
                             >
-                              <FileText className="h-3.5 w-3.5 mr-1" />
-                              Bill
+                              View
                             </Button>
-                          )}
+                            {getSaleBillRef(entry) && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 rounded-none px-2.5 text-xs text-sky-700 border-l border-slate-200 hover:bg-sky-50"
+                                onClick={() => openSaleBill(entry)}
+                                disabled={isLedgerBusy}
+                              >
+                                <FileText className="h-3.5 w-3.5 mr-1" />
+                                Bill
+                              </Button>
+                            )}
+                          </div>
                           {entry.isCollectable && (entry.invoiceDue ?? 0) > 0 && (
                             <Button
                               variant="outline"
