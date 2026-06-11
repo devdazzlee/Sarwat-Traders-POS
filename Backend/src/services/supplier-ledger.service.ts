@@ -26,6 +26,125 @@ class SupplierLedgerService {
     return asNumber(qty) * asNumber(cost);
   }
 
+  private orphanStockMovementFilter(supplierId: string): Prisma.StockMovementWhereInput {
+    return {
+      movement_type: 'PURCHASE',
+      NOT: { reference_type: 'purchase' },
+      product: { supplier_id: supplierId },
+    };
+  }
+
+  private buildInitPurchaseNumber(movementId: string): string {
+    return `INIT-${movementId.replace(/-/g, '').slice(0, 12).toUpperCase()}`;
+  }
+
+  private async processOrphanStockMovement(
+    tx: SupplierTxClient,
+    supplierId: string,
+    movement: {
+      id: string;
+      branch_id: string;
+      quantity_change: Prisma.Decimal;
+      unit_cost: Prisma.Decimal | null;
+      created_at: Date;
+      notes: string | null;
+      created_by: string | null;
+      product: {
+        id: string;
+        purchase_rate: Prisma.Decimal;
+        sales_rate_inc_dis_and_tax: Prisma.Decimal;
+      };
+    },
+    fallbackUserId: string,
+  ) {
+    const qty = asNumber(movement.quantity_change);
+    if (qty <= 0.009) return;
+
+    const product = movement.product;
+    const cost = asNumber(movement.unit_cost ?? product.purchase_rate);
+    const salePrice = asNumber(product.sales_rate_inc_dis_and_tax) || cost;
+    const purchaseNumber = this.buildInitPurchaseNumber(movement.id);
+
+    const existing = await tx.purchase.findFirst({
+      where: { purchase_number: purchaseNumber, supplier_id: supplierId },
+      select: { id: true },
+    });
+
+    const purchaseId =
+      existing?.id ??
+      (
+        await tx.purchase.create({
+          data: {
+            purchase_number: purchaseNumber,
+            product_id: product.id,
+            supplier_id: supplierId,
+            warehouse_branch_id: movement.branch_id,
+            quantity: qty,
+            cost_price: cost,
+            sale_price: salePrice,
+            purchase_date: movement.created_at,
+            invoice_ref: movement.notes?.trim() || 'Opening Stock',
+            payment_method: 'CASH',
+            payment_made: qty * cost,
+            payment_status: 'PAID',
+            notes: movement.notes,
+            delivery_status: 'COMPLETE',
+            created_by: movement.created_by ?? fallbackUserId,
+          },
+          select: { id: true },
+        })
+      ).id;
+
+    await tx.stockMovement.update({
+      where: { id: movement.id },
+      data: { reference_id: purchaseId, reference_type: 'purchase' },
+    });
+  }
+
+  /** Link opening-stock movements to purchase rows — batched, short transactions. */
+  async backfillPurchasesFromStockMovements(supplierId: string, createdBy?: string) {
+    const orphanCount = await prisma.stockMovement.count({
+      where: this.orphanStockMovementFilter(supplierId),
+    });
+    if (orphanCount === 0) return;
+
+    const orphans = await prisma.stockMovement.findMany({
+      where: this.orphanStockMovementFilter(supplierId),
+      take: 15,
+      orderBy: { created_at: 'asc' },
+      select: {
+        id: true,
+        branch_id: true,
+        quantity_change: true,
+        unit_cost: true,
+        created_at: true,
+        notes: true,
+        created_by: true,
+        product: {
+          select: {
+            id: true,
+            purchase_rate: true,
+            sales_rate_inc_dis_and_tax: true,
+          },
+        },
+      },
+    });
+
+    let fallbackUserId = createdBy;
+    if (!fallbackUserId) {
+      const user = await prisma.user.findFirst({ select: { id: true } });
+      fallbackUserId = user?.id;
+    }
+    if (!fallbackUserId) return;
+
+    for (const movement of orphans) {
+      await prisma.$transaction(
+        (tx) => this.processOrphanStockMovement(tx, supplierId, movement, fallbackUserId!),
+        { timeout: 15_000, maxWait: 10_000 },
+      );
+    }
+  }
+
   private async getPurchaseBatchSummaries(
     tx: SupplierTxClient,
     supplierId: string,
@@ -52,7 +171,7 @@ class SupplierLedgerService {
       const existing = batches.get(key);
       if (existing) {
         existing.totalAmount += lineTotal;
-        existing.paymentMade = Math.max(existing.paymentMade, asNumber(row.payment_made));
+        existing.paymentMade += asNumber(row.payment_made);
       } else {
         batches.set(key, {
           purchaseNumber: key,
@@ -65,7 +184,63 @@ class SupplierLedgerService {
         });
       }
     }
+
+    for (const batch of batches.values()) {
+      const due = batch.totalAmount - batch.paymentMade;
+      batch.paymentStatus =
+        due <= 0.009 ? 'PAID' : batch.paymentMade > 0.009 ? 'PARTIAL' : 'PENDING';
+    }
+
     return batches;
+  }
+
+  private deriveLinePaymentStatus(
+    lineTotal: number,
+    paymentMade: number,
+  ): 'PAID' | 'PARTIAL' | 'PENDING' {
+    const due = lineTotal - paymentMade;
+    if (due <= 0.009) return 'PAID';
+    if (paymentMade > 0.009) return 'PARTIAL';
+    return 'PENDING';
+  }
+
+  /** Apply payment across individual purchase lines in a batch (FIFO within batch). */
+  private async allocatePaymentToBatch(
+    tx: SupplierTxClient,
+    supplierId: string,
+    purchaseNumber: string,
+    amount: Prisma.Decimal | number,
+  ): Promise<Prisma.Decimal> {
+    let remaining = new Prisma.Decimal(amount);
+    if (remaining.lte(0)) return remaining;
+
+    const lines = await tx.purchase.findMany({
+      where: { supplier_id: supplierId, purchase_number: purchaseNumber },
+      orderBy: [{ purchase_date: 'asc' }, { created_at: 'asc' }],
+    });
+
+    for (const line of lines) {
+      if (remaining.lte(0)) break;
+
+      const lineTotal = this.purchaseLineTotal(line.quantity, line.cost_price);
+      const lineDue = new Prisma.Decimal(lineTotal).minus(line.payment_made);
+      if (lineDue.lte(0.009)) continue;
+
+      const applied = Prisma.Decimal.min(lineDue, remaining);
+      const paidAfter = new Prisma.Decimal(line.payment_made).plus(applied);
+
+      await tx.purchase.update({
+        where: { id: line.id },
+        data: {
+          payment_made: paidAfter,
+          payment_status: this.deriveLinePaymentStatus(lineTotal, asNumber(paidAfter)),
+        },
+      });
+
+      remaining = remaining.minus(applied);
+    }
+
+    return remaining;
   }
 
   private async applyPaymentFifo(
@@ -96,19 +271,8 @@ class SupplierLedgerService {
 
       const applied = Prisma.Decimal.min(due, remaining);
       const paymentMadeAfter = new Prisma.Decimal(batch.paymentMade).plus(applied);
-      const dueAfter = new Prisma.Decimal(batch.totalAmount).minus(paymentMadeAfter);
 
-      await tx.purchase.updateMany({
-        where: { supplier_id: supplierId, purchase_number: batch.purchaseNumber },
-        data: {
-          payment_made: paymentMadeAfter,
-          payment_status: dueAfter.lte(0)
-            ? 'PAID'
-            : paymentMadeAfter.gt(0)
-              ? 'PARTIAL'
-              : 'PENDING',
-        },
-      });
+      await this.allocatePaymentToBatch(tx, supplierId, batch.purchaseNumber, applied);
 
       batch.paymentMade = asNumber(paymentMadeAfter);
       remaining = remaining.minus(applied);
@@ -155,6 +319,7 @@ class SupplierLedgerService {
         where: { supplier_id: supplierId, purchase_number: batch.purchaseNumber },
         data: { payment_made: 0, payment_status: 'PENDING' },
       });
+      batch.paymentMade = 0;
     }
 
     const payments = await tx.supplierLedger.findMany({
@@ -173,19 +338,8 @@ class SupplierLedgerService {
           if (dueBefore > 0.009) {
             const applied = Prisma.Decimal.min(new Prisma.Decimal(dueBefore), remaining);
             const paymentMadeAfter = new Prisma.Decimal(batch.paymentMade).plus(applied);
-            const dueAfter = new Prisma.Decimal(batch.totalAmount).minus(paymentMadeAfter);
 
-            await tx.purchase.updateMany({
-              where: { supplier_id: supplierId, purchase_number: batch.purchaseNumber },
-              data: {
-                payment_made: paymentMadeAfter,
-                payment_status: dueAfter.lte(0)
-                  ? 'PAID'
-                  : paymentMadeAfter.gt(0)
-                    ? 'PARTIAL'
-                    : 'PENDING',
-              },
-            });
+            await this.allocatePaymentToBatch(tx, supplierId, batch.purchaseNumber, applied);
 
             batch.paymentMade = asNumber(paymentMadeAfter);
             remaining = remaining.minus(applied);
@@ -201,83 +355,90 @@ class SupplierLedgerService {
 
   /** Backfill ledger entries from existing purchases without ledger rows. */
   async syncPurchasesToLedger(supplierId: string, createdBy?: string) {
-    return prisma.$transaction(async (tx) => {
-      const supplier = await tx.supplier.findUnique({
-        where: { id: supplierId },
-        select: { id: true },
-      });
-      if (!supplier) throw new AppError(404, 'Supplier not found');
+    await this.backfillPurchasesFromStockMovements(supplierId, createdBy);
 
-      const purchases = await tx.purchase.findMany({
-        where: { supplier_id: supplierId },
-        orderBy: [{ purchase_date: 'asc' }, { created_at: 'asc' }],
-      });
+    return prisma.$transaction(
+      async (tx) => {
+        const supplier = await tx.supplier.findUnique({
+          where: { id: supplierId },
+          select: { id: true },
+        });
+        if (!supplier) throw new AppError(404, 'Supplier not found');
 
-      const groups = new Map<string, typeof purchases>();
-      for (const p of purchases) {
-        const key =
-          p.purchase_number ??
-          (p.invoice_ref
-            ? `${p.invoice_ref}::${p.purchase_date.toISOString().slice(0, 10)}`
-            : p.id);
-        if (!groups.has(key)) groups.set(key, []);
-        groups.get(key)!.push(p);
-      }
+        const purchases = await tx.purchase.findMany({
+          where: { supplier_id: supplierId },
+          orderBy: [{ purchase_date: 'asc' }, { created_at: 'asc' }],
+        });
 
-      for (const [groupKey, lines] of groups) {
-        const purchaseNumber = lines[0].purchase_number ?? groupKey;
-        if (!lines[0].purchase_number) {
-          await tx.purchase.updateMany({
-            where: { id: { in: lines.map((l) => l.id) } },
-            data: { purchase_number: purchaseNumber },
-          });
+        const groups = new Map<string, typeof purchases>();
+        for (const p of purchases) {
+          const key =
+            p.purchase_number ??
+            (p.invoice_ref
+              ? `${p.invoice_ref}::${p.purchase_date.toISOString().slice(0, 10)}`
+              : p.id);
+          if (!groups.has(key)) groups.set(key, []);
+          groups.get(key)!.push(p);
         }
 
-        const existing = await tx.supplierLedger.findFirst({
+        const existingLedger = await tx.supplierLedger.findMany({
           where: {
             supplier_id: supplierId,
-            purchase_id: purchaseNumber,
             entry_type: {
               in: [SupplierLedgerEntryType.CREDIT_PURCHASE, SupplierLedgerEntryType.CASH_PURCHASE],
             },
           },
+          select: { purchase_id: true },
         });
-        if (existing) continue;
-
-        const total = lines.reduce(
-          (sum, l) => sum + this.purchaseLineTotal(l.quantity, l.cost_price),
-          0,
+        const syncedPurchaseIds = new Set(
+          existingLedger.map((e) => e.purchase_id).filter(Boolean) as string[],
         );
-        if (total <= 0.009) continue;
 
-        const method = lines[0].payment_method;
-        const invoiceRef = lines[0].invoice_ref;
-        const desc =
-          method === 'CREDIT'
-            ? `Credit purchase${invoiceRef ? ` - ${invoiceRef}` : ''} - ${purchaseNumber}`
-            : `Cash purchase${invoiceRef ? ` - ${invoiceRef}` : ''} - ${purchaseNumber}`;
+        for (const [groupKey, lines] of groups) {
+          const purchaseNumber = lines[0].purchase_number ?? groupKey;
+          if (syncedPurchaseIds.has(purchaseNumber)) continue;
 
-        if (method === 'CREDIT') {
-          await supplierLedgerBalanceEngine.postCreditPurchase(tx, {
-            supplierId,
-            amount: total,
-            purchaseId: purchaseNumber,
-            createdBy: createdBy ?? lines[0].created_by,
-            description: desc,
+          if (!lines[0].purchase_number) {
+            await tx.purchase.updateMany({
+              where: { id: { in: lines.map((l) => l.id) } },
+              data: { purchase_number: purchaseNumber },
+            });
+          }
+
+          const total = lines.reduce(
+            (sum, l) => sum + this.purchaseLineTotal(l.quantity, l.cost_price),
+            0,
+          );
+          if (total <= 0.009) continue;
+
+          const method = lines[0].payment_method;
+          const invoiceRef = lines[0].invoice_ref;
+          const desc =
+            method === 'CREDIT'
+              ? `Credit purchase${invoiceRef ? ` - ${invoiceRef}` : ''} - ${purchaseNumber}`
+              : `Cash purchase${invoiceRef ? ` - ${invoiceRef}` : ''} - ${purchaseNumber}`;
+
+          await tx.supplierLedger.create({
+            data: {
+              supplier_id: supplierId,
+              entry_type:
+                method === 'CREDIT'
+                  ? SupplierLedgerEntryType.CREDIT_PURCHASE
+                  : SupplierLedgerEntryType.CASH_PURCHASE,
+              amount: new Prisma.Decimal(total),
+              description: desc,
+              purchase_id: purchaseNumber,
+              balance_after: 0,
+              created_by: createdBy ?? lines[0].created_by,
+            },
           });
-        } else {
-          await supplierLedgerBalanceEngine.postCashPurchase(tx, {
-            supplierId,
-            amount: total,
-            purchaseId: purchaseNumber,
-            createdBy: createdBy ?? lines[0].created_by,
-            description: desc,
-          });
+          syncedPurchaseIds.add(purchaseNumber);
         }
-      }
 
-      await this.recalculateRunningBalances(tx, supplierId);
-    });
+        await this.recalculateRunningBalances(tx, supplierId);
+      },
+      { timeout: 120_000, maxWait: 30_000 },
+    );
   }
 
   async recordPurchaseBatch({
@@ -373,20 +534,8 @@ class SupplierLedgerService {
           new Prisma.Decimal(dueBefore),
           remaining,
         );
-        const paymentMadeAfter = new Prisma.Decimal(batch.paymentMade).plus(appliedToPurchase);
-        const dueAfter = new Prisma.Decimal(batch.totalAmount).minus(paymentMadeAfter);
 
-        await tx.purchase.updateMany({
-          where: { supplier_id: supplierId, purchase_number: batch.purchaseNumber },
-          data: {
-            payment_made: paymentMadeAfter,
-            payment_status: dueAfter.lte(0)
-              ? 'PAID'
-              : paymentMadeAfter.gt(0)
-                ? 'PARTIAL'
-                : 'PENDING',
-          },
-        });
+        await this.allocatePaymentToBatch(tx, supplierId, batch.purchaseNumber, appliedToPurchase);
 
         resolvedPurchaseNumber = batch.purchaseNumber;
         remaining = remaining.minus(appliedToPurchase);
@@ -597,10 +746,13 @@ class SupplierLedgerService {
 
     await this.syncPurchasesToLedger(supplierId);
 
-    await prisma.$transaction(async (tx) => {
-      await this.reconcilePurchasePayments(tx, supplierId);
-      await supplierLedgerBalanceEngine.recalculateRunningBalances(tx, supplierId);
-    });
+    await prisma.$transaction(
+      async (tx) => {
+        await this.reapplyAllPaymentAllocations(tx, supplierId);
+        await supplierLedgerBalanceEngine.recalculateRunningBalances(tx, supplierId);
+      },
+      { timeout: 60_000, maxWait: 20_000 },
+    );
 
     const refreshedSupplier = await prisma.supplier.findUnique({
       where: { id: supplierId },
@@ -697,12 +849,20 @@ class SupplierLedgerService {
     }
 
     let totalPurchases = 0;
-    let totalPayments = 0;
+    let totalPaymentsMade = 0;
+    let totalCashPaid = 0;
     for (const e of allEntries) {
       const amt = Number(e.amount);
-      if (e.entry_type === 'CREDIT_PURCHASE') totalPurchases += amt;
-      else if (e.entry_type === 'PAYMENT_MADE') totalPayments += amt;
+      if (e.entry_type === 'CREDIT_PURCHASE' || e.entry_type === 'CASH_PURCHASE') {
+        totalPurchases += amt;
+      }
+      if (e.entry_type === 'CASH_PURCHASE') {
+        totalCashPaid += amt;
+      } else if (e.entry_type === 'PAYMENT_MADE') {
+        totalPaymentsMade += amt;
+      }
     }
+    const totalPaid = totalPaymentsMade + totalCashPaid;
 
     const batchSummaries = new Map<string, PurchaseBatchSummary>();
     for (const line of purchaseLines) {
@@ -803,6 +963,37 @@ class SupplierLedgerService {
       }
     >();
 
+    const linkedProducts = await prisma.product.findMany({
+      where: { supplier_id: supplierId },
+      select: {
+        id: true,
+        name: true,
+        sku: true,
+        purchase_rate: true,
+        created_at: true,
+        ProductImage: {
+          where: { is_active: true },
+          take: 1,
+          select: { image: true },
+        },
+      },
+    });
+
+    for (const prod of linkedProducts) {
+      if (productMap.has(prod.id)) continue;
+      productMap.set(prod.id, {
+        productId: prod.id,
+        productName: prod.name,
+        sku: prod.sku,
+        imageUrl: prod.ProductImage?.[0]?.image ?? null,
+        totalQuantity: 0,
+        totalAmount: 0,
+        purchaseCount: 0,
+        lastPurchaseDate: prod.created_at.toISOString(),
+        lastRate: asNumber(prod.purchase_rate),
+      });
+    }
+
     const purchaseDetails = purchaseLines.map((line) => {
       const qty = asNumber(line.quantity);
       const rate = asNumber(line.cost_price);
@@ -884,7 +1075,13 @@ class SupplierLedgerService {
     for (const line of purchaseLines) {
       const key = monthKey(line.purchase_date);
       const row = trendsMap.get(key) ?? { month: key, purchases: 0, payments: 0 };
-      row.purchases += this.purchaseLineTotal(line.quantity, line.cost_price);
+      const lineTotal = this.purchaseLineTotal(line.quantity, line.cost_price);
+      row.purchases += lineTotal;
+      if (line.payment_method === 'CASH' || line.payment_method === 'CARD') {
+        row.payments += lineTotal;
+      } else {
+        row.payments += asNumber(line.payment_made);
+      }
       trendsMap.set(key, row);
     }
     for (const p of paymentRecords) {
@@ -900,7 +1097,7 @@ class SupplierLedgerService {
     const paymentStatus = this.derivePaymentStatus(
       currentBalance,
       totalPurchases,
-      totalPayments,
+      totalPaid,
     );
 
     return {
@@ -915,7 +1112,9 @@ class SupplierLedgerService {
       ),
       summary: {
         totalPurchases,
-        totalPayments,
+        totalPayments: totalPaymentsMade,
+        totalPaid,
+        totalCashPaid,
         totalDebits,
         totalCredits,
         currentBalance,
@@ -981,7 +1180,7 @@ class SupplierLedgerService {
 
     const supplierIds = suppliers.map((s) => s.id);
 
-    const [purchases, paymentGroups] = await Promise.all([
+    const [purchases, stockIns, paymentGroups, cashPurchaseGroups] = await Promise.all([
       prisma.purchase.findMany({
         where: { supplier_id: { in: supplierIds } },
         select: {
@@ -989,6 +1188,19 @@ class SupplierLedgerService {
           quantity: true,
           cost_price: true,
           purchase_date: true,
+        },
+      }),
+      prisma.stockMovement.findMany({
+        where: {
+          movement_type: 'PURCHASE',
+          product: { supplier_id: { in: supplierIds } },
+          NOT: { reference_type: 'purchase' },
+        },
+        select: {
+          quantity_change: true,
+          unit_cost: true,
+          created_at: true,
+          product: { select: { supplier_id: true, purchase_rate: true } },
         },
       }),
       prisma.supplierLedger.groupBy({
@@ -999,10 +1211,21 @@ class SupplierLedgerService {
         },
         _sum: { amount: true },
       }),
+      prisma.supplierLedger.groupBy({
+        by: ['supplier_id'],
+        where: {
+          supplier_id: { in: supplierIds },
+          entry_type: SupplierLedgerEntryType.CASH_PURCHASE,
+        },
+        _sum: { amount: true },
+      }),
     ]);
 
     const paymentBySupplier = new Map(
       paymentGroups.map((g) => [g.supplier_id, Number(g._sum.amount ?? 0)]),
+    );
+    const cashPaidBySupplier = new Map(
+      cashPurchaseGroups.map((g) => [g.supplier_id, Number(g._sum.amount ?? 0)]),
     );
 
     const statsBySupplier = new Map<
@@ -1010,26 +1233,48 @@ class SupplierLedgerService {
       { totalPurchases: number; lastPurchaseDate: Date | null }
     >();
 
-    for (const p of purchases) {
-      const lineTotal = this.purchaseLineTotal(p.quantity, p.cost_price);
-      const existing = statsBySupplier.get(p.supplier_id);
+    const addPurchaseStat = (
+      supplierId: string,
+      lineTotal: number,
+      purchaseDate: Date,
+    ) => {
+      const existing = statsBySupplier.get(supplierId);
       if (existing) {
         existing.totalPurchases += lineTotal;
-        if (!existing.lastPurchaseDate || p.purchase_date > existing.lastPurchaseDate) {
-          existing.lastPurchaseDate = p.purchase_date;
+        if (!existing.lastPurchaseDate || purchaseDate > existing.lastPurchaseDate) {
+          existing.lastPurchaseDate = purchaseDate;
         }
       } else {
-        statsBySupplier.set(p.supplier_id, {
+        statsBySupplier.set(supplierId, {
           totalPurchases: lineTotal,
-          lastPurchaseDate: p.purchase_date,
+          lastPurchaseDate: purchaseDate,
         });
       }
+    };
+
+    for (const p of purchases) {
+      addPurchaseStat(
+        p.supplier_id,
+        this.purchaseLineTotal(p.quantity, p.cost_price),
+        p.purchase_date,
+      );
+    }
+
+    for (const mov of stockIns) {
+      const supplierId = mov.product.supplier_id;
+      if (!supplierId) continue;
+      const lineTotal =
+        asNumber(mov.quantity_change) *
+        asNumber(mov.unit_cost ?? mov.product.purchase_rate);
+      if (lineTotal <= 0.009) continue;
+      addPurchaseStat(supplierId, lineTotal, mov.created_at);
     }
 
     return suppliers.map((s) => {
       const stats = statsBySupplier.get(s.id);
       const totalPurchases = stats?.totalPurchases ?? 0;
-      const totalPaid = paymentBySupplier.get(s.id) ?? 0;
+      const totalPaid =
+        (paymentBySupplier.get(s.id) ?? 0) + (cashPaidBySupplier.get(s.id) ?? 0);
       const outstanding = Number(s.outstanding_balance);
       return {
         id: s.id,

@@ -6,6 +6,7 @@ import { DashboardHome } from "@/components/dashboard-home";
 import { Button } from "@/components/ui/button";
 import { Menu } from "lucide-react";
 import { getDefaultDashboardTab } from "@/lib/role-utils";
+import { cn } from "@/lib/utils";
 
 import { Customers } from "@/components/customers";
 import { Reports } from "@/components/reports";
@@ -66,6 +67,8 @@ import { DashboardFinancialDetails } from "./dashboard-financial-details";
 interface DashboardProps {
   onLogout: () => void;
 }
+
+const FULL_HEIGHT_VIEWS = new Set(["supplier-profile", "supplier-ledger", "customer-ledger"]);
 
 export function Dashboard({ onLogout }: DashboardProps) {
   const DASHBOARD_TAB_STORAGE_KEY = "dashboard_active_tab";
@@ -304,7 +307,12 @@ export function Dashboard({ onLogout }: DashboardProps) {
         </Button>
       </div>
 
-      <main className="flex min-h-0 flex-1 flex-col overflow-auto bg-gray-50 pt-16 lg:pt-0">
+      <main
+        className={cn(
+          "flex min-h-0 flex-1 flex-col bg-gray-50 pt-16 lg:pt-0",
+          FULL_HEIGHT_VIEWS.has(activeTab) ? "overflow-hidden" : "overflow-auto",
+        )}
+      >
         {renderContent()}
       </main>
     </div>

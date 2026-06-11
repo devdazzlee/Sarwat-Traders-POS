@@ -40,6 +40,8 @@
     "lint:fix": "eslint . --ext .ts --fix",
     "test": "jest --coverage",
     "test:watch": "jest --watch",
+    "test:supplier-ledger": "ts-node src/services/supplier-ledger-balance.engine.spec.ts",
+    "audit:supplier-ledger": "ts-node scripts/check-supplier-ledger.ts",
     "docker:up": "docker-compose up -d",
     "docker:down": "docker-compose down",
     "prepare": "husky install",

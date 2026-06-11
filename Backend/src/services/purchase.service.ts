@@ -37,6 +37,10 @@ export class PurchaseService {
       finalBranchId = firstBranch.id;
     }
 
+    if (!data.supplierId?.trim()) {
+      throw new AppError(400, 'Supplier is required for stock-in');
+    }
+
     return prisma.$transaction(async (tx) => {
       const purchaseNumber = `PUR-${Date.now()}`;
       const paymentMethod = (data.paymentMethod ?? 'CREDIT').toUpperCase();
@@ -50,7 +54,7 @@ export class PurchaseService {
           data: {
             purchase_number: purchaseNumber,
             product_id: item.productId,
-            supplier_id: data.supplierId || null,
+            supplier_id: data.supplierId,
             warehouse_branch_id: finalBranchId,
             quantity: item.quantity,
             cost_price: item.costPrice,
@@ -118,10 +122,11 @@ export class PurchaseService {
         // Update Product Cost Rate
         await tx.product.update({
           where: { id: item.productId },
-          data: { 
+          data: {
             purchase_rate: item.costPrice,
-            sales_rate_exc_dis_and_tax: item.salePrice
-          }
+            sales_rate_exc_dis_and_tax: item.salePrice,
+            supplier_id: data.supplierId,
+          },
         });
 
         results.push(purchase);
@@ -153,7 +158,7 @@ export class PurchaseService {
       }
 
       return results;
-    });
+    }, { timeout: 60_000, maxWait: 20_000 });
   }
 
   async listPurchases(params: {

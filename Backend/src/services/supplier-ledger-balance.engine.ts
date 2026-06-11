@@ -13,7 +13,7 @@ type SupplierLedgerRow = {
 
 /**
  * Single source of truth for supplier running balances.
- * supplier.outstanding_balance is derived only via recalculateRunningBalances().
+ * Append paths update outstanding_balance incrementally; full recalc repairs drift.
  */
 export class SupplierLedgerBalanceEngine {
   computeSignedDelta(entry: SupplierLedgerRow, prevBalance: number): number {
@@ -95,6 +95,44 @@ export class SupplierLedgerBalanceEngine {
     return running;
   }
 
+  /** Fast append: one read + create + supplier update (avoids O(n) writes per post). */
+  private async commitLedgerEntry(
+    tx: SupplierTxClient,
+    supplierId: string,
+    data: {
+      entry_type: SupplierLedgerEntryType;
+      amount: Prisma.Decimal;
+      description: string;
+      purchase_id?: string | null;
+      reference_no?: string | null;
+      created_by?: string | null;
+    },
+    signedDelta: number,
+  ) {
+    const running = await this.getRunningBalance(tx, supplierId);
+    const newBalance = Number((running + signedDelta).toFixed(3));
+
+    const entry = await tx.supplierLedger.create({
+      data: {
+        supplier_id: supplierId,
+        entry_type: data.entry_type,
+        amount: data.amount,
+        description: data.description,
+        purchase_id: data.purchase_id,
+        reference_no: data.reference_no,
+        balance_after: newBalance,
+        created_by: data.created_by,
+      },
+    });
+
+    await tx.supplier.update({
+      where: { id: supplierId },
+      data: { outstanding_balance: newBalance },
+    });
+
+    return entry;
+  }
+
   async syncSupplierBalances(supplierId: string) {
     return prisma.$transaction(
       async (tx) => this.recalculateRunningBalances(tx, supplierId),
@@ -118,20 +156,18 @@ export class SupplierLedgerBalanceEngine {
   ) {
     if (params.amount <= 0) return null;
 
-    const entry = await tx.supplierLedger.create({
-      data: {
-        supplier_id: params.supplierId,
+    return this.commitLedgerEntry(
+      tx,
+      params.supplierId,
+      {
         entry_type: SupplierLedgerEntryType.CASH_PURCHASE,
         amount: new Prisma.Decimal(params.amount),
         description: params.description ?? 'Cash purchase',
         purchase_id: params.purchaseId,
-        balance_after: 0,
         created_by: params.createdBy,
       },
-    });
-
-    await this.recalculateRunningBalances(tx, params.supplierId);
-    return entry;
+      0,
+    );
   }
 
   async postCreditPurchase(
@@ -146,20 +182,18 @@ export class SupplierLedgerBalanceEngine {
   ) {
     if (params.amount <= 0) return null;
 
-    const entry = await tx.supplierLedger.create({
-      data: {
-        supplier_id: params.supplierId,
+    return this.commitLedgerEntry(
+      tx,
+      params.supplierId,
+      {
         entry_type: SupplierLedgerEntryType.CREDIT_PURCHASE,
         amount: new Prisma.Decimal(params.amount),
         description: params.description ?? 'Credit purchase',
         purchase_id: params.purchaseId,
-        balance_after: 0,
         created_by: params.createdBy,
       },
-    });
-
-    await this.recalculateRunningBalances(tx, params.supplierId);
-    return entry;
+      params.amount,
+    );
   }
 
   async postPayment(
@@ -175,21 +209,19 @@ export class SupplierLedgerBalanceEngine {
   ) {
     if (params.amount <= 0) throw new Error('Payment amount must be positive');
 
-    const entry = await tx.supplierLedger.create({
-      data: {
-        supplier_id: params.supplierId,
+    return this.commitLedgerEntry(
+      tx,
+      params.supplierId,
+      {
         entry_type: SupplierLedgerEntryType.PAYMENT_MADE,
         amount: new Prisma.Decimal(params.amount),
         description: params.description ?? 'Payment made to supplier',
         purchase_id: params.purchaseId,
         reference_no: params.referenceNo?.trim() || params.purchaseId || null,
-        balance_after: 0,
         created_by: params.createdBy,
       },
-    });
-
-    await this.recalculateRunningBalances(tx, params.supplierId);
-    return entry;
+      -params.amount,
+    );
   }
 
   async postSignedAdjustment(
@@ -205,21 +237,19 @@ export class SupplierLedgerBalanceEngine {
   ) {
     if (Math.abs(params.signedDelta) <= 0.009) return null;
 
-    const entry = await tx.supplierLedger.create({
-      data: {
-        supplier_id: params.supplierId,
+    return this.commitLedgerEntry(
+      tx,
+      params.supplierId,
+      {
         entry_type: SupplierLedgerEntryType.ADJUSTMENT,
         amount: new Prisma.Decimal(Math.abs(params.signedDelta)),
         description: params.description,
         purchase_id: params.purchaseId,
         reference_no: params.referenceNo ?? this.adjustmentReferenceNo(params.signedDelta),
-        balance_after: 0,
         created_by: params.createdBy,
       },
-    });
-
-    await this.recalculateRunningBalances(tx, params.supplierId);
-    return entry;
+      params.signedDelta,
+    );
   }
 }
 
