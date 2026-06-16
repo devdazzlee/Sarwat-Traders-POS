@@ -6,6 +6,7 @@ import { DashboardHome } from "@/components/dashboard-home";
 import { Button } from "@/components/ui/button";
 import { Menu } from "lucide-react";
 import { getDefaultDashboardTab } from "@/lib/role-utils";
+import { cn } from "@/lib/utils";
 
 import { Customers } from "@/components/customers";
 import { Reports } from "@/components/reports";
@@ -58,6 +59,7 @@ import { NewSale } from "./new-sale";
 import { PrinterSettings } from "./printer-settings";
 import { ProductExport } from "./product-export";
 import { CustomerLedger } from "./customer-ledger";
+import { SupplierProfile } from "./supplier-profile";
 import { Documentation } from "./documentation";
 import { DashboardFinancialDetails } from "./dashboard-financial-details";
 
@@ -66,9 +68,12 @@ interface DashboardProps {
   onLogout: () => void;
 }
 
+const FULL_HEIGHT_VIEWS = new Set(["supplier-profile", "supplier-ledger", "customer-ledger"]);
+
 export function Dashboard({ onLogout }: DashboardProps) {
   const DASHBOARD_TAB_STORAGE_KEY = "dashboard_active_tab";
   const LEDGER_CUSTOMER_KEY = "dashboard_ledger_customer_id";
+  const LEDGER_SUPPLIER_KEY = "dashboard_supplier_profile_id";
 
   const [activeTab, setActiveTab] = useState<string>(() => {
     if (typeof window === "undefined") return "dashboard";
@@ -84,6 +89,11 @@ export function Dashboard({ onLogout }: DashboardProps) {
     return sessionStorage.getItem(LEDGER_CUSTOMER_KEY);
   });
 
+  const [selectedSupplierId, setSelectedSupplierId] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    return sessionStorage.getItem(LEDGER_SUPPLIER_KEY);
+  });
+
   const openCustomerLedger = (customerId: string) => {
     setSelectedCustomerId(customerId);
     sessionStorage.setItem(LEDGER_CUSTOMER_KEY, customerId);
@@ -96,10 +106,25 @@ export function Dashboard({ onLogout }: DashboardProps) {
     setActiveTab("customers");
   };
 
+  const openSupplierProfile = (supplierId: string) => {
+    setSelectedSupplierId(supplierId);
+    sessionStorage.setItem(LEDGER_SUPPLIER_KEY, supplierId);
+    setActiveTab("supplier-profile");
+  };
+
+  const closeSupplierProfile = () => {
+    setSelectedSupplierId(null);
+    sessionStorage.removeItem(LEDGER_SUPPLIER_KEY);
+    setActiveTab("suppliers");
+  };
+
   useEffect(() => {
     localStorage.setItem(DASHBOARD_TAB_STORAGE_KEY, activeTab);
     if (activeTab !== "customer-ledger") {
       sessionStorage.removeItem(LEDGER_CUSTOMER_KEY);
+    }
+    if (activeTab !== "supplier-profile") {
+      sessionStorage.removeItem(LEDGER_SUPPLIER_KEY);
     }
     if (activeTab === "dashboard") {
       setDashboardVisit((v) => v + 1);
@@ -175,7 +200,17 @@ export function Dashboard({ onLogout }: DashboardProps) {
       case "sub-categories":
         return <Subcategories />;
       case "suppliers":
-        return <Suppliers />;
+        return <Suppliers onViewSupplier={openSupplierProfile} />;
+      case "supplier-profile":
+      case "supplier-ledger":
+        return selectedSupplierId ? (
+          <SupplierProfile
+            supplierId={selectedSupplierId}
+            onBack={closeSupplierProfile}
+          />
+        ) : (
+          <Suppliers onViewSupplier={openSupplierProfile} />
+        );
       case "purchase-orders":
         return <PurchaseOrders />;
       case "pricing":
@@ -272,7 +307,12 @@ export function Dashboard({ onLogout }: DashboardProps) {
         </Button>
       </div>
 
-      <main className="flex min-h-0 flex-1 flex-col overflow-auto bg-gray-50 pt-16 lg:pt-0">
+      <main
+        className={cn(
+          "flex min-h-0 flex-1 flex-col bg-gray-50 pt-16 lg:pt-0",
+          FULL_HEIGHT_VIEWS.has(activeTab) ? "overflow-hidden" : "overflow-auto",
+        )}
+      >
         {renderContent()}
       </main>
     </div>

@@ -78,6 +78,10 @@ const getSalesController = asyncHandler(async (req: Request, res: Response) => {
       endDateRaw && !Number.isNaN(new Date(endDateRaw).getTime())
         ? new Date(endDateRaw)
         : undefined;
+    const dateFieldRaw = req.query.dateField as string | undefined;
+    const dateField =
+      dateFieldRaw === 'created_at' ? 'created_at' : 'sale_date';
+    const endExclusive = req.query.endExclusive === 'true';
 
     const result = await saleService.getSales({
         branchId,
@@ -86,6 +90,8 @@ const getSalesController = asyncHandler(async (req: Request, res: Response) => {
         search,
         startDate: parsedStartDate,
         endDate: parsedEndDate,
+        dateField,
+        endExclusive,
     });
 
     console.log(

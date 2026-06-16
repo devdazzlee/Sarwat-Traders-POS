@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Loader2, Eye, RefreshCcw, Search, ShoppingBag, DollarSign, Clock, Globe, Download, Printer, CheckCircle2, Filter } from "lucide-react";
 import apiClient from "@/lib/apiClient";
 import { API_BASE } from "@/config/constants";
+import { getCurrentReportingPeriod } from "@/lib/reporting-period";
 import { useToast } from "@/hooks/use-toast";
 import { PageLoader } from "@/components/ui/page-loader";
 import { StatCardSkeleton } from "@/components/ui/stat-card-skeleton";
@@ -502,9 +503,7 @@ const WebsiteOrders: React.FC = () => {
     const now = new Date();
     const getRangeStart = () => {
       if (dateRangeFilter === "TODAY") {
-        const d = new Date();
-        d.setHours(0, 0, 0, 0);
-        return d;
+        return getCurrentReportingPeriod().start;
       }
       if (dateRangeFilter === "7D") {
         const d = new Date(now);
@@ -520,12 +519,17 @@ const WebsiteOrders: React.FC = () => {
     };
 
     const rangeStart = getRangeStart();
+    const rangeEnd =
+      dateRangeFilter === "TODAY" ? getCurrentReportingPeriod().end : null;
 
     const list = orders.filter((o) => {
       const matchesSearch = o.order_number.toLowerCase().includes(searchTerm.toLowerCase());
       const matchesPayment =
         paymentFilter === "ALL" ? true : (o.payment_method || "CASH").toUpperCase() === paymentFilter;
-      const matchesDate = rangeStart ? new Date(o.created_at) >= rangeStart : true;
+      const createdAt = new Date(o.created_at);
+      const matchesDate = rangeStart
+        ? createdAt >= rangeStart && (rangeEnd ? createdAt < rangeEnd : true)
+        : true;
       return matchesSearch && matchesPayment && matchesDate;
     });
 

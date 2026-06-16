@@ -9,6 +9,11 @@ import { PageLoader } from "@/components/ui/page-loader"
 import { StatCardSkeleton } from "@/components/ui/stat-card-skeleton"
 import { BarChart3, TrendingUp, DollarSign, ShoppingCart, Users, Package, Download, Calendar, Loader2, Mail } from "lucide-react"
 import apiClient from "@/lib/apiClient"
+import {
+  formatReportingPeriodStartLabel,
+  getReportingPeriodsForLastNDays,
+  isWithinReportingPeriod,
+} from "@/lib/reporting-period"
 import { useToast } from "@/hooks/use-toast"
 import { shareAnalyticsReportOnEmail } from "@/lib/pdf-generator"
 
@@ -129,23 +134,19 @@ export function Reports() {
       ).size
       setUniqueCustomers(uniqueCusts)
 
-      // Calculate daily sales (last 7 days)
-      const today = new Date()
+      // Daily sales for last 7 reporting periods (11 AM – 11 AM PKT)
+      const reportingPeriods = getReportingPeriodsForLastNDays(7)
       const dailySalesData: DailySale[] = []
-      for (let i = 6; i >= 0; i--) {
-        const date = new Date(today)
-        date.setDate(date.getDate() - i)
-        const dateStr = date.toISOString().split('T')[0]
-        
+      for (const period of reportingPeriods) {
+        const dateStr = formatReportingPeriodStartLabel(period)
+
         const daySales = sales.filter((sale: any) => {
           if (!sale) return false
-          // Try multiple date fields
-          const saleDateField = sale.sale_date || sale.created_at || sale.createdAt || sale.date
+          const saleDateField = sale.created_at || sale.sale_date || sale.createdAt || sale.date
           if (!saleDateField) return false
-          
+
           try {
-            const saleDate = new Date(saleDateField).toISOString().split('T')[0]
-            return saleDate === dateStr
+            return isWithinReportingPeriod(saleDateField, period)
           } catch (e) {
             console.warn("Invalid date format:", saleDateField)
             return false

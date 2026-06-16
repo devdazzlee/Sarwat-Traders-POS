@@ -1,6 +1,12 @@
 import asyncHandler from "../middleware/asyncHandler";
 import { StatsService } from "../services/stats.service";
 import { ApiResponse } from "../utils/apiResponse";
+import {
+    getCurrentReportingPeriod,
+    getReportingPeriodDescription,
+    REPORTING_DAY_START_HOUR,
+    REPORTING_TIMEZONE,
+} from "../utils/reportingPeriod";
 
 const statsService = new StatsService();
 
@@ -26,6 +32,21 @@ export const dashboardStats = asyncHandler(async (req, res) => {
     new ApiResponse(stats, 'Dashboard stats fetched', 200).send(res);
 });
 
+export const reportingPeriodInfo = asyncHandler(async (req, res) => {
+    const period = getCurrentReportingPeriod();
+    new ApiResponse(
+        {
+            start: period.start.toISOString(),
+            end: period.end.toISOString(),
+            timezone: REPORTING_TIMEZONE,
+            startHour: REPORTING_DAY_START_HOUR,
+            description: getReportingPeriodDescription(),
+        },
+        "Reporting period fetched",
+        200,
+    ).send(res);
+});
+
 export const dashboardCollections = asyncHandler(async (req, res) => {
     const startDateRaw = req.query.startDate as string | undefined;
     const endDateRaw = req.query.endDate as string | undefined;
@@ -40,6 +61,13 @@ export const dashboardCollections = asyncHandler(async (req, res) => {
             ? new Date(endDateRaw)
             : undefined;
 
-    const entries = await statsService.getCollectionEntries({ startDate, endDate, search });
+    const endExclusive = req.query.endExclusive === 'true';
+
+    const entries = await statsService.getCollectionEntries({
+        startDate,
+        endDate,
+        search,
+        endExclusive,
+    });
     new ApiResponse(entries, 'Collection entries fetched', 200).send(res);
 });

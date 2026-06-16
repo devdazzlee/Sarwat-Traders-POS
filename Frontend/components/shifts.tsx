@@ -21,6 +21,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Plus, Search, Clock, Users,  DollarSign, Eye, StopCircle, Edit, Trash2, Loader2, Calendar as CalendarIcon, CheckCircle2 } from "lucide-react"
 import { PageLoader } from "@/components/ui/page-loader"
 import apiClient from "@/lib/apiClient"
+import {
+  formatReportingPeriodStartLabel,
+  getCurrentReportingPeriod,
+} from "@/lib/reporting-period"
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { format } from "date-fns";
@@ -347,8 +351,10 @@ export function Shifts() {
     if (status) {
       switch (status) {
         case "today":
-          const todayStr = format(new Date(), "yyyy-MM-dd")
-          filtered = filtered.filter((shift) => shift.date === todayStr || shift.status === "active")
+          const reportingDayStr = formatReportingPeriodStartLabel(getCurrentReportingPeriod())
+          filtered = filtered.filter(
+            (shift) => shift.date === reportingDayStr || shift.status === "active",
+          )
           break
         case "week":
           const weekAgoStr = format(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), "yyyy-MM-dd")
@@ -382,8 +388,8 @@ export function Shifts() {
   }
 
   // Calculate statistics
-  const todayLocal = format(new Date(), "yyyy-MM-dd")
-  const todayShifts = shifts.filter((shift) => shift.date === todayLocal)
+  const reportingDayStr = formatReportingPeriodStartLabel(getCurrentReportingPeriod())
+  const todayShifts = shifts.filter((shift) => shift.date === reportingDayStr)
   const todayHours = todayShifts.reduce((sum, shift) => {
     // Parse start and end times
     const [startHour, startMinute] = shift.startTime.split(":").map(Number);

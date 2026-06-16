@@ -21,22 +21,33 @@ export function DataProvider({ children }: DataProviderProps) {
     const initializeData = async () => {
       try {
         await initializeOfflineMode()
-
-        await Promise.all([
-          fetchProducts({ force: true }),
-          fetchCategories(true),
-          fetchCustomers(true),
-        ])
-        console.log('✅ All data initialized successfully')
       } catch (error) {
-        console.log('❌ Failed to initialize data:', error)
-        if (navigator.onLine) {
-          toast({
-            variant: "destructive",
-            title: "Data Loading Error",
-            description: "Some data failed to load. Please refresh the page.",
-          })
-        }
+        console.log('Offline init skipped:', error)
+      }
+
+      const results = await Promise.allSettled([
+        fetchProducts({ force: true }),
+        fetchCategories(true),
+        fetchCustomers(true),
+      ])
+
+      const failed = results.filter((r) => r.status === 'rejected')
+      if (failed.length === 0) {
+        console.log('✅ All data initialized successfully')
+        return
+      }
+
+      failed.forEach((r) =>
+        console.log('Background data fetch failed:', r.status === 'rejected' ? r.reason : r),
+      )
+
+      // Supplier/POS pages can still work — only warn when everything failed while online.
+      if (navigator.onLine && failed.length === results.length) {
+        toast({
+          variant: 'destructive',
+          title: 'Data Loading Error',
+          description: 'Some data failed to load. Please refresh the page.',
+        })
       }
     }
 

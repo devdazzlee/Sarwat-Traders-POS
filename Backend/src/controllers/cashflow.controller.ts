@@ -3,6 +3,7 @@ import { CashFlowService } from '../services/cashflow.service';
 import { ApiResponse } from '../utils/apiResponse';
 import asyncHandler from '../middleware/asyncHandler';
 import { prisma } from '../prisma/client';
+import { getCurrentReportingPeriod } from '../utils/reportingPeriod';
 
 const cashFlowService = new CashFlowService();
 
@@ -47,7 +48,7 @@ export const createOpening = asyncHandler(async (req: Request, res: Response) =>
   const anyDrawerToday = await cashFlowService.findAnyDrawerToday(branchId);
   if (anyDrawerToday) {
     return res.status(400).json({ 
-      message: 'A drawer has already been opened today for this branch. Only one drawer per day is allowed. Please wait until tomorrow to open a new drawer.' 
+      message: 'A drawer has already been opened for the current reporting period (11:00 AM – 11:00 AM). Only one drawer per reporting day is allowed. Please wait until the next 11:00 AM boundary to open a new drawer.' 
     });
   }
   
@@ -135,9 +136,7 @@ export const debugCashFlows = asyncHandler(async (req: Request, res: Response) =
   }
   
   const { date } = req.query;
-  const today = new Date();
-  const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
-  const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
+  const reportingPeriod = getCurrentReportingPeriod();
   
   const allCashFlows = await prisma.cashFlow.findMany({
     where: { branch_id: branchId },
@@ -182,9 +181,9 @@ export const debugCashFlows = asyncHandler(async (req: Request, res: Response) =
     canOpenDrawerToday: !anyDrawerToday,
     testDateResult,
     dateRange: {
-      startOfDay: startOfDay.toISOString(),
-      endOfDay: endOfDay.toISOString(),
-      requestedDate: date
+      reportingPeriodStart: reportingPeriod.start.toISOString(),
+      reportingPeriodEnd: reportingPeriod.end.toISOString(),
+      requestedDate: date,
     },
     allExpenses,
     branchId,

@@ -178,6 +178,7 @@ class OfflineSyncManager {
         if (
           item.url.includes('/sale') ||
           item.url.includes('/customer-ledger') ||
+          item.url.includes('/supplier-ledger') ||
           item.url.includes('/expenses')
         ) {
           const { notifyDashboardStatsChanged } = await import('./dashboard-stats-sync');

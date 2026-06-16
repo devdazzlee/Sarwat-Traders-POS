@@ -2,6 +2,7 @@ import { prisma } from '../prisma/client';
 import { AppError } from '../utils/apiError';
 import { addDecimal, asNumber } from '../utils/helpers';
 import { Prisma } from '@prisma/client';
+import { supplierLedgerBalanceEngine } from './supplier-ledger-balance.engine';
 
 export class PurchaseService {
   async createBulkPurchase(data: {
@@ -11,6 +12,7 @@ export class PurchaseService {
     invoiceRef?: string;
     notes?: string;
     deliveryStatus: "PARTIAL" | "COMPLETE";
+    paymentMethod?: "CREDIT" | "CASH" | "CARD";
     items: Array<{
       productId: string;
       quantity: number;
@@ -35,19 +37,33 @@ export class PurchaseService {
       finalBranchId = firstBranch.id;
     }
 
+    if (!data.supplierId?.trim()) {
+      throw new AppError(400, 'Supplier is required for stock-in');
+    }
+
     return prisma.$transaction(async (tx) => {
+      const purchaseNumber = `PUR-${Date.now()}`;
+      const paymentMethod = (data.paymentMethod ?? 'CREDIT').toUpperCase();
+      const paymentStatus =
+        paymentMethod === 'CREDIT' ? ('PENDING' as const) : ('PAID' as const);
+      let batchTotal = 0;
       const results = [];
       for (const item of data.items) {
+        batchTotal += item.quantity * item.costPrice;
         const purchase = await (tx.purchase.create as any)({
           data: {
+            purchase_number: purchaseNumber,
             product_id: item.productId,
-            supplier_id: data.supplierId || null,
+            supplier_id: data.supplierId,
             warehouse_branch_id: finalBranchId,
             quantity: item.quantity,
             cost_price: item.costPrice,
             sale_price: item.salePrice,
             purchase_date: data.purchaseDate,
             invoice_ref: data.invoiceRef,
+            payment_method: paymentMethod,
+            payment_made: 0,
+            payment_status: paymentStatus,
             batch_no: item.batchNo,
             expiry_date: item.expiryDate ? new Date(item.expiryDate) : null,
             notes: data.notes,
@@ -106,16 +122,43 @@ export class PurchaseService {
         // Update Product Cost Rate
         await tx.product.update({
           where: { id: item.productId },
-          data: { 
+          data: {
             purchase_rate: item.costPrice,
-            sales_rate_exc_dis_and_tax: item.salePrice
-          }
+            sales_rate_exc_dis_and_tax: item.salePrice,
+            supplier_id: data.supplierId,
+          },
         });
 
         results.push(purchase);
       }
+
+      if (data.supplierId && batchTotal > 0.009) {
+        const desc =
+          paymentMethod === 'CREDIT'
+            ? `Credit purchase${data.invoiceRef ? ` - ${data.invoiceRef}` : ''} - ${purchaseNumber}`
+            : `Cash purchase${data.invoiceRef ? ` - ${data.invoiceRef}` : ''} - ${purchaseNumber}`;
+
+        if (paymentMethod === 'CREDIT') {
+          await supplierLedgerBalanceEngine.postCreditPurchase(tx, {
+            supplierId: data.supplierId,
+            amount: batchTotal,
+            purchaseId: purchaseNumber,
+            createdBy: data.createdBy,
+            description: desc,
+          });
+        } else {
+          await supplierLedgerBalanceEngine.postCashPurchase(tx, {
+            supplierId: data.supplierId,
+            amount: batchTotal,
+            purchaseId: purchaseNumber,
+            createdBy: data.createdBy,
+            description: desc,
+          });
+        }
+      }
+
       return results;
-    });
+    }, { timeout: 60_000, maxWait: 20_000 });
   }
 
   async listPurchases(params: {

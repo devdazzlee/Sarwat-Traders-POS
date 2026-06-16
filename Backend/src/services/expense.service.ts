@@ -3,6 +3,20 @@ import { CreateExpenseInput } from '../validations/expense.validation';
 import { AppError } from '../utils/apiError';
 import { Prisma } from '@prisma/client';
 
+function parseExpenseBoundary(raw: string, kind: 'start' | 'end'): Date {
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) {
+        throw new AppError(400, `Invalid ${kind} date`);
+    }
+    if (raw.includes('T')) {
+        return parsed;
+    }
+    if (kind === 'start') {
+        return new Date(`${raw}T00:00:00.000Z`);
+    }
+    return new Date(`${raw}T23:59:59.999Z`);
+}
+
 export class ExpenseService {
     async createExpense(data: CreateExpenseInput) {
         const description = data.description?.trim() || null;
@@ -67,8 +81,12 @@ export class ExpenseService {
             ...(startDate || endDate
                 ? {
                       created_at: {
-                          ...(startDate ? { gte: new Date(`${startDate}T00:00:00.000Z`) } : {}),
-                          ...(endDate ? { lte: new Date(`${endDate}T23:59:59.999Z`) } : {}),
+                          ...(startDate ? { gte: parseExpenseBoundary(startDate, 'start') } : {}),
+                          ...(endDate
+                              ? endDate.includes('T')
+                                  ? { lt: parseExpenseBoundary(endDate, 'end') }
+                                  : { lte: parseExpenseBoundary(endDate, 'end') }
+                              : {}),
                       },
                   }
                 : {}),

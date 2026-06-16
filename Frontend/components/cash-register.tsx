@@ -37,6 +37,11 @@ import {
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { PageLoader } from "./ui/page-loader";
+import {
+  formatDateForReportingApi,
+  getCurrentReportingPeriodDateLabel,
+  isCurrentReportingPeriodCalendarDate,
+} from "@/lib/reporting-period";
 
 interface Transaction {
   id: string;
@@ -97,10 +102,11 @@ export function CashRegister() {
     } catch (error: any) {
       if (
         error.response?.status === 400 &&
-        error.response?.data?.message?.includes("already been opened today")
+        error.response?.data?.message?.includes("reporting period") ||
+        error.response?.data?.message?.includes("already been opened")
       ) {
         throw new Error(
-          "A drawer has already been opened today. Only one drawer per day is allowed. Please wait until tomorrow."
+          "A drawer has already been opened for this reporting period (11:00 AM – 11:00 AM). Please wait until the next 11:00 AM boundary."
         );
       }
       throw error;
@@ -137,13 +143,10 @@ export function CashRegister() {
     }
   }
 
-  async function getDrawerByDate(date: Date) {
+  async function getDrawerByDate(date: Date | string) {
     try {
-      // Use local timezone formatting instead of UTC
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, "0");
-      const day = String(date.getDate()).padStart(2, "0");
-      const dateString = `${year}-${month}-${day}`;
+      const dateString =
+        typeof date === "string" ? date : formatDateForReportingApi(date);
 
       console.log("getDrawerByDate - sending date:", dateString); // Debug log
       console.log("getDrawerByDate - original date object:", date); // Debug log
@@ -159,11 +162,7 @@ export function CashRegister() {
 
   async function getExpensesByDate(date: Date) {
     try {
-      // Use local timezone formatting instead of UTC
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, "0");
-      const day = String(date.getDate()).padStart(2, "0");
-      const dateString = `${year}-${month}-${day}`;
+      const dateString = formatDateForReportingApi(date);
 
       const response = await apiClient.get(
         `/cashflows/expenses?date=${dateString}`
@@ -176,9 +175,8 @@ export function CashRegister() {
 
   // Helper function to check if there's already a drawer for today
   const checkTodayDrawer = async () => {
-    const today = new Date();
     try {
-      const todayDrawerRes = await getDrawerByDate(today);
+      const todayDrawerRes = await getDrawerByDate(getCurrentReportingPeriodDateLabel());
       if (todayDrawerRes.data.success && todayDrawerRes.data.data?.exists) {
         setTodayDrawerExists(true);
         return todayDrawerRes.data.data.data;
@@ -332,9 +330,7 @@ export function CashRegister() {
       }
 
       // Check if the selected date is today and update todayDrawerExists accordingly
-      const today = new Date();
-      const isToday = targetDate.toDateString() === today.toDateString();
-      if (isToday) {
+      if (isCurrentReportingPeriodCalendarDate(targetDate)) {
         await checkTodayDrawer();
       } else {
         setTodayDrawerExists(false);
@@ -380,7 +376,7 @@ export function CashRegister() {
         toast({
           title: "Today's Drawer Closed",
           description:
-            "Today's drawer has been closed. You can view historical data or wait until tomorrow to open a new drawer.",
+            "This reporting period's drawer has been closed. View historical data or wait until the next 11:00 AM boundary to open a new drawer.",
           variant: "default",
         });
       }
@@ -419,7 +415,7 @@ export function CashRegister() {
         toast({
           title: "Drawer Already Open",
           description:
-            "A drawer is already open for today. Please close it before opening a new one.",
+            "A drawer is already open for this reporting period. Please close it before opening a new one.",
           variant: "destructive",
         });
         setIsOpenDrawerDialogOpen(false);
@@ -429,7 +425,7 @@ export function CashRegister() {
         toast({
           title: "Drawer Already Exists",
           description:
-            "A drawer has already been opened and closed today. Only one drawer per day is allowed. Please wait until tomorrow.",
+            "A drawer has already been opened and closed for this reporting period. Please wait until the next 11:00 AM boundary.",
           variant: "destructive",
         });
         setIsOpenDrawerDialogOpen(false);
@@ -549,9 +545,11 @@ export function CashRegister() {
 
   // Reset to today's date
   const handleTodayClick = () => {
-    const today = new Date();
-    setSelectedDate(today);
-    fetchDrawerAndExpenses(today);
+    const label = getCurrentReportingPeriodDateLabel();
+    const [y, m, d] = label.split("-").map(Number);
+    const reportingDate = new Date(y, m - 1, d);
+    setSelectedDate(reportingDate);
+    fetchDrawerAndExpenses(reportingDate);
   };
 
   // UI rendering
@@ -729,8 +727,8 @@ export function CashRegister() {
                 <div className="flex items-center space-x-2">
                   <AlertCircle className="h-4 w-4 text-blue-600" />
                   <span className="text-sm text-blue-800">
-                    Today's drawer has already been opened and closed. Only one
-                    drawer per day is allowed.
+                    This reporting period&apos;s drawer has already been opened and closed.
+                    Only one drawer per reporting day (11:00 AM – 11:00 AM) is allowed.
                   </span>
                 </div>
               </div>

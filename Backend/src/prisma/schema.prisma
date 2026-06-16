@@ -194,27 +194,29 @@ model Unit {
 }
 
 model Supplier {
-  id              String          @id @default(uuid())
-  code            String          @unique
-  name            String
-  phone_number    String?
-  fax_number      String?
-  mobile_number   String?
-  country         String?
-  city            String?
-  status          String?
-  email           String?
-  ntn             String?
-  strn            String?
-  gov_id          String?
-  address         String?
-  is_active       Boolean         @default(true)
-  display_on_pos  Boolean         @default(true)
-  products        Product[]
-  purchase_orders PurchaseOrder[]
-  purchases       Purchase[]
-  created_at      DateTime        @default(now())
-  updated_at      DateTime        @default(now()) @updatedAt
+  id                  String           @id @default(uuid())
+  code                String           @unique
+  name                String
+  phone_number        String?
+  fax_number          String?
+  mobile_number       String?
+  country             String?
+  city                String?
+  status              String?
+  email               String?
+  ntn                 String?
+  strn                String?
+  gov_id              String?
+  address             String?
+  is_active           Boolean          @default(true)
+  display_on_pos      Boolean          @default(true)
+  outstanding_balance Decimal          @default(0)
+  products            Product[]
+  purchase_orders     PurchaseOrder[]
+  purchases           Purchase[]
+  ledger_entries      SupplierLedger[]
+  created_at          DateTime         @default(now())
+  updated_at          DateTime         @default(now()) @updatedAt
 
   @@index([code])
   @@index([is_active])
@@ -389,34 +391,39 @@ enum PurchaseDeliveryStatus {
 }
 
 model Purchase {
-  id                String                 @id @default(uuid())
-  product_id         String
-  product            Product                @relation(fields: [product_id], references: [id])
-  supplier_id        String
-  supplier           Supplier               @relation(fields: [supplier_id], references: [id])
+  id                  String                 @id @default(uuid())
+  purchase_number     String?
+  product_id          String
+  product             Product                @relation(fields: [product_id], references: [id])
+  supplier_id         String
+  supplier            Supplier               @relation(fields: [supplier_id], references: [id])
   warehouse_branch_id String
-  warehouse_branch   Branch                 @relation("PurchaseWarehouse", fields: [warehouse_branch_id], references: [id])
-  quantity           Decimal
-  cost_price         Decimal
-  sale_price         Decimal
-  purchase_date      DateTime               @default(now())
-  invoice_ref        String?
-  batch_no           String?
-  expiry_date        DateTime?
-  notes              String?
-  delivery_status    PurchaseDeliveryStatus  @default(COMPLETE)
-  ctns               Decimal?
-  pieces_per_ctn     Decimal?
-  cbm_per_ctn        Decimal?
-  t_cbm              Decimal?
-  gw_per_ctn         Decimal?
-  t_gw               Decimal?
-  created_by         String
-  user               User                   @relation(fields: [created_by], references: [id])
-  created_at         DateTime               @default(now())
+  warehouse_branch    Branch                 @relation("PurchaseWarehouse", fields: [warehouse_branch_id], references: [id])
+  quantity            Decimal
+  cost_price          Decimal
+  sale_price          Decimal
+  purchase_date       DateTime               @default(now())
+  invoice_ref         String?
+  payment_method      PaymentMethod          @default(CREDIT)
+  payment_made        Decimal                @default(0)
+  payment_status      PaymentStatus          @default(PENDING)
+  batch_no            String?
+  expiry_date         DateTime?
+  notes               String?
+  delivery_status     PurchaseDeliveryStatus @default(COMPLETE)
+  ctns                Decimal?
+  pieces_per_ctn      Decimal?
+  cbm_per_ctn         Decimal?
+  t_cbm               Decimal?
+  gw_per_ctn          Decimal?
+  t_gw                Decimal?
+  created_by          String
+  user                User                   @relation(fields: [created_by], references: [id])
+  created_at          DateTime               @default(now())
 
   @@index([product_id])
   @@index([supplier_id])
+  @@index([purchase_number])
   @@index([warehouse_branch_id])
   @@index([purchase_date])
   @@index([created_by])
@@ -949,4 +956,31 @@ enum LedgerEntryType {
   PAYMENT_RECEIVED // Customer paid (balance decreases)
   ADJUSTMENT      // Manual adjustment
   REFUND          // Refund issued (balance decreases)
+}
+
+// Supplier Payables Ledger
+model SupplierLedger {
+  id            String                  @id @default(uuid())
+  supplier_id   String
+  supplier      Supplier                @relation(fields: [supplier_id], references: [id])
+  entry_type    SupplierLedgerEntryType
+  amount        Decimal
+  description   String?
+  purchase_id   String?                 // Reference to purchase batch (purchase_number)
+  reference_no  String?
+  balance_after Decimal                 // Running balance after this entry
+  created_by    String?
+  created_at    DateTime                @default(now())
+
+  @@index([supplier_id])
+  @@index([created_at])
+  @@index([entry_type])
+}
+
+enum SupplierLedgerEntryType {
+  CREDIT_PURCHASE // Purchase on credit (payable increases)
+  CASH_PURCHASE   // Paid in full at purchase — history only, no balance change
+  PAYMENT_MADE    // Payment to supplier (payable decreases)
+  ADJUSTMENT      // Manual adjustment
+  REFUND          // Supplier credit / refund (payable decreases)
 }
