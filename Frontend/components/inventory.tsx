@@ -22,6 +22,7 @@ import { useStore } from "@/lib/store"
 import { isPendingImageUrl } from "@/lib/offline-queue-payload"
 import { usePosData } from "@/hooks/use-pos-data"
 import { shareInventoryReportOnEmail } from "@/lib/pdf-generator"
+import { cn } from "@/lib/utils"
 
 // Image compression utility
 const compressImage = (file: File, quality = 0.7, maxWidth = 800, maxHeight = 600): Promise<File> => {
@@ -519,6 +520,7 @@ export default function Inventory() {
   const [searchTerm, setSearchTerm] = useState("")
   const [selectedCategory, setSelectedCategory] = useState("all")
   const [selectedSubcategory, setSelectedSubcategory] = useState("all")
+  const [selectedStatus, setSelectedStatus] = useState<"all" | "active" | "inactive">("all")
 
   // State for dropdown options (these will be loaded from global store)
   const [units, setUnits] = useState<DropdownOption[]>([])
@@ -537,6 +539,7 @@ export default function Inventory() {
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
   const [productToDelete, setProductToDelete] = useState<Product | null>(null)
   const [deleteLoading, setDeleteLoading] = useState(false)
+  const [togglingProductId, setTogglingProductId] = useState<string | null>(null)
   const [formLoading, setFormLoading] = useState(false)
   const [sharing, setSharing] = useState(false)
   const [formData, setFormData] = useState<ProductFormData>({
@@ -679,6 +682,7 @@ export default function Inventory() {
     searchTerm,
     selectedCategory,
     selectedSubcategory,
+    selectedStatus,
     pageSize,
     globalProducts,
     globalLoading,
@@ -756,6 +760,13 @@ export default function Inventory() {
         filteredProducts = filteredProducts.filter(product =>
           product.subcategoryId && product.subcategoryId === selectedSubcategory
         )
+      }
+
+      // Apply status filter
+      if (selectedStatus === "active") {
+        filteredProducts = filteredProducts.filter((product) => product.is_active)
+      } else if (selectedStatus === "inactive") {
+        filteredProducts = filteredProducts.filter((product) => !product.is_active)
       }
 
       // Apply pagination
@@ -881,20 +892,42 @@ export default function Inventory() {
     }
   }
 
-  const handleToggleStatus = async (id: string) => {
+  const handleToggleStatus = async (product: Product) => {
+    const id = product.id
+    if (togglingProductId === id) return
+    const previousActive = product.is_active
+    const nextActive = !previousActive
+
+    setTogglingProductId(id)
+    setProducts((prev) =>
+      prev.map((p) => (p.id === id ? { ...p, is_active: nextActive } : p))
+    )
+    const globalProd = globalProducts.find((p) => p.id === id)
+    if (globalProd) {
+      upsertProductFromApi({ ...globalProd, is_active: nextActive })
+    }
+
     try {
       await apiService.toggleProductStatus(id)
       await fetchProducts({ force: true })
       toast({
-        title: "Success",
-        description: "Product status updated successfully",
+        title: "Status updated",
+        description: `Product is now ${nextActive ? "active" : "inactive"}.`,
       })
-    } catch (error) {
+    } catch (error: any) {
+      setProducts((prev) =>
+        prev.map((p) => (p.id === id ? { ...p, is_active: previousActive } : p))
+      )
+      if (globalProd) {
+        upsertProductFromApi({ ...globalProd, is_active: previousActive })
+      }
       toast({
         title: "Error",
-        description: "Failed to update product status",
+        description: error?.response?.data?.message || "Failed to update product status",
         variant: "destructive",
       })
+    } finally {
+      setTogglingProductId(null)
     }
   }
   
@@ -1193,7 +1226,7 @@ export default function Inventory() {
               <Package className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{totalProducts}</div>
+              <div className="text-2xl font-bold">{globalProducts.length}</div>
             </CardContent>
           </Card>
           <Card>
@@ -1202,16 +1235,20 @@ export default function Inventory() {
               <Package className="h-4 w-4 text-green-600" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-green-600">{products.filter((p) => p.is_active).length}</div>
+              <div className="text-2xl font-bold text-green-600">
+                {globalProducts.filter((p) => p.is_active).length}
+              </div>
             </CardContent>
           </Card>
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Featured Products</CardTitle>
-              <AlertTriangle className="h-4 w-4 text-blue-600" />
+              <CardTitle className="text-sm font-medium">Inactive Products</CardTitle>
+              <AlertTriangle className="h-4 w-4 text-red-500" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-blue-600">{products.filter((p) => p.is_featured).length}</div>
+              <div className="text-2xl font-bold text-red-600">
+                {globalProducts.filter((p) => !p.is_active).length}
+              </div>
             </CardContent>
           </Card>
         </div>
@@ -1251,6 +1288,22 @@ export default function Inventory() {
                   {subcategory.name}
                 </SelectItem>
               ))}
+            </SelectContent>
+          </Select>
+          <Select
+            value={selectedStatus}
+            onValueChange={(value) => {
+              setSelectedStatus(value as "all" | "active" | "inactive")
+              setCurrentPage(1)
+            }}
+          >
+            <SelectTrigger className="w-full sm:w-40">
+              <SelectValue placeholder="All Status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Status</SelectItem>
+              <SelectItem value="active">Active only</SelectItem>
+              <SelectItem value="inactive">Inactive only</SelectItem>
             </SelectContent>
           </Select>
           <div className="flex items-center gap-2">
@@ -1331,29 +1384,42 @@ export default function Inventory() {
                         <TableCell>{product.purchase_rate.toFixed(2)}</TableCell>
                         <TableCell>{product.sales_rate_exc_dis_and_tax.toFixed(2)}</TableCell>
                         <TableCell>
-                          <Badge
-                            className={product.is_active ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={togglingProductId === product.id}
+                            onClick={() => void handleToggleStatus(product)}
+                            className={cn(
+                              "h-8 min-w-[108px] font-medium transition-colors",
+                              product.is_active
+                                ? "border-green-200 bg-green-50 text-green-700 hover:bg-green-100 hover:text-green-800"
+                                : "border-red-200 bg-red-50 text-red-700 hover:bg-red-100 hover:text-red-800",
+                              togglingProductId === product.id && "opacity-80"
+                            )}
+                            title={
+                              product.is_active
+                                ? "Click to mark inactive"
+                                : "Click to mark active"
+                            }
                           >
-                            {product.is_active ? "Active" : "Inactive"}
-                          </Badge>
+                            {togglingProductId === product.id ? (
+                              <>
+                                <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin shrink-0" />
+                                Saving...
+                              </>
+                            ) : product.is_active ? (
+                              "Active"
+                            ) : (
+                              "Inactive"
+                            )}
+                          </Button>
                         </TableCell>
                         <TableCell>
                           <div className="flex space-x-2">
                             <Button size="sm" variant="outline" onClick={() => openEditDialog(product)}>
                               <Edit className="h-3 w-3" />
                             </Button>
-                            {/* <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleToggleStatus(product.id)}
-                              className={
-                                product.is_active
-                                  ? "text-red-600 hover:text-red-700"
-                                  : "text-green-600 hover:text-green-700"
-                              }
-                            >
-                              {product.is_active ? "Deactivate" : "Activate"}
-                            </Button> */}
                             <Button
                               size="sm"
                               variant="outline"

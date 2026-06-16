@@ -496,6 +496,9 @@ export function NewSale() {
   // Client-side filtering for instant search results
   // This provides instant feedback without API calls
   const filteredProducts = products.filter((product) => {
+    if (!product.is_active) return false;
+    if (product.display_on_pos === false) return false;
+
     // Filter by category
     const matchesCategory =
       selectedCategory === "all" || product.categoryId === selectedCategory;

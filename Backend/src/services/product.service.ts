@@ -934,8 +934,8 @@ export class ProductService {
         search,
         category_id,
         subcategory_id,
-        is_active = true,
-        display_on_pos = true,
+        is_active,
+        display_on_pos,
         branch_id,
         fetchAll = false,
     }: {
