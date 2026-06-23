@@ -235,6 +235,16 @@ export function SaleEditor({ sale, open, loading = false, onOpenChange, onSucces
   const changeAmount = paymentMethod === "CREDIT" ? 0 : Math.max(0, paid - grandTotal);
   const dueAmount = Math.max(0, grandTotal - paid);
 
+  // Switching the payment method resets the paid amount to the intent of that method:
+  // - CREDIT  → 0, so the customer owes the full total (a partial upfront can be typed back in)
+  // - non-credit → full total, i.e. fully paid at the counter
+  // Without this, converting a paid cash sale to credit kept paid=total, which made the
+  // ledger post an offsetting payment and net the balance to 0 instead of charging the customer.
+  const handlePaymentMethodChange = (method: string) => {
+    setPaymentMethod(method);
+    setPaidAmount(method === "CREDIT" ? 0 : grandTotal);
+  };
+
   const updateItem = (index: number, patch: Partial<EditorLine>) => {
     setItems((prev) => {
       const next = [...prev];
@@ -490,13 +500,10 @@ export function SaleEditor({ sale, open, loading = false, onOpenChange, onSucces
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-gray-500 uppercase tracking-wider">Payment Method</label>
-                  <Select value={paymentMethod} onValueChange={setPaymentMethod}>
+                  <Select value={paymentMethod} onValueChange={handlePaymentMethodChange}>
                     <SelectTrigger className="h-11"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="CASH">Cash</SelectItem>
-                      <SelectItem value="CARD">Bank Card</SelectItem>
-                      <SelectItem value="MOBILE_MONEY">Mobile Money</SelectItem>
-                      <SelectItem value="BANK_TRANSFER">Bank Transfer</SelectItem>
                       <SelectItem value="CREDIT">Credit</SelectItem>
                     </SelectContent>
                   </Select>

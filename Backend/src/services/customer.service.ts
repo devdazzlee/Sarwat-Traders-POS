@@ -189,7 +189,9 @@ class CustomerService {
 
         await prisma.$transaction(
             async (tx) => {
-                // Credit ledger blocks customer delete (no ON DELETE CASCADE in DB)
+                // Credit ledger + its revision audit trail block customer delete
+                // (required FK, no ON DELETE CASCADE in DB)
+                await tx.customerSaleLedgerRevision.deleteMany({ where: { customer_id: customerId } });
                 await tx.customerLedger.deleteMany({ where: { customer_id: customerId } });
 
                 await tx.customerSession.deleteMany({ where: { customer_id: customerId } });
