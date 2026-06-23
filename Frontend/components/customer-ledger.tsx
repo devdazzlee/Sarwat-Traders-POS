@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -34,7 +34,6 @@ import {
   Download,
   Search,
   Receipt,
-  RefreshCw,
   ChevronUp,
   ChevronDown,
   DollarSign,
@@ -48,6 +47,10 @@ import {
 import { cn } from "@/lib/utils";
 import apiClient from "@/lib/apiClient";
 import { notifyDashboardStatsChanged } from "@/lib/dashboard-stats-sync";
+import {
+  CUSTOMER_LEDGER_REFRESH_EVENT,
+  type CustomerLedgerRefreshDetail,
+} from "@/lib/customer-ledger-sync";
 import { API_BASE } from "@/config/constants";
 import { useToast } from "@/hooks/use-toast";
 import { PageLoader } from "@/components/ui/page-loader";
@@ -402,7 +405,6 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
   const [paymentDescription, setPaymentDescription] = useState("");
   const [paymentSaleKey, setPaymentSaleKey] = useState<string>("");
   const [isSubmittingPayment, setIsSubmittingPayment] = useState(false);
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<LedgerEntry | null>(null);
   const [editAmount, setEditAmount] = useState("");
@@ -417,6 +419,8 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
   const [viewEntry, setViewEntry] = useState<EnrichedLedgerEntry | null>(null);
   const [billSaleRef, setBillSaleRef] = useState<string | null>(null);
   const [billDialogOpen, setBillDialogOpen] = useState(false);
+  const fetchInFlightRef = useRef<Promise<boolean> | null>(null);
+  const hasLoadedRef = useRef(false);
 
   const openSaleBill = useCallback((entry: LedgerEntry) => {
     const ref = getSaleBillRef(entry);
@@ -432,60 +436,81 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
     setBillDialogOpen(true);
   }, [toast]);
 
-  const fetchLedgerData = useCallback(async (options?: { silent?: boolean }): Promise<boolean> => {
-    const silent = options?.silent ?? false;
-    if (silent) {
-      setIsRefreshing(true);
-    } else {
+  const fetchLedgerData = useCallback(async (): Promise<boolean> => {
+    if (fetchInFlightRef.current) {
+      return fetchInFlightRef.current;
+    }
+
+    const showInitialLoader = !hasLoadedRef.current;
+    if (showInitialLoader) {
       setLoading(true);
     }
-    try {
-      const [custRes, ledgerRes] = await Promise.all([
-        apiClient.get(`${API_BASE}/customer/${customerId}`, {
-          headers: { "X-Skip-Offline-Cache": "true" },
-        }),
-        apiClient.get(`${API_BASE}/customer-ledger/${customerId}`, {
-          params: {
-            limit: 200,
-            ...(dateFrom ? { startDate: format(dateFrom, "yyyy-MM-dd") } : {}),
-            ...(dateTo ? { endDate: format(dateTo, "yyyy-MM-dd") } : {}),
-          },
-          headers: { "X-Skip-Offline-Cache": "true" },
-        }),
-      ]);
 
-      setCustomer(custRes.data.data);
+    const request = (async () => {
+      try {
+        const [custRes, ledgerRes] = await Promise.all([
+          apiClient.get(`${API_BASE}/customer/${customerId}`, {
+            headers: { "X-Skip-Offline-Cache": "true" },
+          }),
+          apiClient.get(`${API_BASE}/customer-ledger/${customerId}`, {
+            params: {
+              limit: 200,
+              ...(dateFrom ? { startDate: format(dateFrom, "yyyy-MM-dd") } : {}),
+              ...(dateTo ? { endDate: format(dateTo, "yyyy-MM-dd") } : {}),
+            },
+            headers: { "X-Skip-Offline-Cache": "true" },
+          }),
+        ]);
 
-      const data = ledgerRes.data.data;
-      setEntries(data.entries || []);
-      const bal = Number(data.summary?.currentBalance ?? 0);
-      setSummary({
-        totalDebits: data.summary?.totalDebits ?? data.summary?.totalSales ?? 0,
-        totalCredits: data.summary?.totalCredits ?? data.summary?.totalPayments ?? 0,
-        balance: bal,
-        balanceDue: data.summary?.balanceDue ?? Math.max(0, bal),
-        advanceBalance: data.summary?.advanceBalance ?? Math.max(0, -bal),
-      });
-      return true;
-    } catch (error: any) {
-      toast({
-        title: "Error",
-        description: error.response?.data?.message || "Failed to load ledger",
-        variant: "destructive",
-      });
-      return false;
-    } finally {
-      if (silent) {
-        setIsRefreshing(false);
-      } else {
-        setLoading(false);
+        setCustomer(custRes.data.data);
+
+        const data = ledgerRes.data.data;
+        setEntries(data.entries || []);
+        const bal = Number(data.summary?.currentBalance ?? 0);
+        setSummary({
+          totalDebits: data.summary?.totalDebits ?? data.summary?.totalSales ?? 0,
+          totalCredits: data.summary?.totalCredits ?? data.summary?.totalPayments ?? 0,
+          balance: bal,
+          balanceDue: data.summary?.balanceDue ?? Math.max(0, bal),
+          advanceBalance: data.summary?.advanceBalance ?? Math.max(0, -bal),
+        });
+        hasLoadedRef.current = true;
+        return true;
+      } catch (error: any) {
+        toast({
+          title: "Error",
+          description: error.response?.data?.message || "Failed to load ledger",
+          variant: "destructive",
+        });
+        return false;
+      } finally {
+        fetchInFlightRef.current = null;
+        if (showInitialLoader) {
+          setLoading(false);
+        }
       }
-    }
+    })();
+
+    fetchInFlightRef.current = request;
+    return request;
   }, [customerId, dateFrom, dateTo, toast]);
 
   useEffect(() => {
-    fetchLedgerData();
+    void fetchLedgerData();
   }, [fetchLedgerData]);
+
+  useEffect(() => {
+    const onRefresh = (event: Event) => {
+      const detail = (event as CustomEvent<CustomerLedgerRefreshDetail>).detail;
+      if (detail?.customerId && detail.customerId !== customerId) return;
+      void fetchLedgerData();
+    };
+
+    window.addEventListener(CUSTOMER_LEDGER_REFRESH_EVENT, onRefresh);
+    return () => {
+      window.removeEventListener(CUSTOMER_LEDGER_REFRESH_EVENT, onRefresh);
+    };
+  }, [customerId, fetchLedgerData]);
 
   const filteredEntries = entries
     .filter((e) => {
@@ -819,7 +844,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
         headers: { "X-Operation-Id": operationId },
       });
 
-      const synced = await fetchLedgerData({ silent: true });
+      const synced = await fetchLedgerData();
       if (!synced) return;
 
       notifyDashboardStatsChanged();
@@ -885,7 +910,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
         { headers: { "X-Skip-Offline-Cache": "true" } },
       );
 
-      const synced = await fetchLedgerData({ silent: true });
+      const synced = await fetchLedgerData();
       if (!synced) return;
 
       toast({
@@ -918,7 +943,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
         },
       );
 
-      const synced = await fetchLedgerData({ silent: true });
+      const synced = await fetchLedgerData();
       if (!synced) return;
 
       toast({
@@ -951,8 +976,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
 
   const netBalance = getNetBalancePresentation(summary.balance);
   const selectedTarget = paymentTargets.find((t) => t.key === paymentSaleKey);
-  const isLedgerBusy =
-    isRefreshing || isSubmittingPayment || isSubmittingEdit || isDeletingEntry;
+  const isLedgerBusy = isSubmittingPayment || isSubmittingEdit || isDeletingEntry;
 
   return (
     <div className="flex flex-col min-h-0 flex-1 bg-slate-100 h-full">
@@ -975,16 +999,6 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2 shrink-0">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => fetchLedgerData({ silent: true })}
-              disabled={isRefreshing}
-              className="h-9"
-            >
-              <RefreshCw className={`h-4 w-4 sm:mr-1.5 ${isRefreshing ? "animate-spin" : ""}`} />
-              <span className="hidden sm:inline">Refresh</span>
-            </Button>
             <Button variant="outline" size="sm" onClick={handleDownloadPDF} className="h-9 hidden md:inline-flex">
               <Download className="h-4 w-4 mr-1.5" /> PDF
             </Button>
@@ -1005,17 +1019,8 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
       </div>
 
       <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 lg:p-6">
-        <div className="max-w-[1400px] mx-auto w-full space-y-5 relative">
-        {isLedgerBusy && (
-          <div className="absolute inset-0 z-20 flex items-start justify-center rounded-xl bg-slate-100/75 pt-24 backdrop-blur-[1px]">
-            <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
-              <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
-              <span className="text-sm font-medium text-slate-700">Syncing ledger...</span>
-            </div>
-          </div>
-        )}
-
-        <div className={`grid grid-cols-2 lg:grid-cols-4 gap-3 transition-opacity ${isLedgerBusy ? "opacity-50" : ""}`}>
+        <div className="max-w-[1400px] mx-auto w-full space-y-5">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <div className="bg-white rounded-lg border border-rose-100 border-l-4 border-l-rose-500 p-4">
             <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">Added to Balance</p>
             <p className="text-xl font-semibold text-rose-700 mt-1 tabular-nums">{money(summary.totalDebits)}</p>
@@ -1040,14 +1045,14 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
           </div>
         </div>
 
-        <div className={`flex flex-wrap items-center gap-x-5 gap-y-1 rounded-lg border border-slate-200 bg-slate-50/80 px-4 py-2 text-[11px] text-slate-600 transition-opacity ${isLedgerBusy ? "opacity-50" : ""}`}>
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-1 rounded-lg border border-slate-200 bg-slate-50/80 px-4 py-2 text-[11px] text-slate-600">
           <span className="font-medium text-slate-700">Legend:</span>
           <span><span className="inline-block w-2 h-2 rounded-full bg-rose-500 mr-1.5 align-middle" />Added to balance</span>
           <span><span className="inline-block w-2 h-2 rounded-full bg-emerald-500 mr-1.5 align-middle" />Paid / reduced</span>
           <span><span className="inline-block w-2 h-2 rounded-full bg-amber-500 mr-1.5 align-middle" />Amount due</span>
         </div>
 
-        <div className={`bg-white rounded-lg border border-slate-200 transition-opacity ${isLedgerBusy ? "opacity-50" : ""}`}>
+        <div className="bg-white rounded-lg border border-slate-200">
           <div className="px-4 py-3 border-b border-slate-200">
             <div className="flex items-center justify-between gap-2">
               <h2 className="text-sm font-semibold text-slate-900">Statement of Account</h2>
@@ -1087,9 +1092,9 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                 <col className="w-[130px]" />
                 <col />
                 <col className="w-[150px]" />
-                <col className="w-[104px]" />
-                <col className="w-[104px]" />
-                <col className="w-[104px]" />
+                <col className="w-[118px]" />
+                <col className="w-[118px]" />
+                <col className="w-[118px]" />
                 <col className="w-[210px]" />
               </colgroup>
               <thead>
@@ -1245,21 +1250,25 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                       Totals
                     </td>
                     <td className="px-3 py-4 text-right text-sm text-slate-500 tabular-nums">—</td>
-                    <td className="px-3 py-4 text-right text-sm font-bold tabular-nums whitespace-nowrap">
-                      {summary.totalDebits > 0.009 && (
-                        <span className="text-rose-600">+{money(summary.totalDebits)}</span>
-                      )}
-                      {summary.totalDebits > 0.009 && summary.totalCredits > 0.009 && (
-                        <span className="text-slate-400 mx-1">/</span>
-                      )}
-                      {summary.totalCredits > 0.009 && (
-                        <span className="text-emerald-600">−{money(summary.totalCredits)}</span>
-                      )}
-                      {summary.totalDebits <= 0.009 && summary.totalCredits <= 0.009 && (
-                        <span className="text-slate-400">0</span>
-                      )}
+                    <td className="px-3 py-4 text-right text-sm font-bold tabular-nums align-middle">
+                      <div className="flex flex-col items-end gap-0.5 leading-tight">
+                        {summary.totalDebits > 0.009 && (
+                          <span className="text-rose-600 whitespace-nowrap">+{money(summary.totalDebits)}</span>
+                        )}
+                        {summary.totalCredits > 0.009 && (
+                          <span className="text-emerald-600 whitespace-nowrap">−{money(summary.totalCredits)}</span>
+                        )}
+                        {summary.totalDebits <= 0.009 && summary.totalCredits <= 0.009 && (
+                          <span className="text-slate-400">0</span>
+                        )}
+                      </div>
                     </td>
-                    <td className={cn("px-3 py-4 text-right text-base font-bold tabular-nums whitespace-nowrap", netBalance.className)}>
+                    <td
+                      className={cn(
+                        "px-3 py-4 text-right text-base font-bold tabular-nums whitespace-nowrap align-middle bg-slate-100/80",
+                        netBalance.className,
+                      )}
+                    >
                       {netBalance.variant === "settled" ? "0" : money(netBalance.amount)}
                     </td>
                     <td />
@@ -1595,7 +1604,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
               {isSubmittingPayment ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  {isRefreshing ? "Syncing ledger..." : "Saving payment..."}
+                  Saving payment...
                 </>
               ) : (
                 "Save Payment"
@@ -1622,7 +1631,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
             <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-2 rounded-lg bg-white/85 backdrop-blur-[1px]">
               <Loader2 className="h-6 w-6 animate-spin text-blue-600" />
               <p className="text-sm font-medium text-slate-700">
-                {isRefreshing ? "Updating ledger..." : "Saving changes..."}
+                Saving changes...
               </p>
             </div>
           )}
@@ -1704,7 +1713,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
               {isSubmittingEdit ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  {isRefreshing ? "Syncing ledger..." : "Saving changes..."}
+                  Saving changes...
                 </>
               ) : (
                 "Save Changes"
@@ -1729,7 +1738,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
             <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-2 rounded-lg bg-white/85 backdrop-blur-[1px]">
               <Loader2 className="h-6 w-6 animate-spin text-red-600" />
               <p className="text-sm font-medium text-slate-700">
-                {isRefreshing ? "Updating ledger..." : "Deleting entry..."}
+                Deleting entry...
               </p>
             </div>
           )}
@@ -1780,7 +1789,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
               {isDeletingEntry ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  {isRefreshing ? "Syncing ledger..." : "Deleting..."}
+                  Deleting...
                 </>
               ) : (
                 "Delete Entry"

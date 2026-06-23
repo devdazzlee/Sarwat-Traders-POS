@@ -13,6 +13,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import apiClient from "@/lib/apiClient";
+import { notifyCustomerLedgerChanged } from "@/lib/customer-ledger-sync";
+import { notifyDashboardStatsChanged } from "@/lib/dashboard-stats-sync";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -366,6 +368,9 @@ export function SaleEditor({ sale, open, loading = false, onOpenChange, onSucces
         customerId: selectedCustomerId,
         notes,
       });
+
+      notifyDashboardStatsChanged();
+      notifyCustomerLedgerChanged(selectedCustomerId ?? sale.customer_id ?? undefined);
 
       toast.success("Sale updated successfully.");
       onSuccess();

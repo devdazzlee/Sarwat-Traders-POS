@@ -80,6 +80,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useHoldSales } from "@/hooks/use-hold-sales";
 import { normalizeBranchId } from "@/lib/branch-utils";
 import { notifyDashboardStatsChanged } from "@/lib/dashboard-stats-sync";
+import { notifyCustomerLedgerChanged } from "@/lib/customer-ledger-sync";
 
 type SalePaymentMethod = "Cash" | "Credit" | "Card";
 
@@ -1238,6 +1239,7 @@ export function NewSale() {
             saleData = saleResponse.data.data;
             transactionId = saleData.sale_number || generateTransactionId();
             notifyDashboardStatsChanged();
+            notifyCustomerLedgerChanged(payload.customerId);
           } catch (error: any) {
             // Distinguish real API errors (validation, business rules) from network failures.
             // - 4xx/5xx with a server response → surface the actual error to the user, do NOT silently queue

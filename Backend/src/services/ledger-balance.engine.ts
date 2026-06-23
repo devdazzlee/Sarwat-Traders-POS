@@ -1,6 +1,11 @@
 import { LedgerEntryType, Prisma, SaleLedgerRevisionField } from '@prisma/client';
 import { prisma } from '../prisma/client';
-import { isSaleLinkedShadowAdjustment } from '../utils/sale-ledger-revision';
+import {
+  isSaleLinkedShadowAdjustment,
+  isSaleManagedInSalePayment,
+  saleEditPaymentDescription,
+  saleUpfrontPaymentDescription,
+} from '../utils/sale-ledger-revision';
 
 export type TxClient = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
 
@@ -176,6 +181,7 @@ export class LedgerBalanceEngine {
       description?: string;
       referenceNo?: string;
       saleId?: string;
+      skipBalanceRecalc?: boolean;
     }
   ) {
     if (params.amount <= 0) throw new Error('Payment amount must be positive');
@@ -193,7 +199,9 @@ export class LedgerBalanceEngine {
       },
     });
 
-    await this.recalculateRunningBalances(tx, params.customerId);
+    if (!params.skipBalanceRecalc) {
+      await this.recalculateRunningBalances(tx, params.customerId);
+    }
     return entry;
   }
 
@@ -328,11 +336,7 @@ export class LedgerBalanceEngine {
       if (shadows.length === 0) continue;
 
       const creditSale = saleEntries.find((e) => e.entry_type === LedgerEntryType.CREDIT_SALE);
-      const upfrontPayment = saleEntries.find(
-        (e) =>
-          e.entry_type === LedgerEntryType.PAYMENT_RECEIVED &&
-          e.description?.toLowerCase().startsWith('upfront payment on'),
-      );
+      const upfrontPayment = saleEntries.find((e) => isSaleManagedInSalePayment(e));
       const cashSale = saleEntries.find((e) => e.entry_type === LedgerEntryType.CASH_SALE);
 
       let running = 0;
@@ -423,6 +427,9 @@ export class LedgerBalanceEngine {
       cashSaleAmount: number;
       createdBy?: string;
       reason?: string;
+      skipBalanceRecalc?: boolean;
+      /** When true, sale-linked payment rows use edit label (not "Upfront payment"). */
+      useSaleEditPaymentLabel?: boolean;
     },
   ) {
     const { customerId, saleNumber } = params;
@@ -435,11 +442,7 @@ export class LedgerBalanceEngine {
     });
 
     let creditSale = existing.find((e) => e.entry_type === LedgerEntryType.CREDIT_SALE);
-    let upfrontPayment = existing.find(
-      (e) =>
-        e.entry_type === LedgerEntryType.PAYMENT_RECEIVED &&
-        e.description?.toLowerCase().startsWith('upfront payment on'),
-    );
+    let upfrontPayment = existing.find((e) => isSaleManagedInSalePayment(e));
     let cashSale = existing.find((e) => e.entry_type === LedgerEntryType.CASH_SALE);
     const staleAdjustments = existing.filter((e) => isSaleLinkedShadowAdjustment(e));
 
@@ -450,15 +453,20 @@ export class LedgerBalanceEngine {
         orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
       });
       creditSale = refreshed.find((e) => e.entry_type === LedgerEntryType.CREDIT_SALE);
-      upfrontPayment = refreshed.find(
-        (e) =>
-          e.entry_type === LedgerEntryType.PAYMENT_RECEIVED &&
-          e.description?.toLowerCase().startsWith('upfront payment on'),
-      );
+      upfrontPayment = refreshed.find((e) => isSaleManagedInSalePayment(e));
       cashSale = refreshed.find((e) => e.entry_type === LedgerEntryType.CASH_SALE);
     }
 
     const revisionReason = params.reason?.trim() || 'Sale updated';
+    const resolveSalePaymentDescription = (existingDescription?: string | null) => {
+      if (params.useSaleEditPaymentLabel) {
+        return saleEditPaymentDescription(saleNumber);
+      }
+      if (existingDescription?.trim()) {
+        return existingDescription;
+      }
+      return saleUpfrontPaymentDescription(saleNumber);
+    };
 
     if (isCredit) {
       const owed = Math.max(0, params.creditOwedAmount);
@@ -530,7 +538,7 @@ export class LedgerBalanceEngine {
             where: { id: upfrontPayment.id },
             data: {
               amount: new Prisma.Decimal(paid),
-              description: `Upfront payment on ${saleNumber}`,
+              description: resolveSalePaymentDescription(upfrontPayment.description),
             },
           });
         } else {
@@ -539,7 +547,7 @@ export class LedgerBalanceEngine {
             amount: paid,
             saleId: saleNumber,
             createdBy: params.createdBy ?? '',
-            description: `Upfront payment on ${saleNumber}`,
+            description: resolveSalePaymentDescription(),
           });
         }
       } else if (upfrontPayment) {
@@ -622,7 +630,65 @@ export class LedgerBalanceEngine {
       }
     }
 
-    await this.recalculateRunningBalances(tx, customerId);
+    if (!params.skipBalanceRecalc) {
+      await this.recalculateRunningBalances(tx, customerId);
+    }
+  }
+
+  /**
+   * Sync credit-sale ledger rows from sale totals.
+   * Credit row = invoice amount still charged on account (total minus paid-at-sale on this sale).
+   * Account-level Receive Payment (FIFO) does NOT remove or shrink credit-sale rows.
+   */
+  async syncCreditSaleLedgerFromRecord(
+    tx: TxClient,
+    params: {
+      customerId: string;
+      saleNumber: string;
+      totalAmount: number;
+      paymentReceived: number;
+      createdBy?: string;
+      reason?: string;
+      skipBalanceRecalc?: boolean;
+      useSaleEditPaymentLabel?: boolean;
+    },
+  ) {
+    const total = Math.max(0, params.totalAmount);
+
+    const saleLedger = await tx.customerLedger.findMany({
+      where: { customer_id: params.customerId, sale_id: params.saleNumber },
+      select: { entry_type: true, amount: true, description: true },
+    });
+
+    const existingUpfront = saleLedger.find((e) => isSaleManagedInSalePayment(e));
+    const upfrontFromLedger = existingUpfront ? Number(existingUpfront.amount) : 0;
+
+    let creditOwed: number;
+    let upfrontPaymentAmount: number;
+
+    if (params.useSaleEditPaymentLabel) {
+      const paidAtSale = Math.max(0, Math.min(params.paymentReceived, total));
+      creditOwed = Math.max(0, Number((total - paidAtSale).toFixed(3)));
+      upfrontPaymentAmount =
+        paidAtSale > 0.009 && creditOwed > 0.009 ? paidAtSale : paidAtSale > 0.009 ? paidAtSale : 0;
+    } else {
+      const paidAtSale = upfrontFromLedger;
+      creditOwed = Math.max(0, Number((total - paidAtSale).toFixed(3)));
+      upfrontPaymentAmount = paidAtSale > 0.009 ? paidAtSale : 0;
+    }
+
+    await this.syncSaleLedgerEntries(tx, {
+      customerId: params.customerId,
+      saleNumber: params.saleNumber,
+      paymentMethod: 'CREDIT',
+      creditOwedAmount: creditOwed,
+      upfrontPaymentAmount,
+      cashSaleAmount: 0,
+      createdBy: params.createdBy,
+      reason: params.reason,
+      skipBalanceRecalc: params.skipBalanceRecalc,
+      useSaleEditPaymentLabel: params.useSaleEditPaymentLabel,
+    });
   }
 }
 

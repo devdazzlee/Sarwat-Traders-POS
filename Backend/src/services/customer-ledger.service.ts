@@ -2,7 +2,10 @@ import { Prisma, LedgerEntryType } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { AppError } from '../utils/apiError';
 import { ledgerBalanceEngine, TxClient } from './ledger-balance.engine';
-import { isSaleLinkedShadowAdjustment } from '../utils/sale-ledger-revision';
+import { isSaleLinkedShadowAdjustment, isSaleManagedInSalePayment } from '../utils/sale-ledger-revision';
+
+/** Ledger writes can sync many sale rows — default Prisma 5s timeout is too short. */
+const LEDGER_WRITE_TX_OPTIONS = { maxWait: 20_000, timeout: 60_000 } as const;
 
 class CustomerLedgerService {
   /**
@@ -57,6 +60,177 @@ class CustomerLedgerService {
     }
 
     return remaining;
+  }
+
+  /**
+   * Align one sale's ledger rows with its sale record.
+   * Separates paid-at-sale (upfront row) from later collections (PAYMENT_RECEIVED rows).
+   */
+  private async syncSingleSaleLedgerFromRecord(
+    tx: TxClient,
+    customerId: string,
+    sale: { sale_number: string; total_amount: Prisma.Decimal; payment_received: Prisma.Decimal },
+    options?: { skipBalanceRecalc?: boolean },
+  ) {
+    await ledgerBalanceEngine.syncCreditSaleLedgerFromRecord(tx, {
+      customerId,
+      saleNumber: sale.sale_number,
+      totalAmount: Number(sale.total_amount),
+      paymentReceived: Number(sale.payment_received),
+      reason: 'Auto-sync from sale record',
+      skipBalanceRecalc: options?.skipBalanceRecalc ?? true,
+    });
+  }
+
+  private async syncCustomerSaleLedgersFromSales(
+    tx: TxClient,
+    customerId: string,
+    options?: { onlySettled?: boolean },
+  ) {
+    const sales = await tx.sale.findMany({
+      where: {
+        customer_id: customerId,
+        status: 'COMPLETED',
+        payment_method: 'CREDIT',
+        ...(options?.onlySettled
+          ? { OR: [{ payment_status: 'PAID' }, { payment_status: 'PARTIAL' }] }
+          : {}),
+      },
+      select: {
+        sale_number: true,
+        total_amount: true,
+        payment_received: true,
+      },
+    });
+
+    for (const sale of sales) {
+      await this.syncSingleSaleLedgerFromRecord(tx, customerId, sale, {
+        skipBalanceRecalc: true,
+      });
+    }
+  }
+
+  /** Single reconciliation pipeline — run on manual entry edits/deletes only. */
+  private async reconcileCustomerLedger(tx: TxClient, customerId: string) {
+    await this.reconcileInvoicePayments(tx, customerId);
+    await ledgerBalanceEngine.consolidateSaleLinkedAdjustments(tx, customerId);
+    await ledgerBalanceEngine.recalculateRunningBalances(tx, customerId);
+  }
+
+  /**
+   * Lighter reconcile after recording a payment — updates sale FIFO allocation and balances only.
+   * Does NOT sync/delete credit-sale ledger rows (account payments are separate ledger lines).
+   */
+  private async reconcileCustomerLedgerAfterPayment(tx: TxClient, customerId: string) {
+    await this.reconcileInvoicePayments(tx, customerId);
+    await ledgerBalanceEngine.recalculateRunningBalances(tx, customerId);
+  }
+
+  /** Fast check: sale-linked ledger rows vs sale.payment_received. */
+  private async saleLedgerDriftDetected(tx: TxClient, customerId: string): Promise<boolean> {
+    const sales = await tx.sale.findMany({
+      where: { customer_id: customerId, status: 'COMPLETED', payment_method: 'CREDIT' },
+      select: { sale_number: true, total_amount: true, payment_received: true },
+    });
+    if (sales.length === 0) return false;
+
+    const saleLedger = await tx.customerLedger.findMany({
+      where: { customer_id: customerId, sale_id: { not: null } },
+      select: { sale_id: true, entry_type: true, amount: true, description: true },
+    });
+
+    const creditBySale = new Map<string, number>();
+    const upfrontBySale = new Map<string, number>();
+    for (const row of saleLedger) {
+      const saleId = row.sale_id as string;
+      if (row.entry_type === LedgerEntryType.CREDIT_SALE) {
+        creditBySale.set(saleId, Number(row.amount));
+      }
+      if (
+        row.entry_type === LedgerEntryType.PAYMENT_RECEIVED &&
+        isSaleManagedInSalePayment(row)
+      ) {
+        upfrontBySale.set(saleId, Number(row.amount));
+      }
+    }
+
+    for (const sale of sales) {
+      const total = Number(sale.total_amount);
+      const paid = Number(sale.payment_received);
+      const expectedCredit = Math.max(0, Number((total - paid).toFixed(3)));
+      const ledgerCredit = creditBySale.get(sale.sale_number) ?? 0;
+
+      if (Math.abs(expectedCredit - ledgerCredit) > 0.009) return true;
+      if (expectedCredit <= 0.009 && creditBySale.has(sale.sale_number)) return true;
+
+      const laterCollected = saleLedger
+        .filter(
+          (e) =>
+            e.sale_id === sale.sale_number &&
+            e.entry_type === LedgerEntryType.PAYMENT_RECEIVED &&
+            !isSaleManagedInSalePayment(e),
+        )
+        .reduce((sum, e) => sum + Number(e.amount), 0);
+      const paidAtSale = Math.max(0, Number((paid - laterCollected).toFixed(3)));
+      const expectedUpfront = expectedCredit > 0.009 && paidAtSale > 0.009 ? paidAtSale : 0;
+      const ledgerUpfront = upfrontBySale.get(sale.sale_number) ?? 0;
+      if (Math.abs(expectedUpfront - ledgerUpfront) > 0.009) return true;
+      if (expectedUpfront <= 0.009 && upfrontBySale.has(sale.sale_number)) return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Read-only: derive display balances from existing rows — never mutates stored ledger data.
+   */
+  private computeLedgerTotals(
+    entries: Array<{
+      id: string;
+      entry_type: LedgerEntryType;
+      amount: Prisma.Decimal;
+      balance_after: Prisma.Decimal;
+      reference_no: string | null;
+      description: string | null;
+    }>,
+  ) {
+    const debitCreditById = new Map<string, { debit: number; credit: number }>();
+    const runningBalances = new Map<string, number>();
+    let running = 0;
+    let totalDebits = 0;
+    let totalCredits = 0;
+    let totalSales = 0;
+    let totalPayments = 0;
+
+    for (const e of entries) {
+      const delta = this.computeSignedDelta(e, running);
+      let debit = 0;
+      let credit = 0;
+      if (delta > 0.009) {
+        debit = delta;
+        totalDebits += delta;
+      } else if (delta < -0.009) {
+        credit = Math.abs(delta);
+        totalCredits += Math.abs(delta);
+      }
+      running = Number((running + delta).toFixed(3));
+      debitCreditById.set(e.id, { debit, credit });
+      runningBalances.set(e.id, running);
+
+      const amt = Number(e.amount);
+      if (e.entry_type === 'CREDIT_SALE') totalSales += amt;
+      else if (e.entry_type === 'PAYMENT_RECEIVED') totalPayments += amt;
+    }
+
+    return {
+      debitCreditById,
+      runningBalances,
+      currentBalance: running,
+      totalDebits,
+      totalCredits,
+      totalSales,
+      totalPayments,
+    };
   }
 
   /**
@@ -144,7 +318,8 @@ class CustomerLedgerService {
   }) {
     if (amount <= 0) throw new AppError(400, 'Payment amount must be positive');
 
-    return prisma.$transaction(async (tx) => {
+    return prisma.$transaction(
+      async (tx) => {
       const customer = await tx.customer.findUnique({
         where: { id: customerId },
         select: { id: true, outstanding_balance: true },
@@ -216,11 +391,16 @@ class CustomerLedgerService {
             : 'Payment received'),
         referenceNo: referenceNo?.trim() || resolvedSaleNumber,
         saleId: resolvedSaleNumber,
+        skipBalanceRecalc: true,
       });
+
+      await this.reconcileCustomerLedgerAfterPayment(tx, customerId);
 
       const newBalance = await ledgerBalanceEngine.getRunningBalance(tx, customerId);
       return { entry, newBalance };
-    });
+    },
+      LEDGER_WRITE_TX_OPTIONS,
+    );
   }
 
   /** Rebuild running balances from entry amounts and sync customer outstanding_balance. */
@@ -353,7 +533,8 @@ class CustomerLedgerService {
     direction?: 'debit' | 'credit';
     updatedBy: string;
   }) {
-    return prisma.$transaction(async (tx) => {
+    return prisma.$transaction(
+      async (tx) => {
       const entry = await tx.customerLedger.findFirst({
         where: { id: entryId, customer_id: customerId },
       });
@@ -409,10 +590,13 @@ class CustomerLedgerService {
 
       if (entry.entry_type === LedgerEntryType.PAYMENT_RECEIVED) {
         await this.reapplyAllPaymentAllocations(tx, customerId);
+        await this.reconcileCustomerLedger(tx, customerId);
       }
 
       return { entry: updated };
-    });
+    },
+      LEDGER_WRITE_TX_OPTIONS,
+    );
   }
 
   /**
@@ -430,7 +614,8 @@ class CustomerLedgerService {
     deletedBy: string;
     reason?: string;
   }) {
-    return prisma.$transaction(async (tx) => {
+    return prisma.$transaction(
+      async (tx) => {
       const entry = await tx.customerLedger.findFirst({
         where: { id: entryId, customer_id: customerId },
       });
@@ -476,8 +661,58 @@ class CustomerLedgerService {
         });
       }
 
+      if (entry.entry_type === LedgerEntryType.PAYMENT_RECEIVED) {
+        await this.reconcileCustomerLedger(tx, customerId);
+      }
+
       return { deletedEntryId: entryId };
-    });
+    },
+      LEDGER_WRITE_TX_OPTIONS,
+    );
+  }
+
+  /**
+   * READ-ONLY: credit sales missing from ledger after erroneous payment-sync deletes.
+   * Reconstructs statement lines from sale records without writing to the database.
+   */
+  private buildMissingCreditSaleRows(
+    customerId: string,
+    creditSales: Array<{
+      id: string;
+      sale_number: string;
+      total_amount: Prisma.Decimal;
+      sale_date: Date | null;
+      created_at: Date;
+    }>,
+    ledgerRows: Array<{ sale_id: string | null; entry_type: LedgerEntryType }>,
+  ) {
+    const creditSaleRefs = new Set(
+      ledgerRows
+        .filter((e) => e.entry_type === LedgerEntryType.CREDIT_SALE && e.sale_id?.trim())
+        .map((e) => e.sale_id!.trim()),
+    );
+
+    return creditSales
+      .filter((s) => !creditSaleRefs.has(s.sale_number))
+      .map((s) => ({
+        id: `synthetic-credit-${s.sale_number}`,
+        customer_id: customerId,
+        entry_type: LedgerEntryType.CREDIT_SALE,
+        amount: s.total_amount,
+        description: `Credit sale - ${s.sale_number}`,
+        sale_id: s.sale_number,
+        reference_no: s.sale_number,
+        balance_after: new Prisma.Decimal(0),
+        created_at: s.sale_date ?? s.created_at,
+        updated_at: s.sale_date ?? s.created_at,
+        created_by: 'system',
+      }));
+  }
+
+  private entryInDateRange(createdAt: Date, startDate?: Date, endDate?: Date) {
+    if (startDate && createdAt < startDate) return false;
+    if (endDate && createdAt > endDate) return false;
+    return true;
   }
 
   /**
@@ -510,51 +745,30 @@ class CustomerLedgerService {
     });
     if (!customer) throw new AppError(404, 'Customer not found');
 
-    await prisma.$transaction(async (tx) => {
-      await this.reconcileInvoicePayments(tx, customerId);
-      await ledgerBalanceEngine.consolidateSaleLinkedAdjustments(tx, customerId);
-      await ledgerBalanceEngine.recalculateRunningBalances(tx, customerId);
-    });
-
-    const refreshedCustomer = await prisma.customer.findUnique({
-      where: { id: customerId },
-      select: {
-        id: true,
-        name: true,
-        phone_number: true,
-        mobile_number: true,
-        whatsapp_number: true,
-        outstanding_balance: true,
-        credit_limit: true,
-      },
-    });
-    if (!refreshedCustomer) throw new AppError(404, 'Customer not found');
-
-    const where: Prisma.CustomerLedgerWhereInput = {
-      customer_id: customerId,
-      ...(startDate || endDate
-        ? {
-            created_at: {
-              ...(startDate ? { gte: startDate } : {}),
-              ...(endDate ? { lte: endDate } : {}),
-            },
-          }
-        : {}),
-    };
-
+    // READ-ONLY: never auto-reconcile or rewrite existing ledger rows on view.
     const skip = (page - 1) * limit;
-    const [total, rawEntries, allEntries, revisions] = await Promise.all([
-      prisma.customerLedger.count({ where }),
-      prisma.customerLedger.findMany({
-        where,
-        orderBy: { created_at: 'desc' },
-        skip,
-        take: limit,
-      }),
+    const [dbEntries, creditSales, revisions] = await Promise.all([
       prisma.customerLedger.findMany({
         where: { customer_id: customerId },
-        orderBy: { created_at: 'asc' },
-        select: { id: true, entry_type: true, amount: true, balance_after: true, reference_no: true, description: true, sale_id: true },
+        orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
+      }),
+      prisma.sale.findMany({
+        where: {
+          customer_id: customerId,
+          status: 'COMPLETED',
+          payment_method: 'CREDIT',
+        },
+        select: {
+          id: true,
+          sale_number: true,
+          total_amount: true,
+          payment_received: true,
+          payment_status: true,
+          payment_method: true,
+          sale_date: true,
+          created_at: true,
+        },
+        orderBy: [{ sale_date: 'asc' }, { created_at: 'asc' }],
       }),
       prisma.customerSaleLedgerRevision.findMany({
         where: { customer_id: customerId },
@@ -562,8 +776,22 @@ class CustomerLedgerService {
       }),
     ]);
 
-    const visibleRawEntries = rawEntries.filter((e) => !isSaleLinkedShadowAdjustment(e));
-    const visibleAllEntries = allEntries.filter((e) => !isSaleLinkedShadowAdjustment(e));
+    const syntheticRows = this.buildMissingCreditSaleRows(customerId, creditSales, dbEntries);
+    const mergedAsc = [...dbEntries, ...syntheticRows].sort((a, b) => {
+      const diff = a.created_at.getTime() - b.created_at.getTime();
+      return diff !== 0 ? diff : a.id.localeCompare(b.id);
+    });
+
+    const mergedFilteredAsc = mergedAsc.filter((e) =>
+      this.entryInDateRange(e.created_at, startDate, endDate),
+    );
+    const visibleAllAsc = mergedFilteredAsc.filter((e) => !isSaleLinkedShadowAdjustment(e));
+    const visibleDesc = [...visibleAllAsc].sort((a, b) => {
+      const diff = b.created_at.getTime() - a.created_at.getTime();
+      return diff !== 0 ? diff : b.id.localeCompare(a.id);
+    });
+    const total = visibleDesc.length;
+    const visibleRawEntries = visibleDesc.slice(skip, skip + limit);
 
     const revisionsBySale = new Map<string, typeof revisions>();
     for (const revision of revisions) {
@@ -572,40 +800,15 @@ class CustomerLedgerService {
       revisionsBySale.set(revision.sale_number, group);
     }
 
-    // Derive debit/credit from entry amounts (not balance_after deltas — avoids stale balance bugs)
-    const debitCreditById = new Map<string, { debit: number; credit: number }>();
-    const runningBalances = new Map<string, number>();
-    let running = 0;
-    let totalDebits = 0;
-    let totalCredits = 0;
-    for (const e of visibleAllEntries) {
-      const delta = this.computeSignedDelta(e, running);
-      let debit = 0;
-      let credit = 0;
-      if (delta > 0.009) {
-        debit = delta;
-        totalDebits += delta;
-      } else if (delta < -0.009) {
-        credit = Math.abs(delta);
-        totalCredits += Math.abs(delta);
-      }
-      running = Number((running + delta).toFixed(3));
-      debitCreditById.set(e.id, { debit, credit });
-      runningBalances.set(e.id, running);
-    }
-
-    let totalSales = 0;
-    let totalPayments = 0;
-    for (const e of visibleAllEntries) {
-      const amt = Number(e.amount);
-      if (e.entry_type === 'CREDIT_SALE') totalSales += amt;
-      else if (e.entry_type === 'PAYMENT_RECEIVED') totalPayments += amt;
-      // CASH_SALE: tracked in entries list only — does not affect balance totals
-    }
-
-    const saleRefs = [
-      ...new Set(visibleRawEntries.map((e) => e.sale_id).filter(Boolean)),
-    ] as string[];
+    const {
+      debitCreditById,
+      runningBalances,
+      currentBalance,
+      totalDebits,
+      totalCredits,
+      totalSales,
+      totalPayments,
+    } = this.computeLedgerTotals(visibleAllAsc);
 
     type SaleRow = {
       id: string;
@@ -617,25 +820,9 @@ class CustomerLedgerService {
     };
 
     const salesByRef: Record<string, SaleRow> = {};
-    if (saleRefs.length > 0) {
-      const sales = await prisma.sale.findMany({
-        where: {
-          customer_id: customerId,
-          OR: [{ sale_number: { in: saleRefs } }, { id: { in: saleRefs } }],
-        },
-        select: {
-          id: true,
-          sale_number: true,
-          payment_method: true,
-          total_amount: true,
-          payment_received: true,
-          payment_status: true,
-        },
-      });
-      for (const s of sales) {
-        salesByRef[s.id] = s;
-        salesByRef[s.sale_number] = s;
-      }
+    for (const s of creditSales) {
+      salesByRef[s.id] = s;
+      salesByRef[s.sale_number] = s;
     }
 
     const entries = visibleRawEntries.map((e) => {
@@ -706,10 +893,14 @@ class CustomerLedgerService {
       };
     });
 
-    const currentBalance = Number(refreshedCustomer.outstanding_balance);
+    const currentBalanceStored = Number(customer.outstanding_balance);
 
     return {
-      customer: refreshedCustomer,
+      customer: {
+        ...customer,
+        // Expose computed balance for UI; stored column left unchanged in DB.
+        outstanding_balance: currentBalance,
+      },
       entries,
       summary: {
         totalSales,
@@ -717,6 +908,7 @@ class CustomerLedgerService {
         totalDebits,
         totalCredits,
         currentBalance,
+        storedBalance: currentBalanceStored,
         balanceDue: Math.max(0, currentBalance),
         advanceBalance: Math.max(0, -currentBalance),
       },

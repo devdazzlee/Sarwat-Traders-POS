@@ -3,6 +3,7 @@ import { prisma } from '../prisma/client';
 import { AppError } from '../utils/apiError';
 import { getReportingPeriodCreatedAtFilter } from '../utils/reportingPeriod';
 import { ledgerBalanceEngine } from './ledger-balance.engine';
+import { saleUpfrontPaymentDescription } from '../utils/sale-ledger-revision';
 
 interface ReturnItem {
   productId: string;
@@ -708,7 +709,7 @@ class SaleService {
               customer_id: customerId,
               entry_type: LedgerEntryType.PAYMENT_RECEIVED,
               amount: new Prisma.Decimal(creditPaidAmount),
-              description: `Upfront payment on ${saleNumber}`,
+              description: saleUpfrontPaymentDescription(saleNumber),
               sale_id: saleNumber,
               balance_after: 0,
               created_by: createdBy,
@@ -1481,11 +1482,6 @@ class SaleService {
         item_type: SaleItemType.ORIGINAL,
       }));
 
-      const newCreditOutstanding =
-        newPaymentMethod === 'CREDIT'
-          ? newTotal.minus(new Prisma.Decimal(Math.min(paymentReceived, newTotalNumber)))
-          : new Prisma.Decimal(0);
-
       const oldCustomerId = oldSale.customer_id;
       const newCustomerId = resolvedCustomerId ?? null;
       const customerChanged = oldCustomerId !== newCustomerId;
@@ -1507,30 +1503,52 @@ class SaleService {
           });
         }
         if (newCustomerId) {
+          await ledgerBalanceEngine.syncCreditSaleLedgerFromRecord(tx, {
+            customerId: newCustomerId,
+            saleNumber: oldSale.sale_number,
+            totalAmount: newTotalNumber,
+            paymentReceived:
+              newPaymentMethod === 'CREDIT' ? paymentReceived : 0,
+            createdBy: data.createdBy,
+            reason: `Customer assigned to sale (${oldSale.sale_number})`,
+            useSaleEditPaymentLabel: true,
+          });
+          if (newPaymentMethod !== 'CREDIT') {
+            await ledgerBalanceEngine.syncSaleLedgerEntries(tx, {
+              customerId: newCustomerId,
+              saleNumber: oldSale.sale_number,
+              paymentMethod: normalizedPaymentMethod,
+              creditOwedAmount: 0,
+              upfrontPaymentAmount: 0,
+              cashSaleAmount: newTotalNumber,
+              createdBy: data.createdBy,
+              reason: `Customer assigned to sale (${oldSale.sale_number})`,
+            });
+          }
+        }
+      } else if (newCustomerId) {
+        if (newPaymentMethod === 'CREDIT') {
+          await ledgerBalanceEngine.syncCreditSaleLedgerFromRecord(tx, {
+            customerId: newCustomerId,
+            saleNumber: oldSale.sale_number,
+            totalAmount: newTotalNumber,
+            paymentReceived,
+            createdBy: data.createdBy,
+            reason: saleEditReason,
+            useSaleEditPaymentLabel: true,
+          });
+        } else {
           await ledgerBalanceEngine.syncSaleLedgerEntries(tx, {
             customerId: newCustomerId,
             saleNumber: oldSale.sale_number,
             paymentMethod: normalizedPaymentMethod,
-            creditOwedAmount: Number(newCreditOutstanding.toFixed(3)),
-            upfrontPaymentAmount:
-              newPaymentMethod === 'CREDIT' ? paymentReceived : 0,
-            cashSaleAmount: newPaymentMethod !== 'CREDIT' ? newTotalNumber : 0,
+            creditOwedAmount: 0,
+            upfrontPaymentAmount: 0,
+            cashSaleAmount: newTotalNumber,
             createdBy: data.createdBy,
-            reason: `Customer assigned to sale (${oldSale.sale_number})`,
+            reason: saleEditReason,
           });
         }
-      } else if (newCustomerId) {
-        await ledgerBalanceEngine.syncSaleLedgerEntries(tx, {
-          customerId: newCustomerId,
-          saleNumber: oldSale.sale_number,
-          paymentMethod: normalizedPaymentMethod,
-          creditOwedAmount: Number(newCreditOutstanding.toFixed(3)),
-          upfrontPaymentAmount:
-            newPaymentMethod === 'CREDIT' ? paymentReceived : 0,
-          cashSaleAmount: newPaymentMethod !== 'CREDIT' ? newTotalNumber : 0,
-          createdBy: data.createdBy,
-          reason: saleEditReason,
-        });
       }
 
       return await tx.sale.update({

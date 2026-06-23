@@ -7,6 +7,28 @@ type LedgerAdjustmentRow = {
   reference_no: string | null;
 };
 
+type LedgerPaymentRow = {
+  entry_type: LedgerEntryType;
+  description: string | null;
+};
+
+export function saleUpfrontPaymentDescription(saleNumber: string): string {
+  return `Upfront payment on ${saleNumber}`;
+}
+
+export function saleEditPaymentDescription(saleNumber: string): string {
+  return `Paid on sale edit - ${saleNumber}`;
+}
+
+/** System-managed payment row tied to a sale (at creation or via sale edit sync). */
+export function isSaleManagedInSalePayment(entry: LedgerPaymentRow): boolean {
+  if (entry.entry_type !== LedgerEntryType.PAYMENT_RECEIVED) return false;
+  const desc = (entry.description ?? '').toLowerCase();
+  return (
+    desc.startsWith('upfront payment on') || desc.startsWith('paid on sale edit -')
+  );
+}
+
 /**
  * Sale-edit delta rows that must never appear on the customer statement.
  * They are consolidated into the parent sale ledger row + revision history.
