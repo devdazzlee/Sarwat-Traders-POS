@@ -569,21 +569,57 @@ export function NewSale() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const getProductStock = useCallback(
+    (productId: string): number => {
+      const product = products.find((p) => p.id === productId);
+      if (!product) return 0;
+      return Number(product.available_stock ?? product.stock ?? 0);
+    },
+    [products],
+  );
+
+  const resolveCartLineProductId = (line: CartItem) =>
+    line.productId || line.id.split("_")[0];
+
+  const validateCartStock = useCallback(
+    (cartItems: CartItem[]): string | null => {
+      if (cartItems.length === 0) return null;
+
+      const qtyByProduct = new Map<string, number>();
+      const nameByProduct = new Map<string, string>();
+
+      for (const line of cartItems) {
+        const productId = resolveCartLineProductId(line);
+        qtyByProduct.set(productId, (qtyByProduct.get(productId) ?? 0) + line.quantity);
+        nameByProduct.set(productId, line.name);
+      }
+
+      for (const [productId, requested] of qtyByProduct) {
+        const available = getProductStock(productId);
+        const name = nameByProduct.get(productId) ?? "Product";
+        if (available <= 0) {
+          return `${name} is out of stock.`;
+        }
+        if (requested > available + 0.0001) {
+          return `Insufficient stock for ${name}. Available: ${available}, requested: ${requested}.`;
+        }
+      }
+
+      return null;
+    },
+    [getProductStock],
+  );
+
   const addToCart = (product: Product, quantity: number = 1, customPrice?: number) => {
-    // For testing: Allow negative sales (stock can go below 0)
-    // Comment out stock validation for testing purposes
-    /*
-    const availableStock = product.available_stock ?? product.stock
-    const currentQuantity = cart.find((item) => item.id === product.id)?.quantity || 0
-    if (currentQuantity >= availableStock) {
+    const availableStock = getProductStock(product.id);
+    if (availableStock <= 0) {
       toast({
         variant: "destructive",
-        title: "Insufficient Stock",
-        description: `Only ${availableStock} units available for ${product.name}`,
-      })
-      return
+        title: "Out of stock",
+        description: `${product.name} has no available stock.`,
+      });
+      return;
     }
-    */
 
     // When custom price is provided, it represents the TOTAL PRICE from barcode
     // Calculate quantity: barcodePrice / originalPrice
@@ -656,6 +692,16 @@ export function NewSale() {
           unit: product.unitName,
         },
       ];
+    }
+
+    const stockError = validateCartStock(nextCart);
+    if (stockError) {
+      toast({
+        variant: "destructive",
+        title: "Insufficient stock",
+        description: stockError,
+      });
+      return;
     }
 
     setCartSync(() => nextCart);
@@ -873,9 +919,19 @@ export function NewSale() {
       ? Math.round(Number(newQuantity))
       : Number(newQuantity);
     const validQuantity = Math.max(minQuantity, normalizedQuantity);
-    setCartSync((prev) =>
-      prev.map((line) => (line.id === id ? { ...line, quantity: validQuantity } : line)),
+    const nextCart = cartRef.current.map((line) =>
+      line.id === id ? { ...line, quantity: validQuantity } : line,
     );
+    const stockError = validateCartStock(nextCart);
+    if (stockError) {
+      toast({
+        variant: "destructive",
+        title: "Insufficient stock",
+        description: stockError,
+      });
+      return;
+    }
+    setCartSync(() => nextCart);
   };
 
   const clearQuantityOverlay = (lineId: string) => {
@@ -914,17 +970,25 @@ export function NewSale() {
     activeCartLineIdRef.current = id;
     setActiveCartLineId(id);
     clearQuantityOverlay(id);
-    setCartSync((prev) =>
-      prev.map((line) => {
-        if (line.id !== id) return line;
-        const unitName = line.unitName || line.unit;
-        const mode = quantityModes[id] ?? "preset";
-        return {
-          ...line,
-          quantity: computeQuantityAfterChange(line.quantity, direction, unitName, mode),
-        };
-      }),
-    );
+    const nextCart = cartRef.current.map((line) => {
+      if (line.id !== id) return line;
+      const unitName = line.unitName || line.unit;
+      const mode = quantityModes[id] ?? "preset";
+      return {
+        ...line,
+        quantity: computeQuantityAfterChange(line.quantity, direction, unitName, mode),
+      };
+    });
+    const stockError = validateCartStock(nextCart);
+    if (stockError) {
+      toast({
+        variant: "destructive",
+        title: "Insufficient stock",
+        description: stockError,
+      });
+      return;
+    }
+    setCartSync(() => nextCart);
   };
 
   const updateItemPrice = (id: string, newPrice: number) => {
@@ -1136,6 +1200,17 @@ export function NewSale() {
       });
       return;
     }
+
+    const stockError = validateCartStock(cart);
+    if (stockError) {
+      toast({
+        variant: "destructive",
+        title: "Insufficient stock",
+        description: stockError,
+      });
+      return;
+    }
+
     setPaymentMethodPending(method);
     setTenderedAmount(method === "Credit" ? "0" : total.toFixed(2));
     setPaymentError("");
@@ -1153,6 +1228,17 @@ export function NewSale() {
 
   const confirmPayment = async () => {
     if (!paymentMethodPending) {
+      return;
+    }
+
+    const stockError = validateCartStock(cart);
+    if (stockError) {
+      setPaymentError(stockError);
+      toast({
+        variant: "destructive",
+        title: "Insufficient stock",
+        description: stockError,
+      });
       return;
     }
 

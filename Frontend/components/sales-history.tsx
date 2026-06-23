@@ -191,25 +191,25 @@ export function SalesHistory() {
     value: string | number | undefined,
     showNegativeSymbol: boolean = true
   ): string => {
-    if (!value && value !== 0) return "Rs 0.00";
+    if (!value && value !== 0) return "0.00";
 
     const numValue = typeof value === "string" ? parseFloat(value) : value;
 
     // Check if the number is valid
-    if (isNaN(numValue)) return "Rs 0.00";
+    if (isNaN(numValue)) return "0.00";
 
     // Handle negative values
     if (numValue < 0) {
       const absValue = Math.abs(numValue);
       if (showNegativeSymbol) {
-        return `-Rs ${absValue.toFixed(2)}`;
+        return `- ${absValue.toFixed(2)}`;
       } else {
         // For display purposes, show absolute value
-        return `Rs ${absValue.toFixed(2)}`;
+        return `${absValue.toFixed(2)}`;
       }
     }
 
-    return `Rs ${numValue.toFixed(2)}`;
+    return `${numValue.toFixed(2)}`;
   };
 
   // Helper function to get sale type based on total amount

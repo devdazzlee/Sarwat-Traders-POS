@@ -561,9 +561,10 @@ class SaleService {
     const uniqueProductIds = [...new Set(productIds)];
     const products = await prisma.product.findMany({
       where: { id: { in: uniqueProductIds } },
-      select: { id: true },
+      select: { id: true, name: true },
     });
     const foundProductIds = new Set(products.map(p => p.id));
+    const productNameById = new Map(products.map((p) => [p.id, p.name]));
     const missingProductIds = uniqueProductIds.filter(id => !foundProductIds.has(id));
     if (missingProductIds.length > 0) {
       throw new AppError(400, `Products not found: ${missingProductIds.join(', ')}`);
@@ -571,11 +572,11 @@ class SaleService {
   
     // 3) Pre-fetch stock snapshot once
     const stocks = effectiveBranchId
-      ? await prisma.stock.findMany({ where: { product_id: { in: productIds }, branch_id: effectiveBranchId } })
+      ? await prisma.stock.findMany({ where: { product_id: { in: uniqueProductIds }, branch_id: effectiveBranchId } })
       : [];
     const stockMap = new Map(stocks.map(s => [s.product_id, s]));
 
-    // 4) Group same product lines and compute movements in memory
+    // 4) Group same product lines and validate available quantity
     const grouped = items.reduce<Record<string, { productId: string; qty: Prisma.Decimal }>>(
       (acc, it) => {
         const key = it.productId;
@@ -585,6 +586,19 @@ class SaleService {
       },
       {}
     );
+
+    for (const gp of Object.values(grouped)) {
+      const available = new Prisma.Decimal(stockMap.get(gp.productId)?.current_quantity ?? 0);
+      if (gp.qty.gt(available)) {
+        const label = productNameById.get(gp.productId) ?? gp.productId;
+        throw new AppError(
+          400,
+          `Insufficient stock for ${label}. Available: ${available.toNumber()}, requested: ${gp.qty.toNumber()}`,
+        );
+      }
+    }
+
+    // 5) Compute stock movements in memory
 
     type MoveRow = {
       product_id: string;

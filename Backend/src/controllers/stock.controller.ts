@@ -40,16 +40,39 @@ const getStocksController = asyncHandler(async (req: Request, res: Response) => 
 const getStockMovementsController = asyncHandler(async (req: Request, res: Response) => {
     const branchId = req.query.branchId as string;
     const productId = req.query.productId as string;
+    const page = Number(req.query.page) || 1;
+    const limit = Number(req.query.limit) || 20;
+    const search = req.query.search as string | undefined;
+    const categoryId = req.query.categoryId as string | undefined;
     const userRole = req.user?.role as string | undefined;
-    const movements = await stockService.getStockMovements(branchId || "", userRole, productId);
-    new ApiResponse(movements, "Stock movement history retrieved").send(res);
+    const result = await stockService.getStockMovements(
+        branchId || "",
+        userRole,
+        productId,
+        page,
+        limit,
+        search,
+        categoryId,
+    );
+    new ApiResponse(result.data, "Stock movement history retrieved", 200, true, result.meta).send(res);
 });
 
 const getTodayStockMovementsController = asyncHandler(async (req: Request, res: Response) => {
     const branchId = req.query.branchId as string;
+    const page = Number(req.query.page) || 1;
+    const limit = Number(req.query.limit) || 20;
+    const search = req.query.search as string | undefined;
+    const categoryId = req.query.categoryId as string | undefined;
     const userRole = req.user?.role as string | undefined;
-    const movements = await stockService.getTodayStockMovements(branchId || undefined, userRole);
-    new ApiResponse(movements, "Today's stock movements retrieved").send(res);
+    const result = await stockService.getTodayStockMovements(
+        branchId || undefined,
+        userRole,
+        page,
+        limit,
+        search,
+        categoryId,
+    );
+    new ApiResponse(result.data, "Today's stock movements retrieved", 200, true, result.meta).send(res);
 });
 
 const removeStockController = asyncHandler(async (req: Request, res: Response) => {

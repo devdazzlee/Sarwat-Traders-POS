@@ -322,7 +322,15 @@ class StockService {
         };
     }
 
-    async getStockMovements(branchId: string, userRole?: string, productId?: string) {
+    async getStockMovements(
+        branchId: string,
+        userRole?: string,
+        productId?: string,
+        page: number = 1,
+        limit: number = 20,
+        search?: string,
+        categoryId?: string,
+    ) {
         const where: any = {};
         
         // Only filter by branch if branchId is provided AND user is not admin
@@ -335,16 +343,51 @@ class StockService {
         if (productId) {
             where.product_id = productId;
         }
-        
-        return prisma.stockMovement.findMany({
-            where,
-            include: { product: true, branch: true, user: { select: { email: true } } },
-            orderBy: { created_at: "desc" },
-            take: 50, // Limit history for performance
-        });
+
+        if ((search && search.trim() !== "") || (categoryId && categoryId !== "all")) {
+            where.product = {};
+            if (search && search.trim() !== "") {
+                where.product.OR = [
+                    { name: { contains: search, mode: "insensitive" as const } },
+                    { sku: { contains: search, mode: "insensitive" as const } },
+                ];
+            }
+            if (categoryId && categoryId !== "all") {
+                where.product.category_id = categoryId;
+            }
+        }
+
+        const skip = (page - 1) * limit;
+        const [data, total] = await Promise.all([
+            prisma.stockMovement.findMany({
+                where,
+                include: { product: true, branch: true, user: { select: { email: true } } },
+                orderBy: { created_at: "desc" },
+                skip,
+                take: limit,
+            }),
+            prisma.stockMovement.count({ where }),
+        ]);
+
+        return {
+            data,
+            meta: {
+                total,
+                page,
+                limit,
+                totalPages: Math.max(1, Math.ceil(total / limit)),
+            },
+        };
     }
 
-    async getTodayStockMovements(branchId?: string, userRole?: string) {
+    async getTodayStockMovements(
+        branchId?: string,
+        userRole?: string,
+        page: number = 1,
+        limit: number = 20,
+        search?: string,
+        categoryId?: string,
+    ) {
         const { gte, lt } = getReportingPeriodCreatedAtFilter();
 
         const whereClause: any = {
@@ -357,13 +400,44 @@ class StockService {
         // Only filter by branch if branchId is provided AND user is not admin
         if (branchId && branchId !== "" && userRole !== "ADMIN" && userRole !== "SUPER_ADMIN") {
             whereClause.branch_id = branchId;
+        } else if (branchId && branchId.trim() !== "") {
+            whereClause.branch_id = branchId;
         }
 
-        return prisma.stockMovement.findMany({
-            where: whereClause,
-            include: { product: true, branch: true, user: { select: { email: true } } },
-            orderBy: { created_at: "desc" },
-        });
+        if ((search && search.trim() !== "") || (categoryId && categoryId !== "all")) {
+            whereClause.product = {};
+            if (search && search.trim() !== "") {
+                whereClause.product.OR = [
+                    { name: { contains: search, mode: "insensitive" as const } },
+                    { sku: { contains: search, mode: "insensitive" as const } },
+                ];
+            }
+            if (categoryId && categoryId !== "all") {
+                whereClause.product.category_id = categoryId;
+            }
+        }
+
+        const skip = (page - 1) * limit;
+        const [data, total] = await Promise.all([
+            prisma.stockMovement.findMany({
+                where: whereClause,
+                include: { product: true, branch: true, user: { select: { email: true } } },
+                orderBy: { created_at: "desc" },
+                skip,
+                take: limit,
+            }),
+            prisma.stockMovement.count({ where: whereClause }),
+        ]);
+
+        return {
+            data,
+            meta: {
+                total,
+                page,
+                limit,
+                totalPages: Math.max(1, Math.ceil(total / limit)),
+            },
+        };
     }
 }
 

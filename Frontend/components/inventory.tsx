@@ -11,14 +11,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Label } from "@/components/ui/label"
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
 import { useToast } from "@/hooks/use-toast"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { Search, Plus, Edit, Package, AlertTriangle, Upload, X, ImageIcon, RefreshCw, Trash2, Loader2, Mail } from "lucide-react"
 import apiClient from "@/lib/apiClient"
-import { useStore } from "@/lib/store"
+import { useStore, mapProductFromApi } from "@/lib/store"
 import { isPendingImageUrl } from "@/lib/offline-queue-payload"
 import { usePosData } from "@/hooks/use-pos-data"
 import { shareInventoryReportOnEmail } from "@/lib/pdf-generator"
@@ -130,6 +129,27 @@ function pickRealRelationId(
 ): string {
   if (id && id !== RELATION_SENTINEL_ALL) return id
   return fallback ?? ""
+}
+
+function mapApiProductToInventoryRow(item: any): Product {
+  return mapGlobalProductToInventoryRow(mapProductFromApi(item))
+}
+
+function getBranchIdForProducts(): string | undefined {
+  if (typeof window === "undefined") return undefined
+  const userRole = localStorage.getItem("role")
+  const isAdmin = userRole === "ADMIN" || userRole === "SUPER_ADMIN"
+  if (isAdmin) return undefined
+
+  try {
+    const branchStr = localStorage.getItem("branch")
+    if (!branchStr || branchStr === "Not Found") return undefined
+    const branchObj = JSON.parse(branchStr)
+    return branchObj.id || branchStr
+  } catch {
+    const branchId = localStorage.getItem("branch")
+    return branchId && branchId !== "Not Found" ? branchId : undefined
+  }
 }
 
 function mapGlobalProductToInventoryRow(product: any): Product {
@@ -512,12 +532,14 @@ export default function Inventory() {
   const [loading, setLoading] = useState(false)
   const [isInitialLoading, setIsInitialLoading] = useState(true)
   const [totalProducts, setTotalProducts] = useState(0)
+  const [apiTotalPages, setApiTotalPages] = useState(1)
   const [currentPage, setCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState<number>(10)
   const [gotoPage, setGotoPage] = useState<string>("")
 
   // State for filters
   const [searchTerm, setSearchTerm] = useState("")
+  const [debouncedSearch, setDebouncedSearch] = useState("")
   const [selectedCategory, setSelectedCategory] = useState("all")
   const [selectedSubcategory, setSelectedSubcategory] = useState("all")
   const [selectedStatus, setSelectedStatus] = useState<"all" | "active" | "inactive">("all")
@@ -618,8 +640,13 @@ export default function Inventory() {
       subcategory_id?: string
       is_active?: boolean
       display_on_pos?: boolean
+      branch_id?: string
+      fetch_all?: boolean
     }) {
-      const response = await apiClient.get("/products", { params })
+      const response = await apiClient.get("/products", {
+        params,
+        headers: { "X-Skip-Offline-Cache": "true" },
+      })
       return response.data
     },
 
@@ -665,29 +692,21 @@ export default function Inventory() {
     loadDropdownData()
   }, [])
 
-  // Load products when filters change or global products change
   useEffect(() => {
-    if (globalProducts.length > 0) {
-      loadProducts()
-    } else if (globalLoading) {
-      // Still loading from global store
-      setLoading(true)
-    } else {
-      // Global store finished loading but no products
-      setIsInitialLoading(false)
-      setLoading(false)
+    if (globalCategories.length > 0) {
+      setCategories(globalCategories.filter((c) => c.id !== "all"))
     }
-  }, [
-    currentPage,
-    searchTerm,
-    selectedCategory,
-    selectedSubcategory,
-    selectedStatus,
-    pageSize,
-    globalProducts,
-    globalLoading,
-    globalProductsLoading,
-  ])
+  }, [globalCategories])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(searchTerm.trim()), 350)
+    return () => window.clearTimeout(timer)
+  }, [searchTerm])
+
+  // Server-side product list — refetch when filters or pagination change
+  useEffect(() => {
+    void loadProducts()
+  }, [currentPage, debouncedSearch, selectedCategory, selectedSubcategory, selectedStatus, pageSize])
 
   const loadDropdownData = async () => {
     try {
@@ -732,57 +751,32 @@ export default function Inventory() {
   const loadProducts = async () => {
     setLoading(true)
     try {
-      // Use global products data instead of making API calls
-      let filteredProducts = [...globalProducts]
-      
-      // Mark initial loading as complete once we have data
-      if (isInitialLoading && filteredProducts.length > 0) {
-        setIsInitialLoading(false)
-      }
+      const branchId = getBranchIdForProducts()
+      const fetchAll = pageSize === 0
 
-      // Apply search filter
-      if (searchTerm) {
-        filteredProducts = filteredProducts.filter(product =>
-          product.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          (product.sku && product.sku.toLowerCase().includes(searchTerm.toLowerCase()))
-        )
-      }
+      const response = await apiService.getProducts({
+        page: fetchAll ? 1 : currentPage,
+        limit: fetchAll ? 100 : pageSize,
+        fetch_all: fetchAll,
+        ...(debouncedSearch ? { search: debouncedSearch } : {}),
+        ...(selectedCategory !== "all" ? { category_id: selectedCategory } : {}),
+        ...(selectedSubcategory !== "all" ? { subcategory_id: selectedSubcategory } : {}),
+        ...(selectedStatus === "active"
+          ? { is_active: true }
+          : selectedStatus === "inactive"
+            ? { is_active: false }
+            : {}),
+        ...(branchId ? { branch_id: branchId } : {}),
+      })
 
-      // Apply category filter
-      if (selectedCategory !== "all") {
-        filteredProducts = filteredProducts.filter(product =>
-          product.categoryId === selectedCategory
-        )
-      }
-
-      // Apply subcategory filter
-      if (selectedSubcategory !== "all") {
-        filteredProducts = filteredProducts.filter(product =>
-          product.subcategoryId && product.subcategoryId === selectedSubcategory
-        )
-      }
-
-      // Apply status filter
-      if (selectedStatus === "active") {
-        filteredProducts = filteredProducts.filter((product) => product.is_active)
-      } else if (selectedStatus === "inactive") {
-        filteredProducts = filteredProducts.filter((product) => !product.is_active)
-      }
-
-      // Apply pagination
-      const total = filteredProducts.length
-      let paginatedProducts = filteredProducts
-      
-      if (pageSize !== 0) {
-        const startIndex = (currentPage - 1) * pageSize
-        const endIndex = startIndex + pageSize
-        paginatedProducts = filteredProducts.slice(startIndex, endIndex)
-      }
-
-      const productsData = paginatedProducts.map(mapGlobalProductToInventoryRow)
+      const rawProducts = Array.isArray(response?.data) ? response.data : []
+      const meta = response?.meta ?? {}
+      const productsData = rawProducts.map(mapApiProductToInventoryRow)
 
       setProducts(productsData)
-      setTotalProducts(total)
+      setTotalProducts(meta.total ?? productsData.length)
+      setApiTotalPages(Math.max(1, meta.totalPages ?? 1))
+      setIsInitialLoading(false)
     } catch (error) {
       console.log("Failed to load products:", error)
       toast({
@@ -822,6 +816,7 @@ export default function Inventory() {
       const created = await apiService.createProduct(dataToSubmit, existingImageUrls)
       if (created?.id) upsertProductFromApi(created)
       await fetchProducts({ force: true })
+      await loadProducts()
 
       toast({
         title: "Success",
@@ -872,6 +867,7 @@ export default function Inventory() {
       const updated = await apiService.updateProduct(editingProduct.id, dataToSubmit, existingImageUrls)
       if (updated?.id) upsertProductFromApi(updated)
       await fetchProducts({ force: true })
+      await loadProducts()
 
       toast({
         title: "Success",
@@ -910,6 +906,7 @@ export default function Inventory() {
     try {
       await apiService.toggleProductStatus(id)
       await fetchProducts({ force: true })
+      await loadProducts()
       toast({
         title: "Status updated",
         description: `Product is now ${nextActive ? "active" : "inactive"}.`,
@@ -944,6 +941,7 @@ export default function Inventory() {
       setIsDeleteDialogOpen(false)
       setProductToDelete(null)
       await fetchProducts({ force: true })
+      await loadProducts()
     } catch (error) {
       toast({
         title: "Error",
@@ -1134,9 +1132,9 @@ export default function Inventory() {
     setImagePreviews((prev) => prev.filter((_, i) => i !== index))
   }
 
-  const totalPages = Math.ceil(totalProducts / pageSize)
+  const totalPages = pageSize === 0 ? 1 : apiTotalPages
 
-  if (isInitialLoading && globalLoading) {
+  if (isInitialLoading && loading && products.length === 0) {
     return <PageLoader message="Loading inventory..." />
   }
 
@@ -1254,17 +1252,35 @@ export default function Inventory() {
         </div>
 
         {/* Filters */}
+        <div className="relative">
+          {loading && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-white/60 backdrop-blur-[1px]">
+              <span className="inline-flex items-center gap-2 text-sm font-medium text-slate-600">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading products...
+              </span>
+            </div>
+          )}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4">
           <div className="relative flex-1 sm:max-w-md">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
             <Input
               placeholder="Search products..."
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={(e) => {
+                setSearchTerm(e.target.value)
+                setCurrentPage(1)
+              }}
               className="pl-10"
             />
           </div>
-          <Select value={selectedCategory} onValueChange={setSelectedCategory}>
+          <Select
+            value={selectedCategory}
+            onValueChange={(value) => {
+              setSelectedCategory(value)
+              setCurrentPage(1)
+            }}
+          >
             <SelectTrigger className="w-full sm:w-48">
               <SelectValue placeholder="All Categories" />
             </SelectTrigger>
@@ -1277,7 +1293,13 @@ export default function Inventory() {
               ))}
             </SelectContent>
           </Select>
-          <Select value={selectedSubcategory} onValueChange={setSelectedSubcategory}>
+          <Select
+            value={selectedSubcategory}
+            onValueChange={(value) => {
+              setSelectedSubcategory(value)
+              setCurrentPage(1)
+            }}
+          >
             <SelectTrigger className="w-full sm:w-48">
               <SelectValue placeholder="All Subcategories" />
             </SelectTrigger>
@@ -1326,99 +1348,128 @@ export default function Inventory() {
             </Select>
           </div>
         </div>
+        </div>
 
-        {/* Products Table */}
+        {/* Products grid */}
         <Card>
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between gap-2">
             <CardTitle>Products ({totalProducts})</CardTitle>
+            {loading && (
+              <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Updating...
+              </span>
+            )}
           </CardHeader>
-          <CardContent>
-            {loading ? (
+          <CardContent className="relative min-h-[200px]">
+            {loading && products.length === 0 ? (
               <PageLoader message="Loading products..." />
+            ) : products.length === 0 ? (
+              <div className="py-16 text-center text-muted-foreground">
+                <Package className="h-10 w-10 mx-auto mb-3 opacity-30" />
+                <p className="font-medium">No products match your filters</p>
+                <p className="text-sm mt-1">Try changing category, status, or search.</p>
+              </div>
             ) : (
               <>
-                <div className="overflow-x-auto -mx-4 md:mx-0">
-                  <div className="inline-block min-w-full align-middle">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead className="min-w-[150px]">Name</TableHead>
-                          <TableHead className="min-w-[120px]">SKU</TableHead>
-                          <TableHead className="min-w-[120px]">Category</TableHead>
-                          <TableHead className="min-w-[100px]">Unit</TableHead>
-                          <TableHead className="min-w-[100px]">Stock</TableHead>
-                          <TableHead className="min-w-[120px]">Purchase Rate</TableHead>
-                          <TableHead className="min-w-[120px]">Sales Rate</TableHead>
-                          <TableHead className="min-w-[100px]">Status</TableHead>
-                          <TableHead className="min-w-[150px]">Actions</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                  <TableBody>
-                    {products.map((product) => (
-                      <TableRow key={product.id}>
-                        <TableCell className="font-medium">
-                          <div>
-                            <div>{product.name}</div>
+                <div
+                  className={cn(
+                    "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4",
+                    loading && "opacity-60 pointer-events-none",
+                  )}
+                >
+                  {products.map((product) => {
+                    const stock = product.available_stock ?? product.current_stock ?? 0
+                    return (
+                      <Card
+                        key={product.id}
+                        className="border border-slate-200 shadow-sm hover:shadow-md transition-shadow"
+                      >
+                        <CardContent className="p-4 space-y-3">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0 flex-1">
+                              <h3 className="font-semibold text-sm text-slate-900 truncate" title={product.name}>
+                                {product.name}
+                              </h3>
+                              <p className="text-xs font-mono text-muted-foreground mt-0.5 truncate">
+                                {product.sku || "—"}
+                              </p>
+                            </div>
                             {product.is_featured && (
-                              <Badge variant="secondary" className="text-xs mt-1">
+                              <Badge variant="secondary" className="text-[10px] shrink-0">
                                 Featured
                               </Badge>
                             )}
                           </div>
-                        </TableCell>
-                        <TableCell>{product.sku}</TableCell>
-                        <TableCell>{product.category?.name || "-"}</TableCell>
-                        <TableCell>{product.unit?.name || "-"}</TableCell>
-                        <TableCell>
-                          <div className="text-sm">
-                            <div className="font-medium">
-                              {product.available_stock ?? product.current_stock ?? 0}
-                            </div>
-                            {(product.reserved_stock ?? 0) > 0 && (
-                              <div className="text-xs text-gray-500">
-                                Reserved: {product.reserved_stock}
-                              </div>
-                            )}
+
+                          <div className="flex flex-wrap gap-1.5 text-xs text-muted-foreground">
+                            <Badge variant="outline" className="font-normal">
+                              {product.category?.name || "No category"}
+                            </Badge>
+                            <Badge variant="outline" className="font-normal">
+                              {product.unit?.name || "No unit"}
+                            </Badge>
                           </div>
-                        </TableCell>
-                        <TableCell>{product.purchase_rate.toFixed(2)}</TableCell>
-                        <TableCell>{product.sales_rate_exc_dis_and_tax.toFixed(2)}</TableCell>
-                        <TableCell>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            disabled={togglingProductId === product.id}
-                            onClick={() => void handleToggleStatus(product)}
-                            className={cn(
-                              "h-8 min-w-[108px] font-medium transition-colors",
-                              product.is_active
-                                ? "border-green-200 bg-green-50 text-green-700 hover:bg-green-100 hover:text-green-800"
-                                : "border-red-200 bg-red-50 text-red-700 hover:bg-red-100 hover:text-red-800",
-                              togglingProductId === product.id && "opacity-80"
-                            )}
-                            title={
-                              product.is_active
-                                ? "Click to mark inactive"
-                                : "Click to mark active"
-                            }
-                          >
-                            {togglingProductId === product.id ? (
-                              <>
-                                <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin shrink-0" />
-                                Saving...
-                              </>
-                            ) : product.is_active ? (
-                              "Active"
-                            ) : (
-                              "Inactive"
-                            )}
-                          </Button>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex space-x-2">
+
+                          <div className="grid grid-cols-3 gap-2 pt-1 border-t border-slate-100">
+                            <div>
+                              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Stock</p>
+                              <p
+                                className={cn(
+                                  "text-base font-bold tabular-nums",
+                                  stock <= 0 ? "text-rose-600" : "text-slate-900",
+                                )}
+                              >
+                                {stock}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Purchase</p>
+                              <p className="text-sm font-semibold tabular-nums">
+                                {product.purchase_rate.toFixed(0)}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Sale</p>
+                              <p className="text-sm font-semibold tabular-nums text-emerald-700">
+                                {product.sales_rate_inc_dis_and_tax.toFixed(0)}
+                              </p>
+                            </div>
+                          </div>
+
+                          {(product.reserved_stock ?? 0) > 0 && (
+                            <p className="text-xs text-muted-foreground">
+                              Reserved: {product.reserved_stock}
+                            </p>
+                          )}
+
+                          <div className="flex items-center gap-2 pt-1">
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              disabled={togglingProductId === product.id}
+                              onClick={() => void handleToggleStatus(product)}
+                              className={cn(
+                                "h-8 flex-1 min-w-0 font-medium text-xs",
+                                product.is_active
+                                  ? "border-green-200 bg-green-50 text-green-700 hover:bg-green-100"
+                                  : "border-red-200 bg-red-50 text-red-700 hover:bg-red-100",
+                              )}
+                            >
+                              {togglingProductId === product.id ? (
+                                <>
+                                  <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                                  Saving
+                                </>
+                              ) : product.is_active ? (
+                                "Active"
+                              ) : (
+                                "Inactive"
+                              )}
+                            </Button>
                             <Button size="sm" variant="outline" onClick={() => openEditDialog(product)}>
-                              <Edit className="h-3 w-3" />
+                              <Edit className="h-4 w-4" />
                             </Button>
                             <Button
                               size="sm"
@@ -1429,15 +1480,13 @@ export default function Inventory() {
                               }}
                               className="text-red-600 hover:text-red-700 hover:bg-red-50"
                             >
-                              <Trash2 className="h-3 w-3" />
+                              <Trash2 className="h-4 w-4" />
                             </Button>
                           </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-                  </div>
+                        </CardContent>
+                      </Card>
+                    )
+                  })}
                 </div>
                 {/* Pagination */}
                 {(totalPages > 1 || pageSize === 0) && (

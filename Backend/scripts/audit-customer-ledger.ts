@@ -1,7 +1,6 @@
 import { LedgerEntryType, PrismaClient } from '@prisma/client';
 import { ledgerBalanceEngine } from '../src/services/ledger-balance.engine';
 import { isSaleLinkedShadowAdjustment } from '../src/utils/sale-ledger-revision';
-
 const prisma = new PrismaClient();
 
 async function main() {

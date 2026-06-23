@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -54,6 +54,100 @@ interface Movement {
   user?: { email: string };
 }
 
+type TabPaginationMeta = {
+  page: number;
+  limit: number;
+  totalPages: number;
+  total: number;
+};
+
+function TabLoadingOverlay({ show, message }: { show: boolean; message: string }) {
+  if (!show) return null;
+
+  return (
+    <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/90 backdrop-blur-[1px]">
+      <div className="flex flex-col items-center gap-3">
+        <Loader2 className="h-8 w-8 animate-spin text-indigo-600" />
+        <p className="text-xs font-black uppercase tracking-widest text-slate-500">{message}</p>
+      </div>
+    </div>
+  );
+}
+
+function TabPagination({
+  page,
+  totalPages,
+  total,
+  pageSize,
+  onPageChange,
+  itemLabel = "items",
+  loading = false,
+}: {
+  page: number;
+  totalPages: number;
+  total: number;
+  pageSize: number;
+  onPageChange: (page: number) => void;
+  itemLabel?: string;
+  loading?: boolean;
+}) {
+  if (total === 0) return null;
+
+  const start = (page - 1) * pageSize + 1;
+  const end = Math.min(page * pageSize, total);
+  const pageOptions = useMemo(
+    () => Array.from({ length: totalPages }, (_, i) => i + 1),
+    [totalPages],
+  );
+
+  return (
+    <div className="flex flex-col sm:flex-row items-center justify-between p-5 bg-slate-50/30 border-t border-slate-100 gap-4">
+      <div className="text-[10px] font-black uppercase text-slate-400 tracking-widest">
+        Showing {start}–{end} of {total} {itemLabel}
+        {totalPages > 1 ? ` · Page ${page} of ${totalPages}` : ""}
+      </div>
+      {totalPages > 1 && (
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => onPageChange(Math.max(1, page - 1))}
+            disabled={page === 1 || loading}
+            className="rounded-xl font-black text-[10px] border-slate-200 h-9 px-4 hover:bg-white"
+          >
+            Previous
+          </Button>
+          <Select
+            value={String(page)}
+            onValueChange={(value) => onPageChange(Number(value))}
+            disabled={loading}
+          >
+            <SelectTrigger className="w-[88px] h-9 rounded-xl border-slate-200 bg-white text-xs font-black text-indigo-600">
+              <SelectValue placeholder={`Page ${page}`} />
+            </SelectTrigger>
+            <SelectContent className="max-h-60 rounded-md border-slate-300">
+              {pageOptions.map((pageNum) => (
+                <SelectItem key={pageNum} value={String(pageNum)} className="text-xs font-bold">
+                  {pageNum}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => onPageChange(Math.min(totalPages, page + 1))}
+            disabled={page === totalPages || loading}
+            className="rounded-xl font-black text-[10px] border-slate-200 h-9 px-4 hover:bg-white"
+          >
+            Next
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function StockManagement() {
   // Global store data
   const {
@@ -72,20 +166,26 @@ export function StockManagement() {
   // Pagination and meta
   const [totalStocks, setTotalStocks] = useState(0);
   const [stockMeta, setStockMeta] = useState({ page: 1, limit: 20, totalPages: 1, totalQuantity: 0, lowStockCount: 0 });
+  const [historyMeta, setHistoryMeta] = useState<TabPaginationMeta>({ page: 1, limit: 20, totalPages: 1, total: 0 });
+  const [todayMeta, setTodayMeta] = useState<TabPaginationMeta>({ page: 1, limit: 20, totalPages: 1, total: 0 });
+  const [todayTotal, setTodayTotal] = useState(0);
 
   // UI state
+  const [activeTab, setActiveTab] = useState<"stock" | "history" | "today">("stock");
   const [branchFilter, setBranchFilter] = useState<string>("");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [searchTerm, setSearchTerm] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [isTransferring, setIsTransferring] = useState(false);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
 
   // Product search state
   const [productSearch, setProductSearch] = useState("");
 
-  // Pagination for stock table
+  // Pagination for each tab
   const [stockPage, setStockPage] = useState(1);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [todayPage, setTodayPage] = useState(1);
   const [stockPageSize, setStockPageSize] = useState(20);
 
   // Dialog state
@@ -103,6 +203,61 @@ export function StockManagement() {
   const addProductDropdownRef = React.useRef<HTMLDivElement>(null);
   const adjustProductDropdownRef = React.useRef<HTMLDivElement>(null);
   const removeProductDropdownRef = React.useRef<HTMLDivElement>(null);
+
+  const stockTabRef = useRef<HTMLDivElement>(null);
+  const historyTabRef = useRef<HTMLDivElement>(null);
+  const todayTabRef = useRef<HTMLDivElement>(null);
+  const scrollAfterLoadTab = useRef<"stock" | "history" | "today" | null>(null);
+
+  const scrollTabPanelToTop = useCallback((tab: "stock" | "history" | "today") => {
+    const target =
+      tab === "stock" ? stockTabRef.current :
+      tab === "history" ? historyTabRef.current :
+      todayTabRef.current;
+
+    if (!target) return;
+
+    const scrollParent = target.closest("main");
+    if (scrollParent) {
+      const top =
+        target.getBoundingClientRect().top -
+        scrollParent.getBoundingClientRect().top +
+        scrollParent.scrollTop -
+        16;
+      scrollParent.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+      return;
+    }
+
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
+
+  const queueScrollAfterLoad = useCallback((tab: "stock" | "history" | "today") => {
+    scrollAfterLoadTab.current = tab;
+    requestAnimationFrame(() => scrollTabPanelToTop(tab));
+  }, [scrollTabPanelToTop]);
+
+  const handleStockPageChange = useCallback((page: number) => {
+    setStockPage(page);
+    queueScrollAfterLoad("stock");
+  }, [queueScrollAfterLoad]);
+
+  const handleHistoryPageChange = useCallback((page: number) => {
+    setHistoryPage(page);
+    queueScrollAfterLoad("history");
+  }, [queueScrollAfterLoad]);
+
+  const handleTodayPageChange = useCallback((page: number) => {
+    setTodayPage(page);
+    queueScrollAfterLoad("today");
+  }, [queueScrollAfterLoad]);
+
+  const handlePageSizeChange = useCallback((value: string) => {
+    setStockPageSize(Number(value));
+    setStockPage(1);
+    setHistoryPage(1);
+    setTodayPage(1);
+    queueScrollAfterLoad(activeTab);
+  }, [activeTab, queueScrollAfterLoad]);
 
   // Form state
 
@@ -163,44 +318,97 @@ export function StockManagement() {
     toast.error(message);
   };
 
-  // Reset to page 1 when search changes
   useEffect(() => {
     setStockPage(1);
-  }, [searchTerm]);
+    setHistoryPage(1);
+    setTodayPage(1);
+  }, [branchFilter, categoryFilter, searchTerm, stockPageSize]);
+
+  useLayoutEffect(() => {
+    setIsLoading(true);
+  }, [activeTab, stockPage, historyPage, todayPage, branchFilter, categoryFilter, searchTerm, stockPageSize]);
+
+  const buildFilterParams = useCallback(() => {
+    const params = new URLSearchParams({
+      limit: stockPageSize.toString(),
+    });
+
+    if (branchFilter && branchFilter !== "all") params.append("branchId", branchFilter);
+    if (categoryFilter && categoryFilter !== "all") params.append("categoryId", categoryFilter);
+    if (searchTerm.trim()) params.append("search", searchTerm.trim());
+
+    return params;
+  }, [branchFilter, categoryFilter, searchTerm, stockPageSize]);
 
   const refreshAllData = useCallback(async () => {
     setIsLoading(true);
     try {
-      const params = new URLSearchParams({
-        page: stockPage.toString(),
-        limit: stockPageSize.toString(),
-      });
+      const baseParams = buildFilterParams();
+      const todaySummaryParams = new URLSearchParams(baseParams);
+      todaySummaryParams.set("page", "1");
+      todaySummaryParams.set("limit", "1");
 
-      if (branchFilter && branchFilter !== "all") params.append('branchId', branchFilter);
-      if (categoryFilter && categoryFilter !== "all") params.append('categoryId', categoryFilter);
-      if (searchTerm.trim()) params.append('search', searchTerm.trim());
+      if (activeTab === "stock") {
+        const params = new URLSearchParams(baseParams);
+        params.set("page", stockPage.toString());
+        const [sRes, tSummaryRes] = await Promise.all([
+          apiClient.get(`${API_BASE}/stock?${params}`),
+          apiClient.get(`${API_BASE}/stock/today?${todaySummaryParams}`),
+        ]);
 
-      const [sRes, hRes, tRes] = await Promise.all([
-        apiClient.get(`${API_BASE}/stock?${params}`),
-        apiClient.get(`${API_BASE}/stock/history?${params}`),
-        apiClient.get(`${API_BASE}/stock/today?${params}`),
-      ]);
+        setAllStocks(sRes.data.data || []);
+        setTotalStocks(sRes.data.meta?.total || 0);
+        if (sRes.data.meta) setStockMeta(sRes.data.meta);
+        setTodayTotal(tSummaryRes.data.meta?.total ?? 0);
+      } else if (activeTab === "history") {
+        const params = new URLSearchParams(baseParams);
+        params.set("page", historyPage.toString());
+        const [hRes, tSummaryRes] = await Promise.all([
+          apiClient.get(`${API_BASE}/stock/history?${params}`),
+          apiClient.get(`${API_BASE}/stock/today?${todaySummaryParams}`),
+        ]);
 
-      setAllStocks(sRes.data.data || []);
-      setTotalStocks(sRes.data.meta?.total || 0);
-      if (sRes.data.meta) setStockMeta(sRes.data.meta);
-      setHistory(hRes.data.data || []);
-      setTodayMovements(tRes.data.data || []);
+        setHistory(hRes.data.data || []);
+        setHistoryMeta({
+          page: hRes.data.meta?.page ?? historyPage,
+          limit: hRes.data.meta?.limit ?? stockPageSize,
+          totalPages: hRes.data.meta?.totalPages ?? 1,
+          total: hRes.data.meta?.total ?? 0,
+        });
+        setTodayTotal(tSummaryRes.data.meta?.total ?? 0);
+      } else {
+        const params = new URLSearchParams(baseParams);
+        params.set("page", todayPage.toString());
+        const tRes = await apiClient.get(`${API_BASE}/stock/today?${params}`);
+
+        setTodayMovements(tRes.data.data || []);
+        const meta = {
+          page: tRes.data.meta?.page ?? todayPage,
+          limit: tRes.data.meta?.limit ?? stockPageSize,
+          totalPages: tRes.data.meta?.totalPages ?? 1,
+          total: tRes.data.meta?.total ?? 0,
+        };
+        setTodayMeta(meta);
+        setTodayTotal(meta.total);
+      }
     } catch (e: any) {
       toast.error("Failed to load stock data");
     } finally {
       setIsLoading(false);
     }
-  }, [branchFilter, categoryFilter, stockPage, stockPageSize, searchTerm]);
+  }, [activeTab, buildFilterParams, stockPage, historyPage, todayPage, stockPageSize]);
 
   useEffect(() => {
     refreshAllData();
   }, [refreshAllData]);
+
+  useEffect(() => {
+    if (!isLoading && scrollAfterLoadTab.current) {
+      const tab = scrollAfterLoadTab.current;
+      scrollAfterLoadTab.current = null;
+      requestAnimationFrame(() => scrollTabPanelToTop(tab));
+    }
+  }, [isLoading, scrollTabPanelToTop]);
 
   // Fetch initial data
   const { suppliers, fetchSuppliers } = usePosData();
@@ -875,7 +1083,7 @@ export function StockManagement() {
                 {isLoading ? (
                   <div className="h-9 w-12 bg-blue-50 animate-pulse rounded-lg mt-1" />
                 ) : (
-                  <h3 className="text-2xl font-bold text-blue-600 tracking-tighter">{todayMovements.length}</h3>
+                  <h3 className="text-2xl font-bold text-blue-600 tracking-tighter">{todayTotal}</h3>
                 )}
               </div>
               <div className="h-10 w-10 rounded-xl bg-blue-50 flex items-center justify-center">
@@ -911,6 +1119,21 @@ export function StockManagement() {
               ))}
             </SelectContent>
           </Select>
+          <Select
+            value={String(stockPageSize)}
+            onValueChange={handlePageSizeChange}
+          >
+            <SelectTrigger className="w-full md:w-36 h-10 rounded-md border-slate-300 bg-white text-sm shadow-sm">
+              <SelectValue placeholder="Per page" />
+            </SelectTrigger>
+            <SelectContent className="rounded-md shadow-xl">
+              {paginationOptions.map((size) => (
+                <SelectItem key={size} value={String(size)} className="text-sm">
+                  {size} / page
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       </div>
 
@@ -922,7 +1145,14 @@ export function StockManagement() {
       </div>
 
       {/* Tabs for Stock and History */}
-      <Tabs defaultValue="stock" className="space-y-6">
+      <Tabs
+        value={activeTab}
+        onValueChange={(value) => {
+          setIsLoading(true);
+          setActiveTab(value as "stock" | "history" | "today");
+        }}
+        className="space-y-6"
+      >
         <div className="flex px-1">
           <TabsList className="bg-white p-1 rounded-xl border border-slate-200 shadow-sm h-10 shrink-0 w-full max-w-md grid grid-cols-3">
             <TabsTrigger value="stock" className="rounded-lg h-8 font-black text-[10px] uppercase tracking-widest data-[state=active]:bg-slate-900 data-[state=active]:text-white transition-all">Stock List</TabsTrigger>
@@ -933,29 +1163,19 @@ export function StockManagement() {
 
         {/* Current Stock Tab Content */}
         <TabsContent value="stock" className="mt-0 outline-none">
-          <Card className="border-none shadow-sm rounded-xl overflow-hidden bg-white">
+          <Card ref={stockTabRef} className="border-none shadow-sm rounded-xl overflow-hidden bg-white scroll-mt-24">
             <CardHeader className="bg-slate-50/50 px-8 py-5 border-b border-slate-100">
               <div className="flex items-center justify-between">
                 <div>
                   <CardTitle className="text-sm font-black text-slate-800 uppercase tracking-tight">Active Inventory Ledger</CardTitle>
                   <p className="text-[10px] font-bold text-slate-400 uppercase mt-0.5 tracking-tighter">Total Assets Registered: {totalStocks}</p>
                 </div>
-                <div className="flex items-center gap-4">
-                  <span className="text-[10px] font-black uppercase text-slate-400">Density:</span>
-                  <Select value={String(stockPageSize)} onValueChange={(v) => { setStockPageSize(Number(v)); setStockPage(1); }}>
-                    <SelectTrigger className="w-20 h-8 border-slate-200 bg-white rounded-lg text-xs font-bold">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent className="rounded-md border-slate-300">
-                      {paginationOptions.map((size) => <SelectItem key={size} value={String(size)} className="font-bold text-xs">{size}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </div>
               </div>
             </CardHeader>
-            <CardContent className="p-0 relative">
+            <CardContent className="p-0 relative min-h-[320px]">
+              <TabLoadingOverlay show={isLoading && activeTab === "stock"} message="Syncing Ledger..." />
 
-
+              <div className={isLoading && activeTab === "stock" ? "opacity-40 pointer-events-none select-none" : ""}>
               <div className="overflow-x-auto">
               <Table>
                 <TableHeader className="bg-slate-50/30">
@@ -968,13 +1188,7 @@ export function StockManagement() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {isLoading ? (
-                    <TableRow>
-                      <TableCell colSpan={6} className="p-0">
-                        <PageLoader message="Syncing Ledger..." className="min-h-[300px]" />
-                      </TableCell>
-                    </TableRow>
-                  ) : allStocks.length === 0 ? (
+                  {!isLoading && allStocks.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={5} className="text-center p-24">
                         <div className="flex flex-col items-center opacity-20">
@@ -1021,43 +1235,33 @@ export function StockManagement() {
                 </TableBody>
               </Table>
               </div>
+              </div>
 
-              {/* Pagination Section */}
-              {totalStockPages > 1 && (
-                <div className="flex flex-col sm:flex-row items-center justify-between p-5 bg-slate-50/30 border-t border-slate-100 gap-4">
-                  <div className="text-[10px] font-black uppercase text-slate-400 tracking-widest">
-                    Cluster Domain Partition {stockPage} of {totalStockPages}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setStockPage(p => Math.max(1, p - 1))}
-                      disabled={stockPage === 1}
-                      className="rounded-xl font-black text-[10px] border-slate-200 h-9 px-4 hover:bg-white"
-                    >
-                      PREVIOUS
-                    </Button>
-                    <div className="px-4 py-1.5 bg-white border border-slate-200 rounded-xl font-black text-xs text-indigo-600">{stockPage}</div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setStockPage(p => Math.min(totalStockPages, p + 1))}
-                      disabled={stockPage === totalStockPages}
-                      className="rounded-xl font-black text-[10px] border-slate-200 h-9 px-4 hover:bg-white"
-                    >
-                      NEXT PHASE
-                    </Button>
-                  </div>
-                </div>
-              )}
+              <TabPagination
+                page={stockPage}
+                totalPages={totalStockPages}
+                total={totalStocks}
+                pageSize={stockPageSize}
+                onPageChange={handleStockPageChange}
+                itemLabel="products"
+                loading={isLoading && activeTab === "stock"}
+              />
             </CardContent>
           </Card>
         </TabsContent>
 
         {/* Movement History Tab Content */}
         <TabsContent value="history" className="mt-0 outline-none">
-          <Card className="border-none shadow-sm rounded-xl overflow-hidden bg-white">
+          <Card ref={historyTabRef} className="border-none shadow-sm rounded-xl overflow-hidden bg-white scroll-mt-24">
+            <CardHeader className="bg-slate-50/50 px-8 py-5 border-b border-slate-100">
+              <CardTitle className="text-sm font-black text-slate-800 uppercase tracking-tight">Movement Log</CardTitle>
+              <p className="text-[10px] font-bold text-slate-400 uppercase mt-0.5 tracking-tighter">
+                Total movements: {historyMeta.total}
+              </p>
+            </CardHeader>
+            <CardContent className="p-0 relative min-h-[320px]">
+            <TabLoadingOverlay show={isLoading && activeTab === "history"} message="Retrieving Logs..." />
+            <div className={isLoading && activeTab === "history" ? "opacity-40 pointer-events-none select-none" : ""}>
             <div className="overflow-x-auto">
             <Table>
               <TableHeader className="bg-slate-50/30">
@@ -1071,13 +1275,7 @@ export function StockManagement() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {isLoading ? (
-                  <TableRow>
-                    <TableCell colSpan={6} className="p-0">
-                      <PageLoader message="Retrieving Logs..." className="min-h-[300px]" />
-                    </TableCell>
-                  </TableRow>
-                ) : history.length === 0 ? (
+                {!isLoading && history.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={6} className="text-center p-20 italic text-slate-300 text-xs uppercase font-black">No movement history discovered</TableCell>
                   </TableRow>
@@ -1115,12 +1313,32 @@ export function StockManagement() {
               </TableBody>
             </Table>
             </div>
+            </div>
+            <TabPagination
+              page={historyPage}
+              totalPages={historyMeta.totalPages}
+              total={historyMeta.total}
+              pageSize={stockPageSize}
+              onPageChange={handleHistoryPageChange}
+              itemLabel="movements"
+              loading={isLoading && activeTab === "history"}
+            />
+            </CardContent>
           </Card>
         </TabsContent>
 
         {/* Today's Movement Tab */}
         <TabsContent value="today" className="mt-0 outline-none">
-          <Card className="border-none shadow-sm rounded-3xl overflow-hidden bg-white">
+          <Card ref={todayTabRef} className="border-none shadow-sm rounded-3xl overflow-hidden bg-white scroll-mt-24">
+            <CardHeader className="bg-slate-50/50 px-8 py-5 border-b border-slate-100">
+              <CardTitle className="text-sm font-black text-slate-800 uppercase tracking-tight">Today&apos;s Phase</CardTitle>
+              <p className="text-[10px] font-bold text-slate-400 uppercase mt-0.5 tracking-tighter">
+                Events today: {todayMeta.total}
+              </p>
+            </CardHeader>
+            <CardContent className="p-0 relative min-h-[320px]">
+            <TabLoadingOverlay show={isLoading && activeTab === "today"} message="Syncing Today's Phase..." />
+            <div className={isLoading && activeTab === "today" ? "opacity-40 pointer-events-none select-none" : ""}>
             <div className="overflow-x-auto">
             <Table>
               <TableHeader className="bg-slate-50/30">
@@ -1134,13 +1352,7 @@ export function StockManagement() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {isLoading ? (
-                  <TableRow>
-                    <TableCell colSpan={6} className="p-0">
-                      <PageLoader message="Syncing Today's Phase..." className="min-h-[300px]" />
-                    </TableCell>
-                  </TableRow>
-                ) : todayMovements.length === 0 ? (
+                {!isLoading && todayMovements.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={6} className="text-center p-20 italic text-slate-300 text-xs uppercase font-black">No events recorded today</TableCell>
                   </TableRow>
@@ -1165,6 +1377,17 @@ export function StockManagement() {
               </TableBody>
             </Table>
             </div>
+            </div>
+            <TabPagination
+              page={todayPage}
+              totalPages={todayMeta.totalPages}
+              total={todayMeta.total}
+              pageSize={stockPageSize}
+              onPageChange={handleTodayPageChange}
+              itemLabel="events"
+              loading={isLoading && activeTab === "today"}
+            />
+            </CardContent>
           </Card>
         </TabsContent>
       </Tabs>
