@@ -168,10 +168,12 @@ export function SaleEditor({ sale, open, loading = false, onOpenChange, onSucces
   const [customerSearchOpen, setCustomerSearchOpen] = useState(false);
   const [productSearch, setProductSearch] = useState("");
   const [productDropdownOpen, setProductDropdownOpen] = useState(false);
+  const [highlightedProductIndex, setHighlightedProductIndex] = useState(0);
   const [formError, setFormError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const productSearchRef = useRef<HTMLInputElement>(null);
   const productDropdownRef = useRef<HTMLDivElement>(null);
+  const productItemRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   const products = storeProducts as ProductOption[];
 
@@ -218,6 +220,17 @@ export function SaleEditor({ sale, open, loading = false, onOpenChange, onSucces
       : products.filter((p) => (p as { is_active?: boolean }).is_active !== false);
     return list.slice(0, 50);
   }, [products, productSearch]);
+
+  // Keep the keyboard highlight in range and reset it whenever the list changes.
+  useEffect(() => {
+    setHighlightedProductIndex(0);
+  }, [productSearch]);
+
+  // Scroll the highlighted row into view as the user arrows through the list.
+  useEffect(() => {
+    if (!productDropdownOpen) return;
+    productItemRefs.current[highlightedProductIndex]?.scrollIntoView({ block: "nearest" });
+  }, [highlightedProductIndex, productDropdownOpen]);
 
   const grossSubtotal = useMemo(
     () => items.reduce((sum, item) => sum + num(item.price) * num(item.quantity), 0),
@@ -294,26 +307,38 @@ export function SaleEditor({ sale, open, loading = false, onOpenChange, onSucces
   };
 
   const handleProductSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setProductDropdownOpen(true);
+      setHighlightedProductIndex((i) => Math.min(i + 1, Math.max(0, filteredProducts.length - 1)));
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setProductDropdownOpen(true);
+      setHighlightedProductIndex((i) => Math.max(i - 1, 0));
+      return;
+    }
+    if (e.key === "Escape") {
+      setProductDropdownOpen(false);
+      return;
+    }
     if (e.key !== "Enter") return;
     e.preventDefault();
     const term = productSearch.trim();
-    if (!term) return;
 
-    const scanned = findProductByScan(products, term);
+    // Exact scan (barcode/SKU) always wins so scanners add instantly.
+    const scanned = term ? findProductByScan(products, term) : null;
     if (scanned) {
       addProductToSale(scanned);
       return;
     }
-    if (filteredProducts.length === 1) {
-      addProductToSale(filteredProducts[0]);
+    // Otherwise add the row the user has highlighted with the arrow keys.
+    if (filteredProducts.length > 0) {
+      addProductToSale(filteredProducts[highlightedProductIndex] ?? filteredProducts[0]);
       return;
     }
-    if (filteredProducts.length > 1) {
-      toast.message("Select a product from the list");
-      setProductDropdownOpen(true);
-    } else {
-      toast.error("No matching product found");
-    }
+    if (term) toast.error("No matching product found");
   };
 
   const validateBeforeSave = (): boolean => {
@@ -531,7 +556,11 @@ export function SaleEditor({ sale, open, loading = false, onOpenChange, onSucces
                     className="pl-10 pr-10 h-11 text-base"
                     value={productSearch}
                     disabled={productsLoading}
-                    onFocus={() => setProductDropdownOpen(true)}
+                    onFocus={() => {
+                      setHighlightedProductIndex(0);
+                      setProductDropdownOpen(true);
+                    }}
+                    onClick={() => setProductDropdownOpen(true)}
                     onChange={(e) => {
                       setProductSearch(e.target.value);
                       setProductDropdownOpen(true);
@@ -563,15 +592,22 @@ export function SaleEditor({ sale, open, loading = false, onOpenChange, onSucces
                           {productSearch.trim() ? "No products match your search" : "Type to search or scan a barcode"}
                         </div>
                       ) : (
-                        filteredProducts.map((p) => {
+                        filteredProducts.map((p, index) => {
                           const stock = getAvailableStock(p);
                           const price = productUnitPrice(p);
                           return (
                             <button
                               key={p.id}
+                              ref={(el) => {
+                                productItemRefs.current[index] = el;
+                              }}
                               type="button"
-                              className="w-full px-4 py-3 text-left hover:bg-blue-50 border-b border-gray-50 last:border-0 transition-colors"
+                              className={cn(
+                                "w-full px-4 py-3 text-left border-b border-gray-50 last:border-0 transition-colors",
+                                index === highlightedProductIndex ? "bg-blue-50" : "hover:bg-blue-50",
+                              )}
                               onMouseDown={(e) => e.preventDefault()}
+                              onMouseEnter={() => setHighlightedProductIndex(index)}
                               onClick={() => addProductToSale(p)}
                             >
                               <div className="flex justify-between items-start gap-3">

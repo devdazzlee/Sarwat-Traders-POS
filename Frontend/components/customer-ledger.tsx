@@ -36,6 +36,8 @@ import {
   Receipt,
   ChevronUp,
   ChevronDown,
+  ChevronRight,
+  Info,
   DollarSign,
   Plus,
   Loader2,
@@ -418,6 +420,10 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
   const [deleteReason, setDeleteReason] = useState("");
   const [isDeletingEntry, setIsDeletingEntry] = useState(false);
   const [viewEntry, setViewEntry] = useState<EnrichedLedgerEntry | null>(null);
+  const [expandedInvoices, setExpandedInvoices] = useState<Set<string>>(new Set());
+  const [expandedAdjustments, setExpandedAdjustments] = useState<Set<string>>(new Set());
+  const [showCreditInfo, setShowCreditInfo] = useState(false);
+  const [breakdownType, setBreakdownType] = useState<null | "charged" | "paid">(null);
   const [billSaleRef, setBillSaleRef] = useState<string | null>(null);
   const [billDialogOpen, setBillDialogOpen] = useState(false);
   const fetchInFlightRef = useRef<Promise<boolean> | null>(null);
@@ -533,6 +539,103 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
     () => filteredEntries.map((e) => enrichLedgerEntry(e, entries)),
     [filteredEntries, entries],
   );
+
+  // Group each credit sale together with the payments/refunds made against it, so the
+  // statement reads one row per invoice (expandable) instead of scattered payment rows.
+  // Cash sales, opening balances, manual adjustments and account-level (unlinked) payments
+  // stay as their own standalone rows.
+  type LedgerRow =
+    | { kind: "single"; key: string; entry: EnrichedLedgerEntry }
+    | {
+        kind: "invoice";
+        key: string;
+        parent: EnrichedLedgerEntry;
+        children: EnrichedLedgerEntry[];
+        charged: number;
+        paid: number;
+        remaining: number;
+      };
+
+  const groupedRows = useMemo<LedgerRow[]>(() => {
+    const byRef = new Map<string, EnrichedLedgerEntry[]>();
+    for (const e of enrichedEntries) {
+      if (!e.relatedRef) continue;
+      const arr = byRef.get(e.relatedRef);
+      if (arr) arr.push(e);
+      else byRef.set(e.relatedRef, [e]);
+    }
+
+    // Pass 1: pair each credit-sale parent with its sale-linked payments/refunds.
+    const childIds = new Set<string>();
+    const childrenByParent = new Map<string, EnrichedLedgerEntry[]>();
+    for (const entry of enrichedEntries) {
+      if (entry.type !== "CREDIT_SALE" || !entry.relatedRef) continue;
+      const children = (byRef.get(entry.relatedRef) ?? []).filter(
+        (e) =>
+          e.id !== entry.id &&
+          !childIds.has(e.id) &&
+          (e.type === "PAYMENT_RECEIVED" || e.type === "REFUND"),
+      );
+      if (children.length > 0) {
+        childrenByParent.set(entry.id, children);
+        children.forEach((c) => childIds.add(c.id));
+      }
+    }
+
+    // Pass 2: emit rows in the existing sorted order, skipping entries that are now nested.
+    const rows: LedgerRow[] = [];
+    for (const entry of enrichedEntries) {
+      if (childIds.has(entry.id)) continue;
+      const children = childrenByParent.get(entry.id);
+      if (children && children.length > 0) {
+        const charged = Number(entry.amount ?? entry.changeAmount ?? 0);
+        const paid = children.reduce((sum, c) => sum + Number(c.changeAmount ?? 0), 0);
+        const remaining = Math.max(0, Number((charged - paid).toFixed(2)));
+        rows.push({ kind: "invoice", key: entry.id, parent: entry, children, charged, paid, remaining });
+      } else {
+        rows.push({ kind: "single", key: entry.id, entry });
+      }
+    }
+    return rows;
+  }, [enrichedEntries]);
+
+  const toggleInvoice = (id: string) => {
+    setExpandedInvoices((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAdjustments = (id: string) => {
+    setExpandedAdjustments((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  // When the customer is in credit (paid more than charged), trace which entries created
+  // that advance: walk the ledger oldest→newest and record every step where the running
+  // balance dropped further below zero. Each such step is an over-payment that added credit.
+  // NOTE: declared before any early return so the hook order stays stable across renders.
+  const creditSources = useMemo(() => {
+    if (summary.balance >= -0.009) return [] as { entry: EnrichedLedgerEntry; credit: number }[];
+    const chrono = [...enrichedEntries].sort(
+      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
+    );
+    const sources: { entry: EnrichedLedgerEntry; credit: number }[] = [];
+    let creditBefore = 0;
+    for (const e of chrono) {
+      const creditAfter = Math.max(0, -Number(e.balance));
+      const delta = Number((creditAfter - creditBefore).toFixed(2));
+      if (delta > 0.009) sources.push({ entry: e, credit: delta });
+      creditBefore = creditAfter;
+    }
+    return sources;
+  }, [enrichedEntries, summary.balance]);
 
   type PaymentTarget = {
     key: string;
@@ -980,6 +1083,197 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
   const selectedTarget = paymentTargets.find((t) => t.key === paymentSaleKey);
   const isLedgerBusy = isSubmittingPayment || isSubmittingEdit || isDeletingEntry;
 
+  // Renders one transaction row. `indented` is used for payment rows nested under an invoice.
+  const renderEntryRow = (entry: EnrichedLedgerEntry, opts?: { indented?: boolean }) => {
+    const indented = opts?.indented ?? false;
+    const adjustments = entry.adjustmentHistory ?? [];
+    const hasAdjustments = adjustments.length > 0 && !indented;
+    const adjExpanded = expandedAdjustments.has(entry.id);
+    return (
+      <React.Fragment key={entry.id}>
+      <tr
+        className={cn(
+          "border-b border-slate-100 hover:bg-slate-50/80 border-l-[3px]",
+          entry.borderClass,
+          indented && "bg-slate-50/60",
+        )}
+      >
+        <td className={cn("px-3 py-3 align-middle", indented && "pl-7")}>
+          <div className="flex items-center gap-2">
+            {indented && <span className="text-slate-300 leading-none">└</span>}
+            <div>
+              <p className="text-xs font-medium text-slate-800 leading-tight whitespace-nowrap">
+                {formatDate(entry.date)}
+              </p>
+              <p className="text-[11px] text-slate-500 mt-0.5 leading-tight whitespace-nowrap">
+                {formatTime(entry.date)}
+              </p>
+            </div>
+          </div>
+        </td>
+        <td className="px-3 py-3 align-middle whitespace-nowrap">
+          <p className="text-xs font-medium text-slate-800">{entry.humanType}</p>
+          <p className={cn("text-[11px] mt-0.5 whitespace-nowrap", entry.statusClass)}>
+            {entry.statusLabel}
+          </p>
+        </td>
+        <td className="px-3 py-3 align-middle">
+          <p className="text-sm text-slate-800 leading-snug truncate" title={cleanDisplayText(entry.description)}>
+            {cleanDisplayText(entry.description)}
+          </p>
+          {hasAdjustments && (
+            <button
+              type="button"
+              onClick={() => toggleAdjustments(entry.id)}
+              className="mt-0.5 inline-flex items-center gap-1 text-[11px] font-medium text-blue-600 hover:text-blue-800"
+            >
+              {adjExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+              {adjustments.length} adjustment{adjustments.length === 1 ? "" : "s"} · {adjExpanded ? "hide" : "show"}
+            </button>
+          )}
+          {!indented && entry.relatedEntries.length > 0 && (entry.adjustmentHistory?.length ?? 0) === 0 && (
+            <p className="text-[11px] text-slate-400 mt-0.5 whitespace-nowrap">
+              {entry.relatedEntries.length} related
+            </p>
+          )}
+        </td>
+        <td className="px-3 py-3 align-middle whitespace-nowrap">
+          <span className="text-[11px] font-mono text-slate-600">
+            {entry.relatedRef || entry.reference_no || "—"}
+          </span>
+        </td>
+        <td className="px-3 py-3 text-right align-middle tabular-nums text-slate-700 whitespace-nowrap">
+          {money(entry.balanceBefore)}
+        </td>
+        <td className="px-3 py-3 text-right align-middle tabular-nums font-semibold whitespace-nowrap">
+          <span className={entry.changeClass}>{entry.humanChangeLabel}</span>
+        </td>
+        <td className="px-3 py-3 text-right align-middle tabular-nums font-semibold whitespace-nowrap">
+          <span className={formatRunningBalance(entry.balance).className}>
+            {formatRunningBalance(entry.balance).text}
+          </span>
+        </td>
+        <td className="px-3 py-3 align-middle">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <div className="inline-flex items-stretch rounded-md border border-slate-200 bg-white shadow-sm overflow-hidden shrink-0">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 rounded-none px-2.5 text-xs text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                onClick={() => setViewEntry(entry)}
+                disabled={isLedgerBusy}
+              >
+                View
+              </Button>
+              {getSaleBillRef(entry) && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 rounded-none px-2.5 text-xs text-sky-700 border-l border-slate-200 hover:bg-sky-50"
+                  onClick={() => openSaleBill(entry)}
+                  disabled={isLedgerBusy}
+                >
+                  <FileText className="h-3.5 w-3.5 mr-1" />
+                  Bill
+                </Button>
+              )}
+            </div>
+            {entry.isCollectable && (entry.invoiceDue ?? 0) > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 px-2 text-xs text-emerald-700 border-emerald-200 hover:bg-emerald-50"
+                onClick={() => openPaymentModal(entry)}
+                disabled={isLedgerBusy}
+              >
+                Collect
+              </Button>
+            )}
+            {(entry.isEditable ??
+              (entry.type !== "CREDIT_SALE" &&
+                entry.type !== "CASH_SALE" &&
+                entry.type !== "REFUND")) && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 w-8 p-0 text-slate-500 hover:text-slate-800"
+                title="Edit"
+                onClick={() => openEditModal(entry)}
+                disabled={isLedgerBusy}
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </Button>
+            )}
+            {(entry.isDeletable ??
+              (entry.type !== "CREDIT_SALE" &&
+                entry.type !== "CASH_SALE" &&
+                entry.type !== "REFUND")) && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 w-8 p-0 text-slate-500 hover:text-slate-800"
+                title="Delete"
+                onClick={() => setDeleteTarget(entry)}
+                disabled={isLedgerBusy}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            )}
+          </div>
+        </td>
+      </tr>
+      {hasAdjustments && adjExpanded &&
+        adjustments.map((adj) => (
+          <tr
+            key={`${entry.id}-adj-${adj.id}`}
+            className="border-b border-slate-100 bg-amber-50/40 border-l-[3px] border-l-amber-200"
+          >
+            <td className="px-3 py-2 align-middle pl-7">
+              <div className="flex items-center gap-2">
+                <span className="text-slate-300 leading-none">└</span>
+                <div>
+                  <p className="text-[11px] font-medium text-slate-700 whitespace-nowrap">
+                    {formatDate(adj.createdAt)}
+                  </p>
+                  <p className="text-[10px] text-slate-400 whitespace-nowrap">
+                    {formatTime(adj.createdAt)}
+                  </p>
+                </div>
+              </div>
+            </td>
+            <td className="px-3 py-2 align-middle whitespace-nowrap">
+              <p className="text-[11px] font-medium text-slate-700">Edit</p>
+              <p className="text-[10px] text-amber-600 mt-0.5">Adjustment</p>
+            </td>
+            <td className="px-3 py-2 align-middle">
+              <p className="text-xs text-slate-700 leading-snug">
+                {cleanDisplayText(adj.reason || "Sale amount updated")}
+              </p>
+            </td>
+            <td className="px-3 py-2 align-middle whitespace-nowrap">
+              <span className="text-[11px] font-mono text-slate-400">—</span>
+            </td>
+            <td className="px-3 py-2 text-right align-middle tabular-nums text-xs text-slate-600 whitespace-nowrap">
+              {money(adj.previousAmount)}
+            </td>
+            <td className="px-3 py-2 text-right align-middle tabular-nums text-xs font-semibold whitespace-nowrap">
+              <span className={adj.signedDelta >= 0 ? "text-rose-700" : "text-emerald-700"}>
+                {formatSignedMoney(
+                  Math.abs(adj.signedDelta),
+                  adj.signedDelta >= 0 ? "increase" : "decrease",
+                )}
+              </span>
+            </td>
+            <td className="px-3 py-2 text-right align-middle tabular-nums text-xs font-semibold text-slate-700 whitespace-nowrap">
+              {money(adj.newAmount)}
+            </td>
+            <td />
+          </tr>
+        ))}
+      </React.Fragment>
+    );
+  };
+
   return (
     <div className="flex flex-col min-h-0 flex-1 bg-slate-100 h-full">
       <div className="bg-white border-b border-slate-200 px-4 lg:px-6 py-3 shrink-0">
@@ -1023,22 +1317,58 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
       <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 lg:p-6">
         <div className="max-w-[1400px] mx-auto w-full space-y-5">
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <div className="bg-white rounded-lg border border-rose-100 border-l-4 border-l-rose-500 p-4">
-            <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">Added to Balance</p>
-            <p className="text-xl font-semibold text-rose-700 mt-1 tabular-nums">{money(summary.totalDebits)}</p>
-            <p className="text-[10px] text-slate-400 mt-1">Sales &amp; charges</p>
-          </div>
-          <div className="bg-white rounded-lg border border-emerald-100 border-l-4 border-l-emerald-500 p-4">
-            <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">Paid by Customer</p>
-            <p className="text-xl font-semibold text-emerald-700 mt-1 tabular-nums">{money(summary.totalCredits)}</p>
-            <p className="text-[10px] text-slate-400 mt-1">Payments received</p>
-          </div>
-          <div className={cn("rounded-lg border p-4 border-l-4", netBalance.cardClass, netBalance.variant === "due" ? "border-l-amber-500" : netBalance.variant === "credit" ? "border-l-emerald-500" : "border-l-slate-400")}>
-            <p className={cn("text-[11px] font-medium uppercase tracking-wide", netBalance.labelClass)}>{netBalance.label}</p>
-            <p className={cn("text-xl font-semibold mt-1 tabular-nums", netBalance.className)}>
-              {netBalance.variant === "settled" ? "0" : money(netBalance.amount)}
+          <button
+            type="button"
+            onClick={() => setBreakdownType("charged")}
+            className="text-left bg-white rounded-lg border border-rose-100 border-l-4 border-l-rose-500 p-4 transition-shadow hover:shadow-md focus:outline-none focus:ring-2 focus:ring-rose-300"
+          >
+            <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wide flex items-center gap-1">
+              Added to Balance
+              <Info className="h-3 w-3" />
             </p>
-          </div>
+            <p className="text-xl font-semibold text-rose-700 mt-1 tabular-nums">{money(summary.totalDebits)}</p>
+            <p className="text-[10px] text-rose-500 mt-1 underline decoration-dotted">Sales &amp; charges — view</p>
+          </button>
+          <button
+            type="button"
+            onClick={() => setBreakdownType("paid")}
+            className="text-left bg-white rounded-lg border border-emerald-100 border-l-4 border-l-emerald-500 p-4 transition-shadow hover:shadow-md focus:outline-none focus:ring-2 focus:ring-emerald-300"
+          >
+            <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wide flex items-center gap-1">
+              Paid by Customer
+              <Info className="h-3 w-3" />
+            </p>
+            <p className="text-xl font-semibold text-emerald-700 mt-1 tabular-nums">{money(summary.totalCredits)}</p>
+            <p className="text-[10px] text-emerald-600 mt-1 underline decoration-dotted">Payments received — view</p>
+          </button>
+          {netBalance.variant === "credit" ? (
+            <button
+              type="button"
+              onClick={() => setShowCreditInfo(true)}
+              className={cn(
+                "text-left rounded-lg border p-4 border-l-4 border-l-emerald-500 transition-shadow hover:shadow-md focus:outline-none focus:ring-2 focus:ring-emerald-300",
+                netBalance.cardClass,
+              )}
+            >
+              <p className={cn("text-[11px] font-medium uppercase tracking-wide flex items-center gap-1", netBalance.labelClass)}>
+                {netBalance.label}
+                <Info className="h-3 w-3" />
+              </p>
+              <p className={cn("text-xl font-semibold mt-1 tabular-nums", netBalance.className)}>
+                {money(netBalance.amount)}
+              </p>
+              <p className="text-[10px] text-emerald-600 mt-1 underline decoration-dotted">
+                Where did this come from?
+              </p>
+            </button>
+          ) : (
+            <div className={cn("rounded-lg border p-4 border-l-4", netBalance.cardClass, netBalance.variant === "due" ? "border-l-amber-500" : "border-l-slate-400")}>
+              <p className={cn("text-[11px] font-medium uppercase tracking-wide", netBalance.labelClass)}>{netBalance.label}</p>
+              <p className={cn("text-xl font-semibold mt-1 tabular-nums", netBalance.className)}>
+                {netBalance.variant === "settled" ? "0" : money(netBalance.amount)}
+              </p>
+            </div>
+          )}
           <div className="bg-white rounded-lg border border-slate-200 border-l-4 border-l-slate-400 p-4">
             <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">Credit Limit</p>
             <p className="text-xl font-semibold text-slate-900 mt-1 tabular-nums">
@@ -1120,160 +1450,162 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                     </td>
                   </tr>
                 ) : (
-                  enrichedEntries.map((entry) => (
-                    <tr
-                      key={entry.id}
-                      className={cn(
-                        "border-b border-slate-100 hover:bg-slate-50/80 border-l-[3px]",
-                        entry.borderClass,
-                      )}
-                    >
-                      <td className="px-3 py-3 align-middle">
-                        <p className="text-xs font-medium text-slate-800 leading-tight whitespace-nowrap">
-                          {formatDate(entry.date)}
-                        </p>
-                        <p className="text-[11px] text-slate-500 mt-0.5 leading-tight whitespace-nowrap">
-                          {formatTime(entry.date)}
-                        </p>
-                      </td>
-                      <td className="px-3 py-3 align-middle whitespace-nowrap">
-                        <p className="text-xs font-medium text-slate-800">{entry.humanType}</p>
-                        <p className={cn("text-[11px] mt-0.5 whitespace-nowrap", entry.statusClass)}>
-                          {entry.statusLabel}
-                        </p>
-                      </td>
-                      <td className="px-3 py-3 align-middle">
-                        <p className="text-sm text-slate-800 leading-snug truncate" title={cleanDisplayText(entry.description)}>
-                          {cleanDisplayText(entry.description)}
-                        </p>
-                        {(entry.adjustmentHistory?.length ?? 0) > 0 && (
-                          <p className="text-[11px] text-blue-600 mt-0.5 whitespace-nowrap">
-                            {entry.adjustmentHistory!.length} adjustment{entry.adjustmentHistory!.length === 1 ? "" : "s"} — view details
-                          </p>
-                        )}
-                        {entry.relatedEntries.length > 0 && (entry.adjustmentHistory?.length ?? 0) === 0 && (
-                          <p className="text-[11px] text-slate-400 mt-0.5 whitespace-nowrap">
-                            {entry.relatedEntries.length} related
-                          </p>
-                        )}
-                      </td>
-                      <td className="px-3 py-3 align-middle whitespace-nowrap">
-                        <span className="text-[11px] font-mono text-slate-600">
-                          {entry.relatedRef || entry.reference_no || "—"}
-                        </span>
-                      </td>
-                      <td className="px-3 py-3 text-right align-middle tabular-nums text-slate-700 whitespace-nowrap">
-                        {money(entry.balanceBefore)}
-                      </td>
-                      <td className="px-3 py-3 text-right align-middle tabular-nums font-semibold whitespace-nowrap">
-                        <span className={entry.changeClass}>{entry.humanChangeLabel}</span>
-                      </td>
-                      <td className="px-3 py-3 text-right align-middle tabular-nums font-semibold whitespace-nowrap">
-                        <span className={formatRunningBalance(entry.balance).className}>
-                          {formatRunningBalance(entry.balance).text}
-                        </span>
-                      </td>
-                      <td className="px-3 py-3 align-middle">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <div className="inline-flex items-stretch rounded-md border border-slate-200 bg-white shadow-sm overflow-hidden shrink-0">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-8 rounded-none px-2.5 text-xs text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-                              onClick={() => setViewEntry(entry)}
-                              disabled={isLedgerBusy}
-                            >
-                              View
-                            </Button>
-                            {getSaleBillRef(entry) && (
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-8 rounded-none px-2.5 text-xs text-sky-700 border-l border-slate-200 hover:bg-sky-50"
-                                onClick={() => openSaleBill(entry)}
-                                disabled={isLedgerBusy}
+                  groupedRows.map((row) => {
+                    if (row.kind === "single") {
+                      return renderEntryRow(row.entry);
+                    }
+                    const { parent, children, paid, remaining } = row;
+                    const expanded = expandedInvoices.has(parent.id);
+                    return (
+                      <React.Fragment key={parent.id}>
+                        <tr
+                          className={cn(
+                            "border-b border-slate-100 hover:bg-slate-50/80 border-l-[3px] cursor-pointer",
+                            parent.borderClass,
+                          )}
+                          onClick={() => toggleInvoice(parent.id)}
+                        >
+                          <td className="px-3 py-3 align-middle">
+                            <p className="text-xs font-medium text-slate-800 leading-tight whitespace-nowrap">
+                              {formatDate(parent.date)}
+                            </p>
+                            <p className="text-[11px] text-slate-500 mt-0.5 leading-tight whitespace-nowrap">
+                              {formatTime(parent.date)}
+                            </p>
+                          </td>
+                          <td className="px-3 py-3 align-middle whitespace-nowrap">
+                            <p className="text-xs font-medium text-slate-800">{parent.humanType}</p>
+                            <p className={cn("text-[11px] mt-0.5 whitespace-nowrap", parent.statusClass)}>
+                              {parent.statusLabel}
+                            </p>
+                          </td>
+                          <td className="px-3 py-3 align-middle">
+                            <p className="text-sm text-slate-800 leading-snug truncate" title={cleanDisplayText(parent.description)}>
+                              {cleanDisplayText(parent.description)}
+                            </p>
+                            <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                              {paid > 0.009 && (
+                                <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 tabular-nums whitespace-nowrap">
+                                  Paid {money(paid)}
+                                </span>
+                              )}
+                              <span
+                                className={cn(
+                                  "rounded px-1.5 py-0.5 text-[10px] font-semibold tabular-nums whitespace-nowrap",
+                                  remaining > 0.009 ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700",
+                                )}
                               >
-                                <FileText className="h-3.5 w-3.5 mr-1" />
-                                Bill
-                              </Button>
-                            )}
-                          </div>
-                          {entry.isCollectable && (entry.invoiceDue ?? 0) > 0 && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-8 px-2 text-xs text-emerald-700 border-emerald-200 hover:bg-emerald-50"
-                              onClick={() => openPaymentModal(entry)}
-                              disabled={isLedgerBusy}
+                                {remaining > 0.009 ? `Due ${money(remaining)}` : "Settled"}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleInvoice(parent.id);
+                              }}
+                              className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-sky-700 hover:text-sky-900"
                             >
-                              Collect
-                            </Button>
-                          )}
-                          {(entry.isEditable ??
-                            (entry.type !== "CREDIT_SALE" &&
-                              entry.type !== "CASH_SALE" &&
-                              entry.type !== "REFUND")) && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-8 w-8 p-0 text-slate-500 hover:text-slate-800"
-                              title="Edit"
-                              onClick={() => openEditModal(entry)}
-                              disabled={isLedgerBusy}
-                            >
-                              <Pencil className="h-3.5 w-3.5" />
-                            </Button>
-                          )}
-                          {(entry.isDeletable ??
-                            (entry.type !== "CREDIT_SALE" &&
-                              entry.type !== "CASH_SALE" &&
-                              entry.type !== "REFUND")) && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-8 w-8 p-0 text-slate-500 hover:text-slate-800"
-                              title="Delete"
-                              onClick={() => setDeleteTarget(entry)}
-                              disabled={isLedgerBusy}
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))
+                              {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                              {children.length} payment{children.length === 1 ? "" : "s"} · {expanded ? "hide" : "show"}
+                            </button>
+                          </td>
+                          <td className="px-3 py-3 align-middle whitespace-nowrap">
+                            <span className="text-[11px] font-mono text-slate-600">
+                              {parent.relatedRef || parent.reference_no || "—"}
+                            </span>
+                          </td>
+                          <td className="px-3 py-3 text-right align-middle tabular-nums text-slate-700 whitespace-nowrap">
+                            {money(parent.balanceBefore)}
+                          </td>
+                          <td className="px-3 py-3 text-right align-middle tabular-nums font-semibold whitespace-nowrap">
+                            <span className={parent.changeClass}>{parent.humanChangeLabel}</span>
+                          </td>
+                          <td className="px-3 py-3 text-right align-middle tabular-nums font-semibold whitespace-nowrap">
+                            <span className={formatRunningBalance(parent.balance).className}>
+                              {formatRunningBalance(parent.balance).text}
+                            </span>
+                          </td>
+                          <td className="px-3 py-3 align-middle">
+                            <div className="flex items-center gap-1.5 flex-wrap" onClick={(e) => e.stopPropagation()}>
+                              <div className="inline-flex items-stretch rounded-md border border-slate-200 bg-white shadow-sm overflow-hidden shrink-0">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-8 rounded-none px-2.5 text-xs text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                                  onClick={() => setViewEntry(parent)}
+                                  disabled={isLedgerBusy}
+                                >
+                                  View
+                                </Button>
+                                {getSaleBillRef(parent) && (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-8 rounded-none px-2.5 text-xs text-sky-700 border-l border-slate-200 hover:bg-sky-50"
+                                    onClick={() => openSaleBill(parent)}
+                                    disabled={isLedgerBusy}
+                                  >
+                                    <FileText className="h-3.5 w-3.5 mr-1" />
+                                    Bill
+                                  </Button>
+                                )}
+                              </div>
+                              {parent.isCollectable && (parent.invoiceDue ?? 0) > 0 && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-8 px-2 text-xs text-emerald-700 border-emerald-200 hover:bg-emerald-50"
+                                  onClick={() => openPaymentModal(parent)}
+                                  disabled={isLedgerBusy}
+                                >
+                                  Collect
+                                </Button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                        {expanded && children.map((child) => renderEntryRow(child, { indented: true }))}
+                      </React.Fragment>
+                    );
+                  })
                 )}
               </tbody>
               {enrichedEntries.length > 0 && (
                 <tfoot>
                   <tr className="border-t-2 border-slate-300 bg-slate-100/80">
-                    <td colSpan={4} className="px-3 py-4 text-sm font-bold uppercase tracking-wide text-slate-700">
-                      Totals
-                    </td>
-                    <td className="px-3 py-4 text-right text-sm text-slate-500 tabular-nums">—</td>
-                    <td className="px-3 py-4 text-right text-sm font-bold tabular-nums align-middle">
-                      <div className="flex flex-col items-end gap-0.5 leading-tight">
-                        {summary.totalDebits > 0.009 && (
-                          <span className="text-rose-600 whitespace-nowrap">+{money(summary.totalDebits)}</span>
-                        )}
-                        {summary.totalCredits > 0.009 && (
-                          <span className="text-emerald-600 whitespace-nowrap">−{money(summary.totalCredits)}</span>
-                        )}
-                        {summary.totalDebits <= 0.009 && summary.totalCredits <= 0.009 && (
-                          <span className="text-slate-400">0</span>
-                        )}
+                    <td colSpan={8} className="px-4 py-4">
+                      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                        <div className="min-w-0">
+                          <p className="text-sm font-bold uppercase tracking-wide text-slate-700">Totals</p>
+                          <p className="text-[11px] text-slate-500 mt-0.5">
+                            Total charged minus total paid = balance
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap items-stretch gap-2 sm:gap-3">
+                          <div className="rounded-lg border border-rose-100 bg-white px-4 py-2 shadow-sm">
+                            <p className="text-[10px] font-medium uppercase tracking-wide text-slate-400">Charged</p>
+                            <p className="text-base font-bold text-rose-600 tabular-nums whitespace-nowrap">
+                              +{money(summary.totalDebits)}
+                            </p>
+                          </div>
+                          <div className="rounded-lg border border-emerald-100 bg-white px-4 py-2 shadow-sm">
+                            <p className="text-[10px] font-medium uppercase tracking-wide text-slate-400">Paid</p>
+                            <p className="text-base font-bold text-emerald-600 tabular-nums whitespace-nowrap">
+                              −{money(summary.totalCredits)}
+                            </p>
+                          </div>
+                          <div className={cn("rounded-lg border px-4 py-2 shadow-sm", netBalance.cardClass)}>
+                            <p className="text-[10px] font-medium uppercase tracking-wide text-slate-400">
+                              {netBalance.label}
+                            </p>
+                            <p className={cn("text-lg font-bold tabular-nums whitespace-nowrap", netBalance.className)}>
+                              {netBalance.variant === "settled" ? "0" : money(netBalance.amount)}
+                            </p>
+                          </div>
+                        </div>
                       </div>
                     </td>
-                    <td
-                      className={cn(
-                        "px-3 py-4 text-right text-base font-bold tabular-nums whitespace-nowrap align-middle bg-slate-100/80",
-                        netBalance.className,
-                      )}
-                    >
-                      {netBalance.variant === "settled" ? "0" : money(netBalance.amount)}
-                    </td>
-                    <td />
                   </tr>
                 </tfoot>
               )}
@@ -1282,6 +1614,148 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
         </div>
         </div>
       </div>
+
+      <Dialog open={!!breakdownType} onOpenChange={(open) => !open && setBreakdownType(null)}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          {breakdownType && (() => {
+            const isCharged = breakdownType === "charged";
+            const list = enrichedEntries.filter((e) =>
+              isCharged ? Number(e.debit) > 0.009 : Number(e.credit) > 0.009,
+            );
+            const total = isCharged ? summary.totalDebits : summary.totalCredits;
+            const amountClass = isCharged ? "text-rose-700" : "text-emerald-700";
+            const sign = isCharged ? "+" : "−";
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2">
+                    <Info className={cn("h-4 w-4", isCharged ? "text-rose-600" : "text-emerald-600")} />
+                    {isCharged ? "Added to balance" : "Paid by customer"}
+                  </DialogTitle>
+                  <DialogDescription>
+                    {isCharged
+                      ? "Every sale or charge that increased what this customer owes."
+                      : "Every payment or credit that reduced what this customer owes."}
+                  </DialogDescription>
+                </DialogHeader>
+
+                <div className="space-y-3 py-2">
+                  {list.length === 0 ? (
+                    <p className="text-sm text-slate-500">No entries.</p>
+                  ) : (
+                    <div className="border border-slate-200 rounded-md divide-y divide-slate-100">
+                      {list.map((e) => {
+                        const amt = isCharged ? Number(e.debit) : Number(e.credit);
+                        return (
+                          <div key={e.id} className="p-3 flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium text-slate-800 truncate" title={cleanDisplayText(e.description)}>
+                                {cleanDisplayText(e.description)}
+                              </p>
+                              <p className="text-[11px] text-slate-500 mt-0.5">
+                                {e.humanType} · {formatDate(e.date)} {formatTime(e.date)}
+                                {(e.relatedRef || e.reference_no) ? ` · ${e.relatedRef || e.reference_no}` : ""}
+                              </p>
+                            </div>
+                            <p className={cn("text-sm font-bold tabular-nums whitespace-nowrap", amountClass)}>
+                              {sign}{money(amt)}
+                            </p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between border-t border-slate-200 pt-3">
+                    <span className="text-sm font-semibold text-slate-700">
+                      Total ({list.length} {list.length === 1 ? "entry" : "entries"})
+                    </span>
+                    <span className={cn("text-base font-bold tabular-nums", amountClass)}>
+                      {sign}{money(total)}
+                    </span>
+                  </div>
+                </div>
+
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setBreakdownType(null)}>Close</Button>
+                </DialogFooter>
+              </>
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showCreditInfo} onOpenChange={setShowCreditInfo}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Info className="h-4 w-4 text-emerald-600" />
+              Where the credit came from
+            </DialogTitle>
+            <DialogDescription>
+              This customer has paid more than they were charged. The extra sits as advance
+              credit and is automatically applied to their next credit sales.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div className="grid grid-cols-3 gap-px bg-slate-200 border border-slate-200 text-sm rounded-md overflow-hidden">
+              <div className="bg-white p-3">
+                <p className="text-[10px] uppercase tracking-wide text-slate-500">Total charged</p>
+                <p className="font-semibold mt-1 tabular-nums text-rose-700">{money(summary.totalDebits)}</p>
+              </div>
+              <div className="bg-white p-3">
+                <p className="text-[10px] uppercase tracking-wide text-slate-500">Total paid</p>
+                <p className="font-semibold mt-1 tabular-nums text-emerald-700">{money(summary.totalCredits)}</p>
+              </div>
+              <div className="bg-emerald-50 p-3">
+                <p className="text-[10px] uppercase tracking-wide text-emerald-600">Available credit</p>
+                <p className="font-bold mt-1 tabular-nums text-emerald-700">{money(netBalance.amount)}</p>
+              </div>
+            </div>
+
+            <div>
+              <p className="text-[11px] uppercase tracking-wide text-slate-500 font-medium mb-2">
+                Over-payments that created this credit
+              </p>
+              {creditSources.length === 0 ? (
+                <p className="text-sm text-slate-500">
+                  The credit is the difference between total paid and total charged ({money(summary.totalCredits)} − {money(summary.totalDebits)} = {money(netBalance.amount)}).
+                </p>
+              ) : (
+                <div className="border border-slate-200 rounded-md divide-y divide-slate-100">
+                  {creditSources.map(({ entry, credit }) => (
+                    <div key={entry.id} className="p-3 flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-slate-800 truncate" title={cleanDisplayText(entry.description)}>
+                          {cleanDisplayText(entry.description)}
+                        </p>
+                        <p className="text-[11px] text-slate-500 mt-0.5">
+                          {entry.humanType} · {formatDate(entry.date)} {formatTime(entry.date)}
+                          {(entry.relatedRef || entry.reference_no) ? ` · ${entry.relatedRef || entry.reference_no}` : ""}
+                        </p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className="text-[10px] uppercase tracking-wide text-emerald-600">Added to credit</p>
+                        <p className="text-sm font-bold text-emerald-700 tabular-nums whitespace-nowrap">
+                          +{money(credit)}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <p className="text-[11px] text-slate-500">
+              Tip: use <span className="font-medium">Receive Payment</span> only for what a customer owes. Overpaying creates this advance credit.
+            </p>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowCreditInfo(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!viewEntry} onOpenChange={(open) => !open && setViewEntry(null)}>
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
