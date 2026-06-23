@@ -1481,8 +1481,6 @@ class SaleService {
         item_type: SaleItemType.ORIGINAL,
       }));
 
-      const oldCreditOutstanding =
-        oldSale.payment_method === 'CREDIT' ? oldTotal.minus(oldPaid) : new Prisma.Decimal(0);
       const newCreditOutstanding =
         newPaymentMethod === 'CREDIT'
           ? newTotal.minus(new Prisma.Decimal(Math.min(paymentReceived, newTotalNumber)))
@@ -1491,37 +1489,35 @@ class SaleService {
       const oldCustomerId = oldSale.customer_id;
       const newCustomerId = resolvedCustomerId ?? null;
       const customerChanged = oldCustomerId !== newCustomerId;
-
-      const adjustCustomerCredit = async (
-        customerId: string,
-        delta: Prisma.Decimal,
-        description: string,
-      ) => {
-        const signedDelta = Number(delta.toFixed(3));
-        if (Math.abs(signedDelta) <= 0.009) return;
-        await ledgerBalanceEngine.postSignedAdjustment(tx, {
-          customerId,
-          signedDelta,
-          description,
-          saleId: oldSale.sale_number,
-          createdBy: data.createdBy,
-        });
-      };
+      const saleEditReason = data.notes?.trim()
+        ? `Sale edited: ${data.notes.trim()}`
+        : `Sale edited (${oldSale.sale_number})`;
 
       if (customerChanged) {
-        if (oldCustomerId && !oldCreditOutstanding.isZero()) {
-          await adjustCustomerCredit(
-            oldCustomerId,
-            oldCreditOutstanding.negated(),
-            `Sale edit: credit removed (${oldSale.sale_number})`,
-          );
+        if (oldCustomerId) {
+          await ledgerBalanceEngine.syncSaleLedgerEntries(tx, {
+            customerId: oldCustomerId,
+            saleNumber: oldSale.sale_number,
+            paymentMethod: oldSale.payment_method,
+            creditOwedAmount: 0,
+            upfrontPaymentAmount: 0,
+            cashSaleAmount: 0,
+            createdBy: data.createdBy,
+            reason: `Customer removed from sale (${oldSale.sale_number})`,
+          });
         }
-        if (newCustomerId && !newCreditOutstanding.isZero()) {
-          await adjustCustomerCredit(
-            newCustomerId,
-            newCreditOutstanding,
-            `Sale edit: credit assigned (${oldSale.sale_number})`,
-          );
+        if (newCustomerId) {
+          await ledgerBalanceEngine.syncSaleLedgerEntries(tx, {
+            customerId: newCustomerId,
+            saleNumber: oldSale.sale_number,
+            paymentMethod: normalizedPaymentMethod,
+            creditOwedAmount: Number(newCreditOutstanding.toFixed(3)),
+            upfrontPaymentAmount:
+              newPaymentMethod === 'CREDIT' ? paymentReceived : 0,
+            cashSaleAmount: newPaymentMethod !== 'CREDIT' ? newTotalNumber : 0,
+            createdBy: data.createdBy,
+            reason: `Customer assigned to sale (${oldSale.sale_number})`,
+          });
         }
       } else if (newCustomerId) {
         await ledgerBalanceEngine.syncSaleLedgerEntries(tx, {
@@ -1533,6 +1529,7 @@ class SaleService {
             newPaymentMethod === 'CREDIT' ? paymentReceived : 0,
           cashSaleAmount: newPaymentMethod !== 'CREDIT' ? newTotalNumber : 0,
           createdBy: data.createdBy,
+          reason: saleEditReason,
         });
       }
 

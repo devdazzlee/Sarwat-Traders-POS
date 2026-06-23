@@ -2,6 +2,7 @@ import { Prisma, LedgerEntryType } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { AppError } from '../utils/apiError';
 import { ledgerBalanceEngine, TxClient } from './ledger-balance.engine';
+import { isSaleLinkedShadowAdjustment } from '../utils/sale-ledger-revision';
 
 class CustomerLedgerService {
   /**
@@ -511,6 +512,7 @@ class CustomerLedgerService {
 
     await prisma.$transaction(async (tx) => {
       await this.reconcileInvoicePayments(tx, customerId);
+      await ledgerBalanceEngine.consolidateSaleLinkedAdjustments(tx, customerId);
       await ledgerBalanceEngine.recalculateRunningBalances(tx, customerId);
     });
 
@@ -541,7 +543,7 @@ class CustomerLedgerService {
     };
 
     const skip = (page - 1) * limit;
-    const [total, rawEntries, allEntries] = await Promise.all([
+    const [total, rawEntries, allEntries, revisions] = await Promise.all([
       prisma.customerLedger.count({ where }),
       prisma.customerLedger.findMany({
         where,
@@ -552,9 +554,23 @@ class CustomerLedgerService {
       prisma.customerLedger.findMany({
         where: { customer_id: customerId },
         orderBy: { created_at: 'asc' },
-        select: { id: true, entry_type: true, amount: true, balance_after: true, reference_no: true, description: true },
+        select: { id: true, entry_type: true, amount: true, balance_after: true, reference_no: true, description: true, sale_id: true },
+      }),
+      prisma.customerSaleLedgerRevision.findMany({
+        where: { customer_id: customerId },
+        orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
       }),
     ]);
+
+    const visibleRawEntries = rawEntries.filter((e) => !isSaleLinkedShadowAdjustment(e));
+    const visibleAllEntries = allEntries.filter((e) => !isSaleLinkedShadowAdjustment(e));
+
+    const revisionsBySale = new Map<string, typeof revisions>();
+    for (const revision of revisions) {
+      const group = revisionsBySale.get(revision.sale_number) ?? [];
+      group.push(revision);
+      revisionsBySale.set(revision.sale_number, group);
+    }
 
     // Derive debit/credit from entry amounts (not balance_after deltas — avoids stale balance bugs)
     const debitCreditById = new Map<string, { debit: number; credit: number }>();
@@ -562,7 +578,7 @@ class CustomerLedgerService {
     let running = 0;
     let totalDebits = 0;
     let totalCredits = 0;
-    for (const e of allEntries) {
+    for (const e of visibleAllEntries) {
       const delta = this.computeSignedDelta(e, running);
       let debit = 0;
       let credit = 0;
@@ -580,7 +596,7 @@ class CustomerLedgerService {
 
     let totalSales = 0;
     let totalPayments = 0;
-    for (const e of allEntries) {
+    for (const e of visibleAllEntries) {
       const amt = Number(e.amount);
       if (e.entry_type === 'CREDIT_SALE') totalSales += amt;
       else if (e.entry_type === 'PAYMENT_RECEIVED') totalPayments += amt;
@@ -588,7 +604,7 @@ class CustomerLedgerService {
     }
 
     const saleRefs = [
-      ...new Set(rawEntries.map((e) => e.sale_id).filter(Boolean)),
+      ...new Set(visibleRawEntries.map((e) => e.sale_id).filter(Boolean)),
     ] as string[];
 
     type SaleRow = {
@@ -622,11 +638,34 @@ class CustomerLedgerService {
       }
     }
 
-    const entries = rawEntries.map((e) => {
+    const entries = visibleRawEntries.map((e) => {
       const saleInfo = e.sale_id ? salesByRef[e.sale_id] : null;
       const isCreditSale = e.entry_type === 'CREDIT_SALE';
       const isCashSale = e.entry_type === 'CASH_SALE';
       const isSaleEntry = isCreditSale || isCashSale;
+      const saleRevisions = e.sale_id ? revisionsBySale.get(e.sale_id) ?? [] : [];
+      const saleLinkedRevisions = isSaleEntry
+        ? saleRevisions.filter(
+            (r) =>
+              !r.ledger_entry_id ||
+              r.ledger_entry_id === e.id ||
+              (isCreditSale && r.field === 'CREDIT_OWED') ||
+              (isCashSale && r.field === 'CASH_TOTAL'),
+          )
+        : [];
+      const originalLedgerAmount =
+        saleLinkedRevisions.length > 0
+          ? Number(saleLinkedRevisions[0].previous_amount)
+          : Number(e.amount);
+      const adjustmentHistory = saleLinkedRevisions.map((r) => ({
+        id: r.id,
+        field: r.field,
+        previousAmount: Number(r.previous_amount),
+        newAmount: Number(r.new_amount),
+        signedDelta: Number(r.signed_delta),
+        reason: r.reason,
+        createdAt: r.created_at.toISOString(),
+      }));
 
       const invoiceTotal =
         isSaleEntry && saleInfo ? Number(saleInfo.total_amount) : 0;
@@ -662,6 +701,8 @@ class CustomerLedgerService {
             ? 'Manage from Returns & Exchanges'
             : null,
         payment_method: isSaleEntry ? saleInfo?.payment_method ?? (isCashSale ? 'CASH' : 'CREDIT') : null,
+        originalLedgerAmount,
+        adjustmentHistory,
       };
     });
 

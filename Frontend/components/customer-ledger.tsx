@@ -57,6 +57,16 @@ import { SaleBillDialog } from "@/components/sale-bill-dialog";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
+interface SaleAdjustmentHistoryItem {
+  id: string;
+  field: string;
+  previousAmount: number;
+  newAmount: number;
+  signedDelta: number;
+  reason: string | null;
+  createdAt: string;
+}
+
 interface LedgerEntry {
   id: string;
   date: string;
@@ -77,6 +87,8 @@ interface LedgerEntry {
   isDeletable?: boolean;
   editRestrictedReason?: string | null;
   payment_method: string | null;
+  originalLedgerAmount?: number;
+  adjustmentHistory?: SaleAdjustmentHistoryItem[];
 }
 
 interface CustomerDetails {
@@ -212,8 +224,7 @@ function enrichLedgerEntry(entry: LedgerEntry, allEntries: LedgerEntry[]): Enric
   const desc = cleanDisplayText(entry.description).toLowerCase();
   const isOpening = desc.includes("opening balance");
   const isDeletedAudit = desc.includes("deleted");
-  const isSaleEdit =
-    desc.includes("sale edit") || desc.includes("credit removed") || desc.includes("credit assigned");
+  const hasAdjustmentHistory = (entry.adjustmentHistory?.length ?? 0) > 0;
 
   let humanType = entryTypeLabel(entry.type);
   let humanExplanation = "This entry updated the customer account balance.";
@@ -278,13 +289,6 @@ function enrichLedgerEntry(entry: LedgerEntry, allEntries: LedgerEntry[]): Enric
       statusLabel = "Audit";
       statusClass = "text-slate-500";
       borderClass = "border-l-slate-300";
-    } else if (isSaleEdit && relatedRef) {
-      humanType = "Sale Adjustment";
-      humanExplanation = `Linked to ${relatedRef} from a sale edit or customer change.`;
-      statusLabel = "Linked";
-      statusClass = "text-blue-600";
-      changeClass = changeDirection === "decrease" ? "text-emerald-700" : "text-rose-700";
-      borderClass = changeDirection === "decrease" ? "border-l-emerald-400" : "border-l-blue-400";
     } else {
       humanType = "Adjustment";
       humanExplanation =
@@ -301,11 +305,13 @@ function enrichLedgerEntry(entry: LedgerEntry, allEntries: LedgerEntry[]): Enric
   }
 
   if (changeDirection === "decrease" && entry.type !== "PAYMENT_RECEIVED" && entry.type !== "REFUND") {
-    if (!isSaleEdit || !relatedRef) {
-      changeClass = "text-emerald-700";
-    }
-  } else if (changeDirection === "increase" && entry.type === "ADJUSTMENT" && !isOpening && !isDeletedAudit && !(isSaleEdit && relatedRef)) {
+    changeClass = "text-emerald-700";
+  } else if (changeDirection === "increase" && entry.type === "ADJUSTMENT" && !isOpening && !isDeletedAudit) {
     changeClass = "text-rose-700";
+  }
+
+  if (hasAdjustmentHistory && (entry.type === "CREDIT_SALE" || entry.type === "CASH_SALE")) {
+    humanExplanation = "Sale amount reflects all edits. Open details to view adjustment history.";
   }
 
   const humanChangeLabel =
@@ -1133,7 +1139,12 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                         <p className="text-sm text-slate-800 leading-snug truncate" title={cleanDisplayText(entry.description)}>
                           {cleanDisplayText(entry.description)}
                         </p>
-                        {entry.relatedEntries.length > 0 && (
+                        {(entry.adjustmentHistory?.length ?? 0) > 0 && (
+                          <p className="text-[11px] text-blue-600 mt-0.5 whitespace-nowrap">
+                            {entry.adjustmentHistory!.length} adjustment{entry.adjustmentHistory!.length === 1 ? "" : "s"} — view details
+                          </p>
+                        )}
+                        {entry.relatedEntries.length > 0 && (entry.adjustmentHistory?.length ?? 0) === 0 && (
                           <p className="text-[11px] text-slate-400 mt-0.5 whitespace-nowrap">
                             {entry.relatedEntries.length} related
                           </p>
@@ -1330,7 +1341,66 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                   </div>
                 )}
 
-                {viewEntry.relatedEntries.length > 0 && (
+                {(viewEntry.adjustmentHistory?.length ?? 0) > 0 && (
+                  <div className="border border-slate-200 p-3 space-y-3">
+                    <p className="text-[10px] uppercase tracking-wide text-slate-500 font-medium">
+                      Adjustment History
+                    </p>
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                      <div>
+                        <p className="text-slate-500">Original</p>
+                        <p className="font-semibold text-slate-900 tabular-nums">
+                          {money(viewEntry.originalLedgerAmount ?? viewEntry.amount ?? 0)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500">Net change</p>
+                        <p className="font-semibold text-slate-900 tabular-nums">
+                          {formatSignedMoney(
+                            (viewEntry.amount ?? 0) - (viewEntry.originalLedgerAmount ?? viewEntry.amount ?? 0),
+                            (viewEntry.amount ?? 0) >= (viewEntry.originalLedgerAmount ?? 0) ? "increase" : "decrease",
+                          )}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500">Updated total</p>
+                        <p className="font-semibold text-slate-900 tabular-nums">
+                          {money(viewEntry.amount ?? 0)}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="border border-slate-100 divide-y divide-slate-100">
+                      {viewEntry.adjustmentHistory!.map((adj) => (
+                        <div key={adj.id} className="py-2 text-xs">
+                          <div className="flex items-center justify-between gap-2">
+                            <span
+                              className={cn(
+                                "font-semibold tabular-nums",
+                                adj.signedDelta >= 0 ? "text-rose-700" : "text-emerald-700",
+                              )}
+                            >
+                              {formatSignedMoney(
+                                Math.abs(adj.signedDelta),
+                                adj.signedDelta >= 0 ? "increase" : "decrease",
+                              )}
+                            </span>
+                            <span className="text-slate-500 shrink-0">
+                              {formatDate(adj.createdAt)} · {formatTime(adj.createdAt)}
+                            </span>
+                          </div>
+                          <p className="text-slate-600 mt-0.5">
+                            {cleanDisplayText(adj.reason || "Sale amount updated")}
+                          </p>
+                          <p className="text-slate-400 mt-0.5 tabular-nums">
+                            {money(adj.previousAmount)} → {money(adj.newAmount)}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {viewEntry.relatedEntries.length > 0 && (viewEntry.adjustmentHistory?.length ?? 0) === 0 && (
                   <div className="space-y-2">
                     <p className="text-[10px] uppercase tracking-wide text-slate-500 font-medium">
                       Related — {viewEntry.relatedRef}

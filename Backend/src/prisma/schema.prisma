@@ -660,6 +660,7 @@ model Customer {
   hold_sales         HoldSale[]
   device             DeviceIdentity?
   ledger_entries     CustomerLedger[]
+  sale_ledger_revisions CustomerSaleLedgerRevision[]
   sessions           CustomerSession[]
   created_at         DateTime        @default(now())
   updated_at         DateTime        @default(now()) @updatedAt
@@ -956,6 +957,32 @@ enum LedgerEntryType {
   PAYMENT_RECEIVED // Customer paid (balance decreases)
   ADJUSTMENT      // Manual adjustment
   REFUND          // Refund issued (balance decreases)
+}
+
+enum SaleLedgerRevisionField {
+  CREDIT_OWED
+  UPFRONT_PAYMENT
+  CASH_TOTAL
+}
+
+/// Internal audit trail when a sale-linked ledger row is updated in place (not shown on statement).
+model CustomerSaleLedgerRevision {
+  id              String                  @id @default(uuid())
+  customer_id     String
+  customer        Customer                @relation(fields: [customer_id], references: [id])
+  sale_number     String
+  ledger_entry_id String?
+  field           SaleLedgerRevisionField
+  previous_amount Decimal
+  new_amount      Decimal
+  signed_delta    Decimal
+  reason          String?
+  created_by      String?
+  created_at      DateTime                @default(now())
+
+  @@index([customer_id, sale_number])
+  @@index([ledger_entry_id])
+  @@index([created_at])
 }
 
 // Supplier Payables Ledger
