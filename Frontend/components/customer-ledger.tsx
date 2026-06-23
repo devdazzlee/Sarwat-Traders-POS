@@ -47,6 +47,7 @@ import {
 import { cn } from "@/lib/utils";
 import apiClient from "@/lib/apiClient";
 import { notifyDashboardStatsChanged } from "@/lib/dashboard-stats-sync";
+import { refreshCustomerListGlobally } from "@/lib/customer-list-sync";
 import {
   CUSTOMER_LEDGER_REFRESH_EVENT,
   type CustomerLedgerRefreshDetail,
@@ -848,6 +849,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
       if (!synced) return;
 
       notifyDashboardStatsChanged();
+      void refreshCustomerListGlobally();
 
       toast({
         title: "Success",

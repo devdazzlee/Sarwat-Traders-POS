@@ -716,6 +716,79 @@ class CustomerLedgerService {
   }
 
   /**
+   * READ-ONLY: same balance math as the ledger statement (includes reconstructed credit sales).
+   */
+  async computeDisplayBalance(customerId: string): Promise<number> {
+    const map = await this.computeDisplayBalances([customerId]);
+    return map.get(customerId) ?? 0;
+  }
+
+  async computeDisplayBalances(customerIds: string[]): Promise<Map<string, number>> {
+    const result = new Map<string, number>();
+    if (customerIds.length === 0) return result;
+
+    const uniqueIds = [...new Set(customerIds)];
+    const [ledgerByCustomer, salesByCustomer] = await Promise.all([
+      prisma.customerLedger
+        .findMany({
+          where: { customer_id: { in: uniqueIds } },
+          orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
+        })
+        .then((rows) => {
+          const grouped = new Map<string, typeof rows>();
+          for (const row of rows) {
+            const group = grouped.get(row.customer_id) ?? [];
+            group.push(row);
+            grouped.set(row.customer_id, group);
+          }
+          return grouped;
+        }),
+      prisma.sale
+        .findMany({
+          where: {
+            customer_id: { in: uniqueIds },
+            status: 'COMPLETED',
+            payment_method: 'CREDIT',
+          },
+          select: {
+            customer_id: true,
+            id: true,
+            sale_number: true,
+            total_amount: true,
+            sale_date: true,
+            created_at: true,
+          },
+        })
+        .then((rows) => {
+          const grouped = new Map<string, typeof rows>();
+          for (const row of rows) {
+            if (!row.customer_id) continue;
+            const group = grouped.get(row.customer_id) ?? [];
+            group.push(row);
+            grouped.set(row.customer_id, group);
+          }
+          return grouped;
+        }),
+    ]);
+
+    for (const customerId of uniqueIds) {
+      const dbEntries = ledgerByCustomer.get(customerId) ?? [];
+      const creditSales = salesByCustomer.get(customerId) ?? [];
+      const syntheticRows = this.buildMissingCreditSaleRows(customerId, creditSales, dbEntries);
+      const visibleAsc = [...dbEntries, ...syntheticRows]
+        .filter((e) => !isSaleLinkedShadowAdjustment(e))
+        .sort((a, b) => {
+          const diff = a.created_at.getTime() - b.created_at.getTime();
+          return diff !== 0 ? diff : a.id.localeCompare(b.id);
+        });
+      const { currentBalance } = this.computeLedgerTotals(visibleAsc);
+      result.set(customerId, currentBalance);
+    }
+
+    return result;
+  }
+
+  /**
    * Get ledger entries for a customer with optional date filtering
    */
   async getCustomerLedger({
@@ -925,13 +998,7 @@ class CustomerLedgerService {
    * Get all customers with outstanding balances (for the dashboard summary)
    */
   async getCreditSummary() {
-    const result = await prisma.customer.aggregate({
-      _sum: { outstanding_balance: true },
-      where: { outstanding_balance: { gt: 0 } },
-    });
-
-    const topDebtors = await prisma.customer.findMany({
-      where: { outstanding_balance: { gt: 0 } },
+    const customers = await prisma.customer.findMany({
       select: {
         id: true,
         name: true,
@@ -939,13 +1006,24 @@ class CustomerLedgerService {
         outstanding_balance: true,
         credit_limit: true,
       },
-      orderBy: { outstanding_balance: 'desc' },
-      take: 10,
     });
+    const balances = await this.computeDisplayBalances(customers.map((c) => c.id));
+
+    const debtors = customers
+      .map((c) => ({
+        ...c,
+        outstanding_balance: new Prisma.Decimal(
+          balances.get(c.id) ?? Number(c.outstanding_balance),
+        ),
+      }))
+      .filter((c) => Number(c.outstanding_balance) > 0.009)
+      .sort((a, b) => Number(b.outstanding_balance) - Number(a.outstanding_balance));
+
+    const totalOutstanding = debtors.reduce((sum, c) => sum + Number(c.outstanding_balance), 0);
 
     return {
-      totalOutstanding: result._sum.outstanding_balance ?? new Prisma.Decimal(0),
-      topDebtors,
+      totalOutstanding: new Prisma.Decimal(totalOutstanding),
+      topDebtors: debtors.slice(0, 10),
     };
   }
 }

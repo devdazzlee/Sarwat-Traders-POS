@@ -5,8 +5,23 @@ import jwt from 'jsonwebtoken';
 import { config } from '../config/app';
 import bcrypt from 'bcryptjs';
 import { ledgerBalanceEngine } from './ledger-balance.engine';
+import CustomerLedgerService from './customer-ledger.service';
 
 class CustomerService {
+    private ledgerService = new CustomerLedgerService();
+
+    private async withComputedBalances<T extends { id: string; outstanding_balance: Prisma.Decimal }>(
+        customers: T[],
+    ): Promise<T[]> {
+        if (customers.length === 0) return customers;
+        const balances = await this.ledgerService.computeDisplayBalances(customers.map((c) => c.id));
+        return customers.map((customer) => ({
+            ...customer,
+            outstanding_balance: new Prisma.Decimal(
+                balances.get(customer.id) ?? Number(customer.outstanding_balance),
+            ),
+        }));
+    }
     private generateToken(cusId: Customer['id'], email: Customer['email']): string {
         return jwt.sign(
             { email, id: cusId },
@@ -104,11 +119,12 @@ class CustomerService {
     public async getCustomerById(customerId: Customer['id']) {
         const customer = await prisma.customer.findUnique({ where: { id: customerId } });
         if (!customer) throw new AppError(404, 'Customer not found');
-        return customer;
+        const [withBalance] = await this.withComputedBalances([customer]);
+        return withBalance;
     }
 
     public async getCustomers(search?: string) {
-        return prisma.customer.findMany({
+        const customers = await prisma.customer.findMany({
             where: search
                 ? {
                     OR: [
@@ -120,6 +136,7 @@ class CustomerService {
                 : undefined,
             orderBy: { created_at: 'desc' },
         });
+        return this.withComputedBalances(customers);
     }
 
     public async updateCustomer(customerId: Customer['id'], updateData: Partial<Customer>) {
