@@ -42,6 +42,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   format,
   parseISO,
+  startOfDay,
+  endOfDay,
+  startOfWeek,
+  endOfWeek,
+  startOfMonth,
+  endOfMonth,
+  startOfYear,
+  endOfYear,
 } from "date-fns";
 import { isKioskMode } from "@/utils/kiosk-printing";
 import { useToast } from "@/hooks/use-toast";
@@ -190,6 +198,39 @@ export function SalesHistory() {
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>("all");
   const { customers, fetchCustomers } = useStore();
   const [customerSearch, setCustomerSearch] = useState("");
+  const [datePreset, setDatePreset] = useState<
+    "all" | "today" | "week" | "month" | "year" | "custom"
+  >("all");
+
+  const applyDatePreset = (
+    preset: "all" | "today" | "week" | "month" | "year"
+  ) => {
+    setDatePreset(preset);
+    const now = new Date();
+    switch (preset) {
+      case "today":
+        setStartDate(startOfDay(now));
+        setEndDate(endOfDay(now));
+        break;
+      case "week":
+        setStartDate(startOfWeek(now, { weekStartsOn: 1 }));
+        setEndDate(endOfWeek(now, { weekStartsOn: 1 }));
+        break;
+      case "month":
+        setStartDate(startOfMonth(now));
+        setEndDate(endOfMonth(now));
+        break;
+      case "year":
+        setStartDate(startOfYear(now));
+        setEndDate(endOfYear(now));
+        break;
+      case "all":
+      default:
+        setStartDate(undefined);
+        setEndDate(undefined);
+        break;
+    }
+  };
   
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
@@ -1139,6 +1180,30 @@ export function SalesHistory() {
               ))}
           </SelectContent>
         </Select>
+        <Select
+          value={datePreset === "custom" ? "custom" : datePreset}
+          onValueChange={(value) => {
+            if (value === "custom") {
+              setDatePreset("custom");
+              return;
+            }
+            applyDatePreset(value as "all" | "today" | "week" | "month" | "year");
+          }}
+        >
+          <SelectTrigger className="w-full sm:w-40">
+            <SelectValue placeholder="All Time" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Time</SelectItem>
+            <SelectItem value="today">Today</SelectItem>
+            <SelectItem value="week">This Week</SelectItem>
+            <SelectItem value="month">This Month</SelectItem>
+            <SelectItem value="year">This Year</SelectItem>
+            {datePreset === "custom" ? (
+              <SelectItem value="custom">Custom Range</SelectItem>
+            ) : null}
+          </SelectContent>
+        </Select>
         <Popover>
           <PopoverTrigger asChild>
             <Button variant="outline" className="flex items-center">
@@ -1158,7 +1223,11 @@ export function SalesHistory() {
                 <Calendar
                   mode="single"
                   selected={startDate}
-                  onSelect={(date) => date && setStartDate(date)}
+                  onSelect={(date) => {
+                    if (!date) return;
+                    setStartDate(date);
+                    setDatePreset("custom");
+                  }}
                 />
               </div>
               <div>
@@ -1166,7 +1235,11 @@ export function SalesHistory() {
                 <Calendar
                   mode="single"
                   selected={endDate}
-                  onSelect={(date) => date && setEndDate(date)}
+                  onSelect={(date) => {
+                    if (!date) return;
+                    setEndDate(date);
+                    setDatePreset("custom");
+                  }}
                 />
               </div>
             </div>
@@ -1175,6 +1248,7 @@ export function SalesHistory() {
               onClick={() => {
                 setStartDate(undefined);
                 setEndDate(undefined);
+                setDatePreset("all");
               }}
               className="w-full"
             >
