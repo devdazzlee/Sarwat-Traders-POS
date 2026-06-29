@@ -57,6 +57,7 @@ import { printReceiptViaServer, type ReceiptData } from "@/lib/print-server";
 import { usePrinterSettings } from "@/hooks/use-printer-settings";
 import { downloadA4Invoice, generateA4InvoicePDF, printA4Invoice, shareOnEmail, shareOnWhatsApp, type InvoiceData } from "@/lib/pdf-generator";
 import { creditLedgerFields } from "@/lib/credit-sale-ledger";
+import { useStore } from "@/lib/store";
 import { SaleEditor } from "./sale-editor";
 import {
   AlertDialog,
@@ -186,6 +187,9 @@ export function SalesHistory() {
   const [searchTerm, setSearchTerm] = useState("");
   const [startDate, setStartDate] = useState<Date | undefined>(undefined);
   const [endDate, setEndDate] = useState<Date | undefined>(undefined);
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string>("all");
+  const { customers, fetchCustomers } = useStore();
+  const [customerSearch, setCustomerSearch] = useState("");
   
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
@@ -311,6 +315,9 @@ export function SalesHistory() {
       if (branchId && branchId !== "Not Found" && branchId.trim()) {
         params.branchId = branchId.trim();
       }
+      if (selectedCustomerId && selectedCustomerId !== "all") {
+        params.customerId = selectedCustomerId;
+      }
 
       if (pageSize > 0) {
         params.page = String(currentPage);
@@ -365,7 +372,11 @@ export function SalesHistory() {
 
   useEffect(() => {
     fetchSales();
-  }, [currentPage, pageSize, searchTerm, startDate, endDate]);
+  }, [currentPage, pageSize, searchTerm, startDate, endDate, selectedCustomerId]);
+
+  useEffect(() => {
+    void fetchCustomers();
+  }, [fetchCustomers]);
 
   useEffect(() => {
     const loadBranchInfo = async () => {
@@ -407,7 +418,7 @@ export function SalesHistory() {
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, startDate, endDate]);
+  }, [searchTerm, startDate, endDate, selectedCustomerId]);
 
   // Export CSV
   const exportCSV = () => {
@@ -1089,6 +1100,45 @@ export function SalesHistory() {
             onChange={(e) => setSearchTerm(e.target.value)}
           />
         </div>
+        <Select
+          value={selectedCustomerId}
+          onValueChange={(value) => {
+            setSelectedCustomerId(value);
+            setCustomerSearch("");
+          }}
+        >
+          <SelectTrigger className="w-full sm:w-64">
+            <SelectValue placeholder="All Customers" />
+          </SelectTrigger>
+          <SelectContent>
+            <div className="p-2">
+              <Input
+                placeholder="Search customer..."
+                value={customerSearch}
+                onChange={(e) => setCustomerSearch(e.target.value)}
+                onKeyDown={(e) => e.stopPropagation()}
+                className="h-8"
+              />
+            </div>
+            <SelectItem value="all">All Customers</SelectItem>
+            {customers
+              .filter((c) => {
+                const term = customerSearch.trim().toLowerCase();
+                if (!term) return true;
+                return (
+                  c.name?.toLowerCase().includes(term) ||
+                  (c.phone_number || c.phone || "").toLowerCase().includes(term)
+                );
+              })
+              .slice(0, 100)
+              .map((c) => (
+                <SelectItem key={c.id} value={c.id}>
+                  {c.name}
+                  {c.phone_number || c.phone ? ` · ${c.phone_number || c.phone}` : ""}
+                </SelectItem>
+              ))}
+          </SelectContent>
+        </Select>
         <Popover>
           <PopoverTrigger asChild>
             <Button variant="outline" className="flex items-center">

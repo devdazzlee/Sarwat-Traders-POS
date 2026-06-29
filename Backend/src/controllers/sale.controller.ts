@@ -83,6 +83,7 @@ const getSalesController = asyncHandler(async (req: Request, res: Response) => {
       dateFieldRaw === 'created_at' ? 'created_at' : 'sale_date';
     const endExclusive = req.query.endExclusive === 'true';
     const productId = (req.query.productId as string | undefined)?.trim() || undefined;
+    const customerId = (req.query.customerId as string | undefined)?.trim() || undefined;
 
     const result = await saleService.getSales({
         branchId,
@@ -94,6 +95,7 @@ const getSalesController = asyncHandler(async (req: Request, res: Response) => {
         dateField,
         endExclusive,
         productId,
+        customerId,
     });
 
     console.log(

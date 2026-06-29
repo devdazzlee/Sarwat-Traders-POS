@@ -169,6 +169,7 @@ class SaleService {
     dateField = 'sale_date',
     endExclusive = false,
     productId,
+    customerId,
   }: {
     branchId?: string;
     page?: number;
@@ -179,6 +180,7 @@ class SaleService {
     dateField?: 'sale_date' | 'created_at';
     endExclusive?: boolean;
     productId?: string;
+    customerId?: string;
   }) {
     const dateFilter =
       startDate || endDate
@@ -211,6 +213,7 @@ class SaleService {
       ...(productId
         ? { sale_items: { some: { product_id: productId } } }
         : {}),
+      ...(customerId ? { customer_id: customerId } : {}),
     };
 
     const include = {
