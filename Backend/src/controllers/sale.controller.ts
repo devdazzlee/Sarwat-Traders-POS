@@ -84,6 +84,12 @@ const getSalesController = asyncHandler(async (req: Request, res: Response) => {
     const endExclusive = req.query.endExclusive === 'true';
     const productId = (req.query.productId as string | undefined)?.trim() || undefined;
     const customerId = (req.query.customerId as string | undefined)?.trim() || undefined;
+    const paymentMethodRaw = (req.query.paymentMethod as string | undefined)?.trim().toUpperCase();
+    const allowedPaymentMethods = ['CASH', 'CARD', 'CREDIT'];
+    const paymentMethod =
+      paymentMethodRaw && allowedPaymentMethods.includes(paymentMethodRaw)
+        ? (paymentMethodRaw as 'CASH' | 'CARD' | 'CREDIT')
+        : undefined;
 
     const result = await saleService.getSales({
         branchId,
@@ -96,6 +102,7 @@ const getSalesController = asyncHandler(async (req: Request, res: Response) => {
         endExclusive,
         productId,
         customerId,
+        paymentMethod,
     });
 
     console.log(

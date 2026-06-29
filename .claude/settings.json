@@ -10,7 +10,8 @@
       "Bash(./node_modules/.bin/ts-node src/_check-cust.ts)",
       "Bash(cd /c/Users/Lenovo/Documents/Manpasand-Pos-/Frontend && grep -n \"DialogFooter\\\\|DialogHeader\" components/customer-ledger.tsx | head -3; echo \"---tsc---\"; npx tsc --noEmit 2>&1 | grep -iE \"customer-ledger\"; echo \"---done---\")",
       "Read(//c/c/Users/Lenovo/Documents/Manpasand-Pos-/Frontend/components/**)",
-      "Bash(awk -F: '{print $1\": \"$0}')"
+      "Bash(awk -F: '{print $1\": \"$0}')",
+      "Bash(npx ts-node *)"
     ]
   }
 }

@@ -170,6 +170,7 @@ class SaleService {
     endExclusive = false,
     productId,
     customerId,
+    paymentMethod,
   }: {
     branchId?: string;
     page?: number;
@@ -181,6 +182,7 @@ class SaleService {
     endExclusive?: boolean;
     productId?: string;
     customerId?: string;
+    paymentMethod?: Prisma.SaleWhereInput['payment_method'];
   }) {
     const dateFilter =
       startDate || endDate
@@ -214,6 +216,7 @@ class SaleService {
         ? { sale_items: { some: { product_id: productId } } }
         : {}),
       ...(customerId ? { customer_id: customerId } : {}),
+      ...(paymentMethod ? { payment_method: paymentMethod } : {}),
     };
 
     const include = {

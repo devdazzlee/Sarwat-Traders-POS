@@ -196,6 +196,7 @@ export function SalesHistory() {
   const [startDate, setStartDate] = useState<Date | undefined>(undefined);
   const [endDate, setEndDate] = useState<Date | undefined>(undefined);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>("all");
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<string>("all");
   const { customers, fetchCustomers } = useStore();
   const [customerSearch, setCustomerSearch] = useState("");
   const [datePreset, setDatePreset] = useState<
@@ -359,6 +360,9 @@ export function SalesHistory() {
       if (selectedCustomerId && selectedCustomerId !== "all") {
         params.customerId = selectedCustomerId;
       }
+      if (selectedPaymentMethod && selectedPaymentMethod !== "all") {
+        params.paymentMethod = selectedPaymentMethod;
+      }
 
       if (pageSize > 0) {
         params.page = String(currentPage);
@@ -413,7 +417,7 @@ export function SalesHistory() {
 
   useEffect(() => {
     fetchSales();
-  }, [currentPage, pageSize, searchTerm, startDate, endDate, selectedCustomerId]);
+  }, [currentPage, pageSize, searchTerm, startDate, endDate, selectedCustomerId, selectedPaymentMethod]);
 
   useEffect(() => {
     void fetchCustomers();
@@ -459,7 +463,7 @@ export function SalesHistory() {
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, startDate, endDate, selectedCustomerId]);
+  }, [searchTerm, startDate, endDate, selectedCustomerId, selectedPaymentMethod]);
 
   // Export CSV
   const exportCSV = () => {
@@ -1181,6 +1185,19 @@ export function SalesHistory() {
           </SelectContent>
         </Select>
         <Select
+          value={selectedPaymentMethod}
+          onValueChange={setSelectedPaymentMethod}
+        >
+          <SelectTrigger className="w-full sm:w-36">
+            <SelectValue placeholder="All Payments" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Payments</SelectItem>
+            <SelectItem value="CASH">Cash</SelectItem>
+            <SelectItem value="CREDIT">Credit</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select
           value={datePreset === "custom" ? "custom" : datePreset}
           onValueChange={(value) => {
             if (value === "custom") {
@@ -1209,40 +1226,29 @@ export function SalesHistory() {
             <Button variant="outline" className="flex items-center">
               <CalendarIcon className="mr-2 h-4 w-4" />
               {startDate && endDate
-                ? `${format(startDate, "MM/dd/yyyy")} - ${format(
-                    endDate,
-                    "MM/dd/yyyy"
-                  )}`
-                : "Select date range"}
+                ? format(startDate, "MM/dd/yyyy") === format(endDate, "MM/dd/yyyy")
+                  ? format(startDate, "MM/dd/yyyy")
+                  : `${format(startDate, "MM/dd/yyyy")} - ${format(endDate, "MM/dd/yyyy")}`
+                : startDate
+                  ? format(startDate, "MM/dd/yyyy")
+                  : "Pick a date"}
             </Button>
           </PopoverTrigger>
-          <PopoverContent className="w-auto p-2">
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <Label>From</Label>
-                <Calendar
-                  mode="single"
-                  selected={startDate}
-                  onSelect={(date) => {
-                    if (!date) return;
-                    setStartDate(date);
-                    setDatePreset("custom");
-                  }}
-                />
-              </div>
-              <div>
-                <Label>To</Label>
-                <Calendar
-                  mode="single"
-                  selected={endDate}
-                  onSelect={(date) => {
-                    if (!date) return;
-                    setEndDate(date);
-                    setDatePreset("custom");
-                  }}
-                />
-              </div>
-            </div>
+          <PopoverContent className="w-auto p-3">
+            <p className="text-xs text-muted-foreground mb-2">
+              Click one day to see that date. Click a second day for a range.
+            </p>
+            <Calendar
+              mode="range"
+              numberOfMonths={1}
+              selected={startDate ? { from: startDate, to: endDate ?? startDate } : undefined}
+              onSelect={(range) => {
+                setStartDate(range?.from);
+                // One click → single day (to falls back to from), second click → range.
+                setEndDate(range?.to ?? range?.from);
+                setDatePreset("custom");
+              }}
+            />
             <Separator className="my-2" />
             <Button
               onClick={() => {
