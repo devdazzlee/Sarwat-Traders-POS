@@ -643,6 +643,16 @@ export function SalesHistory() {
               <span>${(data.previousBalance && data.previousBalance > 0) ? 'This Sale Total' : 'Grand Total'}</span>
               <span>PKR ${data.total.toFixed(2)}</span>
             </div>
+            ${data.paymentMethod === 'CREDIT' ? `
+              <div class="summary-row" style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #ddd;">
+                <span>Amount Paid</span>
+                <span>PKR ${money(data.amountPaid ?? 0)}</span>
+              </div>
+              <div class="summary-row" style="color: #c00; font-weight: bold;">
+                <span>Balance Due</span>
+                <span>PKR ${money(data.balanceDue ?? 0)}</span>
+              </div>
+            ` : ''}
             ${(data.previousBalance && data.previousBalance > 0) ? `
               <div class="summary-row" style="color: #c00; margin-top: 8px; padding-top: 8px; border-top: 1px solid #ddd;">
                 <span>Previous Balance</span>

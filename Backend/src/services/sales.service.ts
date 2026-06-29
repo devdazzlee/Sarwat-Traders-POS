@@ -168,6 +168,7 @@ class SaleService {
     endDate,
     dateField = 'sale_date',
     endExclusive = false,
+    productId,
   }: {
     branchId?: string;
     page?: number;
@@ -177,6 +178,7 @@ class SaleService {
     endDate?: Date;
     dateField?: 'sale_date' | 'created_at';
     endExclusive?: boolean;
+    productId?: string;
   }) {
     const dateFilter =
       startDate || endDate
@@ -205,6 +207,9 @@ class SaleService {
         ? dateField === 'created_at'
           ? { created_at: dateFilter }
           : { sale_date: dateFilter }
+        : {}),
+      ...(productId
+        ? { sale_items: { some: { product_id: productId } } }
         : {}),
     };
 
@@ -764,13 +769,17 @@ class SaleService {
       }
     }
 
-    if (isCreditSale && customerId && customer && creditOwedAmount > 0) {
+    if (isCreditSale && customerId && customer && finalTotal > 0) {
+      // CREDIT_SALE records the FULL invoice charged to the account. Any amount paid
+      // at the counter is a separate PAYMENT_RECEIVED row below. The running balance
+      // is (full charge − payments), so the upfront payment must NOT also be netted
+      // out of this charge — otherwise it gets subtracted twice.
       ops.push(
         prisma.customerLedger.create({
           data: {
             customer_id: customerId,
             entry_type: LedgerEntryType.CREDIT_SALE,
-            amount: new Prisma.Decimal(creditOwedAmount),
+            amount: new Prisma.Decimal(finalTotal),
             description:
               creditPaidAmount > 0
                 ? `Partial credit sale - ${saleNumber}`
@@ -818,7 +827,7 @@ class SaleService {
 
     if (customerId && customer) {
       const needsSync =
-        (isCreditSale && creditOwedAmount > 0) || (!isCreditSale && finalTotal > 0);
+        (isCreditSale && finalTotal > 0) || (!isCreditSale && finalTotal > 0);
       if (needsSync) {
         await ledgerBalanceEngine.syncCustomerBalances(customerId);
       }

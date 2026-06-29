@@ -471,32 +471,36 @@ export class LedgerBalanceEngine {
     if (isCredit) {
       const owed = Math.max(0, params.creditOwedAmount);
       const paid = Math.max(0, params.upfrontPaymentAmount);
+      // CREDIT_SALE holds the FULL invoice charged on account (owed + paid-at-counter).
+      // The upfront payment is a separate PAYMENT_RECEIVED row; the balance subtracts it
+      // exactly once. Storing only `owed` here would double-count the upfront payment.
+      const grossCharge = Number((owed + paid).toFixed(3));
       const creditDesc =
         paid > 0.009 ? `Partial credit sale - ${saleNumber}` : `Credit sale - ${saleNumber}`;
 
-      if (owed > 0.009) {
+      if (grossCharge > 0.009) {
         if (creditSale) {
           const previousAmount = Number(creditSale.amount);
-          if (Math.abs(previousAmount - owed) > 0.009) {
+          if (Math.abs(previousAmount - grossCharge) > 0.009) {
             await this.recordSaleLedgerRevision(tx, {
               customerId,
               saleNumber,
               ledgerEntryId: creditSale.id,
               field: SaleLedgerRevisionField.CREDIT_OWED,
               previousAmount,
-              newAmount: owed,
+              newAmount: grossCharge,
               reason: revisionReason,
               createdBy: params.createdBy,
             });
           }
           await tx.customerLedger.update({
             where: { id: creditSale.id },
-            data: { amount: new Prisma.Decimal(owed), description: creditDesc },
+            data: { amount: new Prisma.Decimal(grossCharge), description: creditDesc },
           });
         } else {
           await this.postCreditSale(tx, {
             customerId,
-            amount: owed,
+            amount: grossCharge,
             saleId: saleNumber,
             createdBy: params.createdBy ?? '',
             description: creditDesc,

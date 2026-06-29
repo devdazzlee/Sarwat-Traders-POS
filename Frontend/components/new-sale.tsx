@@ -3335,25 +3335,44 @@ export function NewSale() {
 
           {checkoutSuccessData && (
             <div className="py-2">
-              <div className="bg-gray-50 rounded-lg p-4 border border-gray-100 flex flex-col items-center mb-6">
-                <p className="text-sm text-gray-500 mb-1">Total Received</p>
-                <p className="text-3xl font-bold text-gray-900">
-                  <span className="text-xl mr-1">Rs</span>
-                  {checkoutSuccessData.paymentMethod.toUpperCase() === 'CREDIT' 
-                    ? checkoutSuccessData.total.toLocaleString()
-                    : tenderedAmount ? parseFloat(tenderedAmount).toLocaleString() : checkoutSuccessData.total.toLocaleString()}
-                </p>
-                {checkoutSuccessData.paymentMethod.toUpperCase() === 'CASH' && calculatedChange > 0 && (
-                  <p className="text-green-600 font-medium text-sm mt-2">
-                    Change Due: Rs {calculatedChange.toLocaleString()}
-                  </p>
-                )}
-                {checkoutSuccessData.paymentMethod.toUpperCase() === 'CREDIT' && (
-                  <p className="text-orange-600 font-medium text-sm mt-2">
+              {checkoutSuccessData.paymentMethod.toUpperCase() === 'CREDIT' ? (
+                <div className="bg-gray-50 rounded-lg p-4 border border-gray-100 mb-6 space-y-2">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-500">Bill Total</span>
+                    <span className="font-semibold text-gray-900">
+                      Rs {checkoutSuccessData.total.toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-500">Amount Paid</span>
+                    <span className="font-semibold text-green-600">
+                      Rs {(checkoutSuccessData.amountPaid ?? 0).toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center pt-2 border-t border-gray-200">
+                    <span className="font-medium text-gray-700">Balance Due</span>
+                    <span className="text-xl font-bold text-orange-600">
+                      Rs {(checkoutSuccessData.balanceDue ?? Math.max(0, checkoutSuccessData.total - (checkoutSuccessData.amountPaid ?? 0))).toLocaleString()}
+                    </span>
+                  </div>
+                  <p className="text-orange-600 font-medium text-xs text-center pt-1">
                     Payment Method: Credit Sale
                   </p>
-                )}
-              </div>
+                </div>
+              ) : (
+                <div className="bg-gray-50 rounded-lg p-4 border border-gray-100 flex flex-col items-center mb-6">
+                  <p className="text-sm text-gray-500 mb-1">Total Received</p>
+                  <p className="text-3xl font-bold text-gray-900">
+                    <span className="text-xl mr-1">Rs</span>
+                    {tenderedAmount ? parseFloat(tenderedAmount).toLocaleString() : checkoutSuccessData.total.toLocaleString()}
+                  </p>
+                  {calculatedChange > 0 && (
+                    <p className="text-green-600 font-medium text-sm mt-2">
+                      Change Due: Rs {calculatedChange.toLocaleString()}
+                    </p>
+                  )}
+                </div>
+              )}
 
               <div className="mt-4">
                 {isAskingWhatsApp ? (

@@ -255,13 +255,17 @@ export function SaleEditor({ sale, open, loading = false, onOpenChange, onSucces
   const subtotalAfterLineDiscount = Math.max(0, grossSubtotal - lineDiscountTotal);
   const grandTotal = Math.max(0, subtotalAfterLineDiscount - orderDiscount + taxAmount);
   const paid = Math.max(0, num(paidAmount));
-  const changeAmount = paymentMethod === "CREDIT" ? 0 : Math.max(0, paid - grandTotal);
-  const dueAmount = Math.max(0, grandTotal - paid);
   const creditLedger = sale ? creditLedgerFields(sale as SaleWithLedgerFields) : null;
+  // Payments collected after the sale via the customer ledger (Receive Payment).
+  // "Paid at Sale" only holds the counter payment, so these must be added back when
+  // computing what the customer still owes — otherwise Remaining Balance ignores them.
   const collectedViaLedger =
     paymentMethod === "CREDIT" && creditLedger
       ? Math.max(0, creditLedger.invoiceTotalPaid - creditLedger.paidAtSale)
       : 0;
+  const changeAmount = paymentMethod === "CREDIT" ? 0 : Math.max(0, paid - grandTotal);
+  // Remaining = full invoice − paid at counter − collected later, so it matches the ledger's Amount Due.
+  const dueAmount = Math.max(0, grandTotal - paid - collectedViaLedger);
 
   // Switching the payment method resets the paid amount to the intent of that method:
   // - CREDIT  → 0, so the customer owes the full total (a partial upfront can be typed back in)
@@ -748,6 +752,14 @@ export function SaleEditor({ sale, open, loading = false, onOpenChange, onSucces
                   <span className="font-semibold text-lg">Grand Total</span>
                   <span className="font-bold text-xl text-primary">Rs {grandTotal.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
                 </div>
+                {paymentMethod === "CREDIT" ? (
+                  <>
+                    <div className="flex justify-between text-sm"><span>Paid at sale</span><span className="text-emerald-700">Rs {paid.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span></div>
+                    {collectedViaLedger > 0 ? (
+                      <div className="flex justify-between text-sm"><span>Collected later (ledger)</span><span className="text-emerald-700">Rs {collectedViaLedger.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span></div>
+                    ) : null}
+                  </>
+                ) : null}
                 <div className="flex justify-between text-sm"><span>Remaining Balance</span><span className={dueAmount > 0 ? "font-semibold text-amber-700" : "text-emerald-700"}>Rs {dueAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span></div>
                 {paymentMethod !== "CREDIT" && changeAmount > 0 ? (
                   <div className="flex justify-between text-sm"><span>Change</span><span className="text-blue-700">Rs {changeAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span></div>

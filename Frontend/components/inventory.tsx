@@ -15,7 +15,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
 import { useToast } from "@/hooks/use-toast"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
-import { Search, Plus, Edit, Package, AlertTriangle, Upload, X, ImageIcon, RefreshCw, Trash2, Loader2, Mail } from "lucide-react"
+import { Search, Plus, Edit, Package, AlertTriangle, Upload, X, ImageIcon, RefreshCw, Trash2, Loader2, Mail, History, User } from "lucide-react"
 import apiClient from "@/lib/apiClient"
 import { useStore, mapProductFromApi } from "@/lib/store"
 import { isPendingImageUrl } from "@/lib/offline-queue-payload"
@@ -118,6 +118,32 @@ interface Product {
   reserved_stock?: number
   minimum_stock?: number
   maximum_stock?: number
+}
+
+/** Raw sale record returned by GET /sale (only the fields we use here). */
+interface SaleApiItem {
+  product_id: string
+  quantity: string | number
+  unit_price?: string | number
+  line_total?: string | number
+}
+interface SaleApiRecord {
+  id: string
+  sale_number: string
+  sale_date: string
+  customer?: { name?: string | null; phone_number?: string | null } | null
+  sale_items: SaleApiItem[]
+}
+/** One flattened line of a product's sales history. */
+interface ProductSaleRow {
+  saleId: string
+  saleNumber: string
+  date: string
+  customerName: string
+  customerPhone: string
+  quantity: number
+  unitPrice: number
+  lineTotal: number
 }
 
 /** Table-filter value; must never be sent as product.category_id / unit_id. */
@@ -564,6 +590,15 @@ export default function Inventory() {
   const [togglingProductId, setTogglingProductId] = useState<string | null>(null)
   const [formLoading, setFormLoading] = useState(false)
   const [sharing, setSharing] = useState(false)
+
+  // Per-product sales history dialog
+  const [historyProduct, setHistoryProduct] = useState<Product | null>(null)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyRows, setHistoryRows] = useState<ProductSaleRow[]>([])
+  const [historySearch, setHistorySearch] = useState("")
+  const [historyPage, setHistoryPage] = useState(1)
+  const HISTORY_PAGE_SIZE = 10
   const [formData, setFormData] = useState<ProductFormData>({
     name: "",
     unit_id: "",
@@ -953,6 +988,61 @@ export default function Inventory() {
     }
   }
 
+  const openHistoryDialog = async (product: Product) => {
+    setHistoryProduct(product)
+    setHistoryOpen(true)
+    setHistoryRows([])
+    setHistorySearch("")
+    setHistoryPage(1)
+    setHistoryLoading(true)
+    try {
+      const branchId = getBranchIdForProducts()
+      const response = await apiClient.get<{ data: SaleApiRecord[] }>("/sale", {
+        params: {
+          productId: product.id,
+          ...(branchId ? { branchId } : {}),
+        },
+        headers: { "X-Skip-Offline-Cache": "true" },
+      })
+
+      const sales = Array.isArray(response.data?.data) ? response.data.data : []
+      const rows: ProductSaleRow[] = []
+      for (const sale of sales) {
+        for (const item of sale.sale_items || []) {
+          if (item.product_id !== product.id) continue
+          const quantity = Number(item.quantity) || 0
+          const lineTotal = Number(item.line_total) || 0
+          const unitPrice =
+            item.unit_price !== undefined && item.unit_price !== null
+              ? Number(item.unit_price)
+              : quantity > 0
+                ? lineTotal / quantity
+                : 0
+          rows.push({
+            saleId: sale.id,
+            saleNumber: sale.sale_number,
+            date: sale.sale_date,
+            customerName: sale.customer?.name || "Walk-in Customer",
+            customerPhone: sale.customer?.phone_number || "",
+            quantity,
+            unitPrice,
+            lineTotal,
+          })
+        }
+      }
+      rows.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      setHistoryRows(rows)
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to load sales history for this product",
+        variant: "destructive",
+      })
+    } finally {
+      setHistoryLoading(false)
+    }
+  }
+
   const resetForm = () => {
     setFormData({
       name: "",
@@ -1133,6 +1223,23 @@ export default function Inventory() {
   }
 
   const totalPages = pageSize === 0 ? 1 : apiTotalPages
+
+  // Derived sales-history view: filter by customer/invoice, then paginate client-side.
+  const historyFilter = historySearch.trim().toLowerCase()
+  const historyFilteredRows = historyFilter
+    ? historyRows.filter(
+        (r) =>
+          r.customerName.toLowerCase().includes(historyFilter) ||
+          r.customerPhone.toLowerCase().includes(historyFilter) ||
+          r.saleNumber.toLowerCase().includes(historyFilter),
+      )
+    : historyRows
+  const historyTotalPages = Math.max(1, Math.ceil(historyFilteredRows.length / HISTORY_PAGE_SIZE))
+  const historyCurrentPage = Math.min(historyPage, historyTotalPages)
+  const historyPageRows = historyFilteredRows.slice(
+    (historyCurrentPage - 1) * HISTORY_PAGE_SIZE,
+    historyCurrentPage * HISTORY_PAGE_SIZE,
+  )
 
   if (isInitialLoading && loading && products.length === 0) {
     return <PageLoader message="Loading inventory..." />
@@ -1468,6 +1575,14 @@ export default function Inventory() {
                                 "Inactive"
                               )}
                             </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => void openHistoryDialog(product)}
+                              title="Sales history"
+                            >
+                              <History className="h-4 w-4" />
+                            </Button>
                             <Button size="sm" variant="outline" onClick={() => openEditDialog(product)}>
                               <Edit className="h-4 w-4" />
                             </Button>
@@ -1609,6 +1724,186 @@ export default function Inventory() {
             )}
           </CardContent>
         </Card>
+
+        {/* Product Sales History Dialog */}
+        <Dialog
+          open={historyOpen}
+          onOpenChange={(open) => {
+            setHistoryOpen(open)
+            if (!open) {
+              setHistoryProduct(null)
+              setHistoryRows([])
+            }
+          }}
+        >
+          <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>
+                Sales History{historyProduct ? ` — ${historyProduct.name}` : ""}
+              </DialogTitle>
+            </DialogHeader>
+
+            {historyLoading ? (
+              <div className="flex items-center justify-center py-16 text-muted-foreground">
+                <Loader2 className="h-6 w-6 animate-spin mr-2" />
+                Loading sales history...
+              </div>
+            ) : historyRows.length === 0 ? (
+              <div className="py-16 text-center text-muted-foreground">
+                <History className="h-10 w-10 mx-auto mb-3 opacity-30" />
+                <p className="font-medium">No sales recorded for this product</p>
+                <p className="text-sm mt-1">Sales of this item will appear here.</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {/* Summary */}
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="rounded-lg border bg-slate-50 p-3">
+                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Times Sold</p>
+                    <p className="text-lg font-bold tabular-nums">{historyRows.length}</p>
+                  </div>
+                  <div className="rounded-lg border bg-slate-50 p-3">
+                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Total Qty Sold</p>
+                    <p className="text-lg font-bold tabular-nums">
+                      {historyRows.reduce((sum, r) => sum + r.quantity, 0)}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border bg-slate-50 p-3">
+                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Total Revenue</p>
+                    <p className="text-lg font-bold tabular-nums text-emerald-700">
+                      {historyRows.reduce((sum, r) => sum + r.lineTotal, 0).toFixed(0)}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Search */}
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 h-4 w-4" />
+                  <Input
+                    placeholder="Filter by customer, phone, or invoice..."
+                    value={historySearch}
+                    onChange={(e) => {
+                      setHistorySearch(e.target.value)
+                      setHistoryPage(1)
+                    }}
+                    className="pl-10"
+                  />
+                </div>
+
+                {/* Records table */}
+                <div className="border rounded-lg overflow-hidden max-h-[50vh] overflow-y-auto">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 z-10 bg-slate-100 text-left text-xs uppercase tracking-wide text-muted-foreground">
+                      <tr>
+                        <th className="px-3 py-2 font-medium">Date</th>
+                        <th className="px-3 py-2 font-medium">Customer</th>
+                        <th className="px-3 py-2 font-medium">Invoice</th>
+                        <th className="px-3 py-2 font-medium text-right">Qty</th>
+                        <th className="px-3 py-2 font-medium text-right">Rate</th>
+                        <th className="px-3 py-2 font-medium text-right">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {historyPageRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="px-3 py-8 text-center text-muted-foreground">
+                            No records match "{historySearch}".
+                          </td>
+                        </tr>
+                      ) : (
+                        historyPageRows.map((row, i) => (
+                        <tr key={`${row.saleId}-${i}`} className="hover:bg-slate-50">
+                          <td className="px-3 py-2 whitespace-nowrap">
+                            {new Date(row.date).toLocaleDateString(undefined, {
+                              year: "numeric",
+                              month: "short",
+                              day: "numeric",
+                            })}
+                            <span className="block text-[11px] text-muted-foreground">
+                              {new Date(row.date).toLocaleTimeString(undefined, {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2">
+                            <span className="inline-flex items-center gap-1">
+                              <User className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                              <span className="truncate max-w-[140px]" title={row.customerName}>
+                                {row.customerName}
+                              </span>
+                            </span>
+                            {row.customerPhone && (
+                              <span className="block text-[11px] text-muted-foreground">
+                                {row.customerPhone}
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 font-mono text-xs text-muted-foreground whitespace-nowrap">
+                            {row.saleNumber}
+                          </td>
+                          <td className="px-3 py-2 text-right tabular-nums font-semibold">
+                            {row.quantity}
+                          </td>
+                          <td className="px-3 py-2 text-right tabular-nums">
+                            {row.unitPrice.toFixed(0)}
+                          </td>
+                          <td className="px-3 py-2 text-right tabular-nums font-semibold text-emerald-700">
+                            {row.lineTotal.toFixed(0)}
+                          </td>
+                        </tr>
+                      )))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Pagination footer */}
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-1">
+                  <p className="text-xs text-muted-foreground">
+                    {historyFilteredRows.length === 0 ? (
+                      "No records"
+                    ) : (
+                      <>
+                        Showing{" "}
+                        <span className="font-semibold">
+                          {(historyCurrentPage - 1) * HISTORY_PAGE_SIZE + 1}
+                        </span>
+                        –
+                        <span className="font-semibold">
+                          {Math.min(historyCurrentPage * HISTORY_PAGE_SIZE, historyFilteredRows.length)}
+                        </span>{" "}
+                        of <span className="font-semibold">{historyFilteredRows.length}</span> records
+                      </>
+                    )}
+                  </p>
+                  {historyTotalPages > 1 && (
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setHistoryPage((p) => Math.max(1, p - 1))}
+                        disabled={historyCurrentPage === 1}
+                      >
+                        Previous
+                      </Button>
+                      <span className="text-sm text-muted-foreground whitespace-nowrap">
+                        Page {historyCurrentPage} of {historyTotalPages}
+                      </span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setHistoryPage((p) => Math.min(historyTotalPages, p + 1))}
+                        disabled={historyCurrentPage === historyTotalPages}
+                      >
+                        Next
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
 
         {/* Edit Product Dialog */}
         <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>

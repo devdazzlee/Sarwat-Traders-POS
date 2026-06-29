@@ -277,9 +277,38 @@ const buildInvoiceDoc = (data: InvoiceData, logoDataUrl: string | null): jsPDF =
   doc.text(`PKR ${formatAmount(data.total)}`, sValueX, grandTotalY, { align: 'right' });
   doc.setTextColor(0, 0, 0);
 
+  let summaryBottomY = grandTotalY;
+
+  // Credit sales: show how much the customer paid and what remains due on this invoice.
+  if (String(data.paymentMethod).toUpperCase() === 'CREDIT') {
+    const paidY = grandTotalY + 10;
+    doc.setDrawColor(180, 180, 180);
+    doc.setLineWidth(0.3);
+    doc.line(sLabelX, paidY - 5, sValueX, paidY - 5);
+
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(100, 100, 100);
+    doc.text('Amount Paid', sLabelX, paidY);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(0, 0, 0);
+    doc.text(`PKR ${formatAmount(data.amountPaid ?? 0)}`, sValueX, paidY, { align: 'right' });
+
+    const balanceDueY = paidY + 7;
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(0, 0, 0);
+    doc.text('Balance Due', sLabelX, balanceDueY);
+    doc.setTextColor(200, 0, 0);
+    doc.text(`PKR ${formatAmount(data.balanceDue ?? 0)}`, sValueX, balanceDueY, { align: 'right' });
+    doc.setTextColor(0, 0, 0);
+
+    summaryBottomY = balanceDueY;
+  }
+
   // Previous unpaid balance — shown separately, clearly distinct from current sale
   if (hasPrevBalance) {
-    const prevLabelY = grandTotalY + 10;
+    const prevLabelY = summaryBottomY + 10;
     doc.setDrawColor(180, 180, 180);
     doc.setLineWidth(0.3);
     doc.line(sLabelX, prevLabelY - 5, sValueX, prevLabelY - 5);
