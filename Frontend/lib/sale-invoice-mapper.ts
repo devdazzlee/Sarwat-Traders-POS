@@ -1,27 +1,32 @@
 import { parseISO } from "date-fns";
 import type { InvoiceData } from "@/lib/pdf-generator";
+import { creditLedgerFields } from "@/lib/credit-sale-ledger";
 
-export function mapSaleToInvoiceData(sale: any): InvoiceData {
-  const subtotal = parseFloat(sale.subtotal || "0");
-  const discount = parseFloat(sale.discount_amount || sale.discount || "0");
-  const total = parseFloat(sale.total_amount || sale.total_payable || "0");
+export function mapSaleToInvoiceData(sale: Record<string, unknown>): InvoiceData {
+  const subtotal = parseFloat(String(sale.subtotal ?? "0"));
+  const discount = parseFloat(String(sale.discount_amount ?? sale.discount ?? "0"));
+  const total = parseFloat(String(sale.total_amount ?? sale.total_payable ?? "0"));
 
-  const items = (sale.sale_items || []).map((item: any) => {
-    const lineTotal = parseFloat(item.line_total || "0");
-    const qty = Number(item.quantity || 0);
+  const items = ((sale.sale_items as unknown[]) || []).map((raw) => {
+    const item = raw as Record<string, unknown>;
+    const product = item.product as Record<string, unknown> | undefined;
+    const unit = item.unit as Record<string, unknown> | undefined;
+    const productUnit = product?.unit as Record<string, unknown> | undefined;
+    const lineTotal = parseFloat(String(item.line_total ?? "0"));
+    const qty = Number(item.quantity ?? 0);
     const unitPrice =
       item.unit_price !== undefined
-        ? parseFloat(item.unit_price)
+        ? parseFloat(String(item.unit_price))
         : lineTotal / Math.max(1, qty);
 
     const unitLabel =
-      item.product?.unit?.name ||
-      item.unit?.name ||
-      item.unit_name ||
+      (productUnit?.name as string) ||
+      (unit?.name as string) ||
+      (item.unit_name as string) ||
       "pcs";
 
     return {
-      name: item.product?.name || "Unnamed Item",
+      name: (product?.name as string) || "Unnamed Item",
       quantity: qty,
       price: unitPrice,
       lineTotal,
@@ -29,31 +34,32 @@ export function mapSaleToInvoiceData(sale: any): InvoiceData {
     };
   });
 
-  const paymentReceived = parseFloat(sale.payment_received || "0");
+  const isCredit = String(sale.payment_method ?? "CASH").toUpperCase() === "CREDIT";
+  const ledger = creditLedgerFields(sale);
+  const cashPaid = parseFloat(String(sale.payment_received ?? "0"));
 
   return {
-    storeName: sale.branch?.name || "SARWAT TRADER",
+    storeName: (sale.branch as { name?: string } | undefined)?.name || "SARWAT TRADER",
     storeAddress:
-      sale.branch?.address ||
+      (sale.branch as { address?: string } | undefined)?.address ||
       "Shop no 109, 1st floor city shopping mall, Marston road Karachi, Pakistan.",
     storePhone: "02132727444",
-    customerName: sale.customer?.name || "Walk-in Customer",
-    customerPhone: sale.customer?.phone_number || "",
+    customerName: (sale.customer as { name?: string } | undefined)?.name || "Walk-in Customer",
+    customerPhone: (sale.customer as { phone_number?: string } | undefined)?.phone_number || "",
     customerWhatsApp:
-      sale.customer?.whatsapp_number || sale.customer?.phone_number || "",
-    customerEmail: sale.customer?.email || "",
-    saleNumber: sale.sale_number,
-    date: parseISO(sale.sale_date),
+      (sale.customer as { whatsapp_number?: string } | undefined)?.whatsapp_number ||
+      (sale.customer as { phone_number?: string } | undefined)?.phone_number ||
+      "",
+    customerEmail: (sale.customer as { email?: string } | undefined)?.email || "",
+    saleNumber: String(sale.sale_number ?? ""),
+    date: parseISO(String(sale.sale_date)),
     items,
     subtotal,
     discount,
     total,
-    paymentMethod: sale.payment_method || "CASH",
-    balanceDue:
-      sale.payment_method === "CREDIT"
-        ? Math.max(0, total - paymentReceived)
-        : 0,
-    amountPaid: paymentReceived || total,
-    previousBalance: parseFloat(sale.previous_balance || "0"),
+    paymentMethod: String(sale.payment_method ?? "CASH"),
+    balanceDue: isCredit && ledger ? ledger.invoiceAmountDue : 0,
+    amountPaid: isCredit && ledger ? ledger.invoiceTotalPaid : cashPaid || total,
+    previousBalance: parseFloat(String(sale.previous_balance ?? "0")),
   };
 }

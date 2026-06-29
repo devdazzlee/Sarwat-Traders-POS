@@ -56,6 +56,7 @@ import {
 import { printReceiptViaServer, type ReceiptData } from "@/lib/print-server";
 import { usePrinterSettings } from "@/hooks/use-printer-settings";
 import { downloadA4Invoice, generateA4InvoicePDF, printA4Invoice, shareOnEmail, shareOnWhatsApp, type InvoiceData } from "@/lib/pdf-generator";
+import { creditLedgerFields } from "@/lib/credit-sale-ledger";
 import { SaleEditor } from "./sale-editor";
 import {
   AlertDialog,
@@ -108,6 +109,12 @@ interface Sale {
   discount_amount?: string;
   payment_method: string;
   payment_status?: string;
+  payment_received?: string;
+  upfrontPaid?: number;
+  paidAtSale?: number;
+  invoiceTotalPaid?: number;
+  invoiceAmountDue?: number;
+  ledgerPaymentStatus?: "PENDING" | "PARTIAL" | "PAID";
   status: string;
   customer: Customer | null;
   sale_items: SaleItem[];
@@ -516,10 +523,14 @@ export function SalesHistory() {
       discount,
       total,
       paymentMethod: sale.payment_method || "CASH",
-      balanceDue: sale.payment_method === "CREDIT"
-        ? Math.max(0, total - parseFloat(sale.payment_received || "0"))
-        : 0,
-      amountPaid: parseFloat(sale.payment_received || "0") || total,
+      balanceDue:
+        sale.payment_method === "CREDIT"
+          ? (creditLedgerFields(sale)?.invoiceAmountDue ?? 0)
+          : 0,
+      amountPaid:
+        sale.payment_method === "CREDIT"
+          ? (creditLedgerFields(sale)?.invoiceTotalPaid ?? 0)
+          : (parseFloat(sale.payment_received || "0") || total),
       previousBalance: parseFloat(sale.previous_balance || "0"),
     };
   };

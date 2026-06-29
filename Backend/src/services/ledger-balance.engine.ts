@@ -3,7 +3,6 @@ import { prisma } from '../prisma/client';
 import {
   isSaleLinkedShadowAdjustment,
   isSaleManagedInSalePayment,
-  saleEditPaymentDescription,
   saleUpfrontPaymentDescription,
 } from '../utils/sale-ledger-revision';
 
@@ -458,11 +457,12 @@ export class LedgerBalanceEngine {
     }
 
     const revisionReason = params.reason?.trim() || 'Sale updated';
-    const resolveSalePaymentDescription = (existingDescription?: string | null) => {
-      if (params.useSaleEditPaymentLabel) {
-        return saleEditPaymentDescription(saleNumber);
-      }
+    const salePaymentDescription = (existingDescription?: string | null) => {
       if (existingDescription?.trim()) {
+        const lower = existingDescription.toLowerCase();
+        if (lower.startsWith('paid on sale edit -')) {
+          return saleUpfrontPaymentDescription(saleNumber);
+        }
         return existingDescription;
       }
       return saleUpfrontPaymentDescription(saleNumber);
@@ -538,7 +538,7 @@ export class LedgerBalanceEngine {
             where: { id: upfrontPayment.id },
             data: {
               amount: new Prisma.Decimal(paid),
-              description: resolveSalePaymentDescription(upfrontPayment.description),
+              description: salePaymentDescription(upfrontPayment.description),
             },
           });
         } else {
@@ -547,7 +547,7 @@ export class LedgerBalanceEngine {
             amount: paid,
             saleId: saleNumber,
             createdBy: params.createdBy ?? '',
-            description: resolveSalePaymentDescription(),
+            description: salePaymentDescription(),
           });
         }
       } else if (upfrontPayment) {
@@ -668,9 +668,19 @@ export class LedgerBalanceEngine {
 
     if (params.useSaleEditPaymentLabel) {
       const paidAtSale = Math.max(0, Math.min(params.paymentReceived, total));
-      creditOwed = Math.max(0, Number((total - paidAtSale).toFixed(3)));
-      upfrontPaymentAmount =
-        paidAtSale > 0.009 && creditOwed > 0.009 ? paidAtSale : paidAtSale > 0.009 ? paidAtSale : 0;
+      const isFullSettlement = paidAtSale >= total - 0.009;
+      const hadUpfrontRow = !!existingUpfront;
+
+      // Sale edit must not post a full-invoice PAYMENT_RECEIVED when the customer never
+      // paid at the counter — that belongs in Receive Payment. FIFO/reconcile can inflate
+      // sale.payment_received; only partial upfront or an existing upfront row may sync here.
+      if (isFullSettlement && !hadUpfrontRow) {
+        creditOwed = total;
+        upfrontPaymentAmount = 0;
+      } else {
+        creditOwed = Math.max(0, Number((total - paidAtSale).toFixed(3)));
+        upfrontPaymentAmount = paidAtSale > 0.009 ? paidAtSale : 0;
+      }
     } else {
       const paidAtSale = upfrontFromLedger;
       creditOwed = Math.max(0, Number((total - paidAtSale).toFixed(3)));

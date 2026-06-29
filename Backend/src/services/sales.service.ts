@@ -4,6 +4,16 @@ import { AppError } from '../utils/apiError';
 import { getReportingPeriodCreatedAtFilter } from '../utils/reportingPeriod';
 import { ledgerBalanceEngine } from './ledger-balance.engine';
 import { saleUpfrontPaymentDescription } from '../utils/sale-ledger-revision';
+import { buildSaleLedgerSnapshot } from '../utils/sale-ledger-derivation';
+
+export type CreditSaleLedgerFields = {
+  /** Amount collected at the counter when the sale was made (not Receive Payment). */
+  paidAtSale: number;
+  upfrontPaid: number;
+  invoiceTotalPaid: number;
+  invoiceAmountDue: number;
+  ledgerPaymentStatus: 'PENDING' | 'PARTIAL' | 'PAID';
+};
 
 interface ReturnItem {
   productId: string;
@@ -100,6 +110,55 @@ class SaleService {
     });
   }
 
+  /** Ledger-derived invoice fields for credit sales (read at API time — never cached). */
+  private async hydrateCreditSaleInvoiceTotals<
+    T extends {
+      sale_number: string;
+      payment_method: string;
+      customer_id: string | null;
+      total_amount: Prisma.Decimal;
+    },
+  >(sales: T[]): Promise<Array<T & Partial<CreditSaleLedgerFields>>> {
+    const creditSales = sales.filter(
+      (s) => s.payment_method === 'CREDIT' && s.customer_id,
+    );
+    if (creditSales.length === 0) return sales;
+
+    const saleNumbers = creditSales.map((s) => s.sale_number);
+    const customerIds = [...new Set(creditSales.map((s) => s.customer_id!))];
+
+    const ledgerRows = await prisma.customerLedger.findMany({
+      where: {
+        customer_id: { in: customerIds },
+        sale_id: { in: saleNumbers },
+      },
+      select: {
+        sale_id: true,
+        entry_type: true,
+        amount: true,
+        description: true,
+      },
+    });
+
+    return sales.map((sale) => {
+      if (sale.payment_method !== 'CREDIT' || !sale.customer_id) return sale;
+      const rows = ledgerRows.filter((r) => r.sale_id === sale.sale_number);
+      const snap = buildSaleLedgerSnapshot(
+        sale.sale_number,
+        Number(sale.total_amount),
+        rows,
+      );
+      return {
+        ...sale,
+        paidAtSale: snap.upfrontPaid,
+        upfrontPaid: snap.upfrontPaid,
+        invoiceTotalPaid: snap.totalPaid,
+        invoiceAmountDue: snap.amountDue,
+        ledgerPaymentStatus: snap.paymentStatus,
+      };
+    });
+  }
+
   async getSales({
     branchId,
     page,
@@ -170,7 +229,9 @@ class SaleService {
         include,
         orderBy: { sale_date: 'desc' },
       });
-      const hydrated = await this.hydrateReturnSaleCustomers(data);
+      const hydrated = await this.hydrateCreditSaleInvoiceTotals(
+        await this.hydrateReturnSaleCustomers(data),
+      );
       return {
         data: hydrated,
         meta: {
@@ -197,7 +258,9 @@ class SaleService {
       }),
     ]);
 
-    const hydrated = await this.hydrateReturnSaleCustomers(data);
+    const hydrated = await this.hydrateCreditSaleInvoiceTotals(
+      await this.hydrateReturnSaleCustomers(data),
+    );
     return {
       data: hydrated,
       meta: {
@@ -387,7 +450,10 @@ class SaleService {
       };
     });
 
-    return { ...sale, sale_items: saleItems, original_sale };
+    const [hydrated] = await this.hydrateCreditSaleInvoiceTotals([
+      { ...sale, sale_items: saleItems, original_sale },
+    ]);
+    return hydrated;
   }
 
   async getHoldSales() {
@@ -758,7 +824,14 @@ class SaleService {
       }
     }
 
-    return sale as Prisma.SaleGetPayload<{ include: { sale_items: true } }>;
+    const created = await prisma.sale.findUnique({
+      where: { id: (sale as { id: string }).id },
+      include: { sale_items: true },
+    });
+    if (!created) throw new AppError(500, 'Sale created but could not be loaded');
+
+    const [hydrated] = await this.hydrateCreditSaleInvoiceTotals([created]);
+    return hydrated;
   }
   
 
@@ -1336,7 +1409,7 @@ class SaleService {
       createdBy: string;
     }
   ) {
-    return prisma.$transaction(async (tx) => {
+    const updated = await prisma.$transaction(async (tx) => {
       const oldSale = await tx.sale.findUnique({
         where: { id: saleId },
         include: { sale_items: true, customer: true },
@@ -1565,7 +1638,7 @@ class SaleService {
         }
       }
 
-      return await tx.sale.update({
+      const updatedSale = await tx.sale.update({
         where: { id: saleId },
         data: {
           subtotal: new Prisma.Decimal(subtotal),
@@ -1582,10 +1655,15 @@ class SaleService {
         },
         include: { sale_items: { include: { product: true } }, customer: true },
       });
+
+      return updatedSale;
     }, {
       maxWait: 20000,
       timeout: 15000 
     });
+
+    const [hydrated] = await this.hydrateCreditSaleInvoiceTotals([updated]);
+    return hydrated;
   }
 
   async deleteSale(

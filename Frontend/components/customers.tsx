@@ -45,12 +45,13 @@ import {
   Users,
   Phone,
   Mail,
-  MapPin,
   Loader2,
   DollarSign,
   UserCheck,
   FileText,
   ArrowUpCircle,
+  LayoutGrid,
+  List,
 } from "lucide-react";
 import apiClient from "@/lib/apiClient";
 import { API_BASE } from "@/config/constants";
@@ -65,6 +66,19 @@ import { useStore } from "@/lib/store";
 import { useToast } from "@/hooks/use-toast";
 import { PageLoader } from "@/components/ui/page-loader";
 import { StatCardSkeleton } from "@/components/ui/stat-card-skeleton";
+import { cn } from "@/lib/utils";
+
+type CustomerViewMode = "cards" | "table";
+
+const CUSTOMER_VIEW_KEY = "customers-view-mode";
+
+function formatBalance(amount: number | string | undefined) {
+  return Number(amount || 0).toLocaleString();
+}
+
+function balanceClass(amount: number | string | undefined) {
+  return Number(amount || 0) > 0 ? "text-red-600" : "text-green-600";
+}
 
 interface Customer {
   id: string;
@@ -98,6 +112,19 @@ export function Customers({ onViewLedger }: CustomersProps) {
   const [isDeletingCustomer, setIsDeletingCustomer] = useState(false);
   const [creditSummary, setCreditSummary] = useState({ totalOutstanding: 0, totalPayable: 0 });
   const [isSummaryLoading, setIsSummaryLoading] = useState(false);
+  const [viewMode, setViewMode] = useState<CustomerViewMode>("cards");
+
+  useEffect(() => {
+    const saved = localStorage.getItem(CUSTOMER_VIEW_KEY);
+    if (saved === "cards" || saved === "table") {
+      setViewMode(saved);
+    }
+  }, []);
+
+  const setCustomerViewMode = (mode: CustomerViewMode) => {
+    setViewMode(mode);
+    localStorage.setItem(CUSTOMER_VIEW_KEY, mode);
+  };
   // 1) Fetch customers — shared with New Sale via global store + cache invalidation
   const fetchCustomers = async () => {
     setIsLoading(true);
@@ -519,10 +546,32 @@ export function Customers({ onViewLedger }: CustomersProps) {
         />
       </div>
 
-      {/* Table with Loader */}
+      {/* Customer list */}
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <CardTitle>Customers ({filteredCustomers.length})</CardTitle>
+          <div className="flex items-center rounded-lg border bg-muted/40 p-1 self-start sm:self-auto">
+            <Button
+              type="button"
+              size="sm"
+              variant={viewMode === "cards" ? "default" : "ghost"}
+              className="h-8 gap-1.5 px-3"
+              onClick={() => setCustomerViewMode("cards")}
+            >
+              <LayoutGrid className="h-4 w-4" />
+              Cards
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={viewMode === "table" ? "default" : "ghost"}
+              className="h-8 gap-1.5 px-3"
+              onClick={() => setCustomerViewMode("table")}
+            >
+              <List className="h-4 w-4" />
+              Table
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           {isLoading ? (
@@ -531,6 +580,113 @@ export function Customers({ onViewLedger }: CustomersProps) {
             <div className="text-center py-10">
               <Users className="h-12 w-12 text-gray-400 mx-auto mb-4" />
               <p className="text-gray-600">No customers found</p>
+            </div>
+          ) : viewMode === "cards" ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              {filteredCustomers.map((customer) => (
+                <div
+                  key={customer.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onViewLedger(customer.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onViewLedger(customer.id);
+                    }
+                  }}
+                  className={cn(
+                    "group relative flex flex-col rounded-xl border border-slate-200 bg-white p-4 shadow-sm",
+                    "cursor-pointer transition-all hover:border-indigo-300 hover:shadow-md hover:ring-1 hover:ring-indigo-100",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500",
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-2 mb-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-semibold text-slate-900 truncate">
+                        {customer.name || customer.email || "Unnamed"}
+                      </p>
+                      {customer.email && customer.name && (
+                        <p className="text-xs text-slate-500 truncate flex items-center gap-1 mt-0.5">
+                          <Mail className="h-3 w-3 shrink-0" />
+                          {customer.email}
+                        </p>
+                      )}
+                      {customer.phone_number && (
+                        <p className="text-xs text-slate-500 flex items-center gap-1 mt-1">
+                          <Phone className="h-3 w-3 shrink-0" />
+                          {customer.phone_number}
+                        </p>
+                      )}
+                    </div>
+                    <Badge
+                      variant="status"
+                      className={cn(
+                        "shrink-0",
+                        customer.is_active
+                          ? "bg-green-100 text-green-800"
+                          : "bg-red-100 text-red-800",
+                      )}
+                    >
+                      {customer.is_active ? "Active" : "Inactive"}
+                    </Badge>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 mb-4 text-sm">
+                    <div>
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Balance</p>
+                      <p className={cn("font-bold tabular-nums", balanceClass(customer.outstanding_balance))}>
+                        Rs {formatBalance(customer.outstanding_balance)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Limit</p>
+                      <p className="font-medium text-slate-700 tabular-nums">
+                        Rs {formatBalance(customer.credit_limit)}
+                      </p>
+                    </div>
+                  </div>
+
+                  <p className="text-[10px] text-indigo-600 font-medium uppercase tracking-wider mb-3 opacity-0 group-hover:opacity-100 transition-opacity">
+                    Click to open ledger
+                  </p>
+
+                  <div
+                    className="flex items-center gap-2 mt-auto pt-3 border-t border-slate-100"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="flex-1 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 h-8 font-semibold text-[10px] uppercase tracking-wider gap-1.5"
+                      onClick={() => onViewLedger(customer.id)}
+                    >
+                      <FileText className="h-3 w-3" /> Ledger
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8 w-8 p-0"
+                      onClick={() => setEditingCustomer(customer)}
+                    >
+                      <Edit className="h-3 w-3" />
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8 w-8 p-0 text-red-600 hover:text-red-700"
+                      onClick={() => setDeleteTargetCustomer(customer)}
+                      disabled={isDeletingCustomer}
+                    >
+                      {isDeletingCustomer && deleteTargetCustomer?.id === customer.id ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Trash2 className="h-3 w-3" />
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              ))}
             </div>
           ) : (
             <div className="overflow-x-auto -mx-4 md:mx-0">
@@ -547,7 +703,11 @@ export function Customers({ onViewLedger }: CustomersProps) {
                   </TableHeader>
               <TableBody>
                 {filteredCustomers.map((customer) => (
-                  <TableRow key={customer.id}>
+                  <TableRow
+                    key={customer.id}
+                    className="cursor-pointer hover:bg-indigo-50/50"
+                    onClick={() => onViewLedger(customer.id)}
+                  >
                     <TableCell>
                       <div className="space-y-1">
                         <div className="flex items-center text-sm">
@@ -569,12 +729,12 @@ export function Customers({ onViewLedger }: CustomersProps) {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <span className={`font-bold ${Number(customer.outstanding_balance || 0) > 0 ? "text-red-600" : "text-green-600"}`}>
-                        Rs {Number(customer.outstanding_balance || 0).toLocaleString()}
+                      <span className={cn("font-bold", balanceClass(customer.outstanding_balance))}>
+                        Rs {formatBalance(customer.outstanding_balance)}
                       </span>
                     </TableCell>
                     <TableCell className="text-gray-600 font-medium whitespace-nowrap">
-                      Rs {Number(customer.credit_limit || 0).toLocaleString()}
+                      Rs {formatBalance(customer.credit_limit)}
                     </TableCell>
                     <TableCell>
                       <Badge
@@ -588,7 +748,7 @@ export function Customers({ onViewLedger }: CustomersProps) {
                         {customer.is_active ? "Active" : "Inactive"}
                       </Badge>
                     </TableCell>
-                    <TableCell>
+                    <TableCell onClick={(e) => e.stopPropagation()}>
                       <div className="flex space-x-2">
                         <Button
                           size="sm"

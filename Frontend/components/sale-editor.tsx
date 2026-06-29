@@ -18,6 +18,7 @@ import { notifyDashboardStatsChanged } from "@/lib/dashboard-stats-sync";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { creditLedgerFields, creditPaidAtSaleForEditor, type SaleWithLedgerFields } from "@/lib/credit-sale-ledger";
 
 interface SaleItem {
   id: string;
@@ -28,7 +29,7 @@ interface SaleItem {
   line_total: number | string;
 }
 
-interface Sale {
+interface Sale extends SaleWithLedgerFields {
   id: string;
   sale_number: string;
   total_amount: string | number;
@@ -186,7 +187,16 @@ export function SaleEditor({ sale, open, loading = false, onOpenChange, onSucces
     setItems(normalizeSaleItems(rawItems));
     setDiscount(num(sale.discount_amount));
     setPaymentMethod(String(sale.payment_method ?? "CASH"));
-    setPaidAmount(num((sale as any).payment_received ?? sale.total_amount));
+    const method = String(sale.payment_method ?? "CASH").toUpperCase();
+    const total = num(sale.total_amount);
+    const cashReceived = num(sale.payment_received ?? 0);
+    setPaidAmount(
+      method === "CREDIT"
+        ? creditPaidAtSaleForEditor(sale as SaleWithLedgerFields)
+        : cashReceived > 0
+          ? cashReceived
+          : total,
+    );
     setNotes(String(sale.notes ?? ""));
     setSelectedCustomerId(sale.customer?.id ? String(sale.customer.id) : null);
     setFormError("");
@@ -247,6 +257,11 @@ export function SaleEditor({ sale, open, loading = false, onOpenChange, onSucces
   const paid = Math.max(0, num(paidAmount));
   const changeAmount = paymentMethod === "CREDIT" ? 0 : Math.max(0, paid - grandTotal);
   const dueAmount = Math.max(0, grandTotal - paid);
+  const creditLedger = sale ? creditLedgerFields(sale as SaleWithLedgerFields) : null;
+  const collectedViaLedger =
+    paymentMethod === "CREDIT" && creditLedger
+      ? Math.max(0, creditLedger.invoiceTotalPaid - creditLedger.paidAtSale)
+      : 0;
 
   // Switching the payment method resets the paid amount to the intent of that method:
   // - CREDIT  → 0, so the customer owes the full total (a partial upfront can be typed back in)
@@ -534,8 +549,15 @@ export function SaleEditor({ sale, open, loading = false, onOpenChange, onSucces
                   </Select>
                 </div>
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-gray-500 uppercase tracking-wider">Paid Amount</label>
+                  <label className="text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    {paymentMethod === "CREDIT" ? "Paid at sale" : "Paid Amount"}
+                  </label>
                   <Input type="number" min={0} step="0.01" className="h-11" value={paidAmount} onChange={(e) => setPaidAmount(e.target.value)} />
+                  {paymentMethod === "CREDIT" && collectedViaLedger > 0.009 && (
+                    <p className="text-xs text-amber-700">
+                      Rs {collectedViaLedger.toLocaleString()} was collected later via Customer Ledger and is not included here.
+                    </p>
+                  )}
                 </div>
               </div>
 
