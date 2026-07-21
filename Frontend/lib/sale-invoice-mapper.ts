@@ -37,6 +37,15 @@ export function mapSaleToInvoiceData(sale: Record<string, unknown>): InvoiceData
   const isCredit = String(sale.payment_method ?? "CASH").toUpperCase() === "CREDIT";
   const ledger = creditLedgerFields(sale);
   const cashPaid = parseFloat(String(sale.payment_received ?? "0"));
+  const openingBalance = parseFloat(String(sale.previous_balance ?? "0"));
+
+  // Non-credit sales keep only the cash leg in payment_received — the shortfall against
+  // the invoice was settled from advance credit. Guarded on the customer actually having
+  // held credit so legacy rows with a zeroed payment_received aren't misread.
+  const advanceApplied =
+    !isCredit && openingBalance < 0
+      ? Math.min(Math.max(0, Number((total - cashPaid).toFixed(2))), -openingBalance)
+      : 0;
 
   return {
     storeName: (sale.branch as { name?: string } | undefined)?.name || "SARWAT TRADER",
@@ -59,7 +68,9 @@ export function mapSaleToInvoiceData(sale: Record<string, unknown>): InvoiceData
     total,
     paymentMethod: String(sale.payment_method ?? "CASH"),
     balanceDue: isCredit && ledger ? ledger.invoiceAmountDue : 0,
-    amountPaid: isCredit && ledger ? ledger.invoiceTotalPaid : cashPaid || total,
-    previousBalance: parseFloat(String(sale.previous_balance ?? "0")),
+    amountPaid: isCredit && ledger ? ledger.invoiceTotalPaid : advanceApplied > 0 ? cashPaid : cashPaid || total,
+    previousBalance: openingBalance,
+    advanceApplied,
+    closingBalance: Number((openingBalance + advanceApplied).toFixed(2)),
   };
 }

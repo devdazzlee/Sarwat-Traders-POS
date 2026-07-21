@@ -12,6 +12,9 @@ const createSaleSchema = z.object({
         paymentMethod: z.enum(["CASH", "CARD", "MOBILE_MONEY", "BANK_TRANSFER", "CREDIT"]),
         items: z.array(saleItemSchema).min(1),
         discountAmount: z.number().nonnegative("Discount amount must be non-negative").optional().default(0),
+        paidAmount: z.number().nonnegative("Paid amount must be non-negative").optional(),
+        advanceApplied: z.number().nonnegative("Advance applied must be non-negative").optional(),
+        excessToCredit: z.number().nonnegative("Excess to credit must be non-negative").optional(),
     }),
 });
 

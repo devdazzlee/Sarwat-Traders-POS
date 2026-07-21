@@ -80,7 +80,12 @@ import { useToast } from "@/hooks/use-toast";
 import { useHoldSales } from "@/hooks/use-hold-sales";
 import { normalizeBranchId } from "@/lib/branch-utils";
 import { notifyDashboardStatsChanged } from "@/lib/dashboard-stats-sync";
-import { notifyCustomerLedgerChanged } from "@/lib/customer-ledger-sync";
+import {
+  CUSTOMER_LEDGER_REFRESH_EVENT,
+  notifyCustomerLedgerChanged,
+  type CustomerLedgerRefreshDetail,
+} from "@/lib/customer-ledger-sync";
+import { refreshCustomerListGlobally } from "@/lib/customer-list-sync";
 
 type SalePaymentMethod = "Cash" | "Credit" | "Card";
 
@@ -207,6 +212,13 @@ export function NewSale() {
   const [tenderedAmount, setTenderedAmount] = useState("");
   const [calculatedChange, setCalculatedChange] = useState(0);
   const [calculatedCredit, setCalculatedCredit] = useState(0);
+  /** Advance credit the cashier is putting toward this sale (auto-filled, editable). */
+  const [advanceToApply, setAdvanceToApply] = useState(0);
+  /**
+   * Park any overpayment on the customer's account instead of handing back change.
+   * Defaults off so cash never silently stays behind the counter — the cashier opts in.
+   */
+  const [keepExcessAsCredit, setKeepExcessAsCredit] = useState(false);
   const [paymentError, setPaymentError] = useState("");
   const { holdSales, holdSale, retrieveHoldSale, deleteHoldSale, holdSalesLoading, refreshHoldSales } =
     useHoldSales();
@@ -322,6 +334,23 @@ export function NewSale() {
       }
     };
   }, []); // Empty dependency array since we only want to fetch once on mount
+
+  // Customer balances are cached in the store for 5 minutes, so the "Current Due" line
+  // would keep showing a pre-sale figure until a hard refresh. Re-pull on any ledger
+  // change — our own sales, sale edits, and payments taken on the ledger screen.
+  useEffect(() => {
+    const onLedgerChange = (event: Event) => {
+      const { customerId } = (event as CustomEvent<CustomerLedgerRefreshDetail>).detail ?? {};
+      if (!customerId) return; // walk-in sale — no balance moved
+      // Busts the cachedGet keys as well as the store's 5-minute window.
+      void refreshCustomerListGlobally().catch(() => {
+        // Stale balance is better than a crash; the next fetch will catch up.
+      });
+    };
+
+    window.addEventListener(CUSTOMER_LEDGER_REFRESH_EVENT, onLedgerChange);
+    return () => window.removeEventListener(CUSTOMER_LEDGER_REFRESH_EVENT, onLedgerChange);
+  }, []);
 
   useEffect(() => {
     cartRef.current = cart;
@@ -753,6 +782,8 @@ export function NewSale() {
     return `${formatSmart(qty)} ${unitName}`;
   };
 
+  const roundMoney = (value: number) => Number(value.toFixed(2));
+
   const formatMoney = (value: number) => {
     const rounded = Number(value);
     if (Number.isInteger(rounded)) {
@@ -1121,7 +1152,31 @@ export function NewSale() {
     : parsedDiscount;
 
   const total = Math.max(0, subtotal - globalDiscountAmount);
-  
+
+  // A negative outstanding balance means the customer paid extra earlier and is in
+  // credit with us. That advance settles a cash/card sale before any cash is taken.
+  const selectedCustomerBalance = selectedCustomer
+    ? Number(customers.find((c) => c.id === selectedCustomer)?.outstanding_balance || 0)
+    : 0;
+  const advanceAvailable = Math.max(0, -selectedCustomerBalance);
+  const advanceApplicable = Math.min(advanceAvailable, total);
+  const advanceApplied =
+    paymentMethodPending === "Credit" ? 0 : Math.min(advanceToApply, advanceApplicable);
+  const netPayable = Math.max(0, roundMoney(total - advanceApplied));
+
+  // Anything tendered above the net payable either goes back as change or stays on the
+  // customer's account as fresh advance credit — only one of the two, never both.
+  const tenderedNumeric = parseFloat(tenderedAmount);
+  const tenderedExcess = Number.isNaN(tenderedNumeric)
+    ? 0
+    : Math.max(0, roundMoney(tenderedNumeric - (paymentMethodPending === "Credit" ? total : netPayable)));
+  // Credit sales settle their own overpayment through the ledger, so the choice is
+  // only offered on cash/card sales for a known customer.
+  const canKeepExcessAsCredit =
+    Boolean(selectedCustomer) && paymentMethodPending !== "Credit" && tenderedExcess > 0;
+  const excessKeptAsCredit = canKeepExcessAsCredit && keepExcessAsCredit ? tenderedExcess : 0;
+  const changeReturned = roundMoney(tenderedExcess - excessKeptAsCredit);
+
   const totalQuantity = cart.reduce(
     (sum, item) => sum + item.quantity,
     0
@@ -1136,13 +1191,13 @@ export function NewSale() {
     const numericValue = Number.isNaN(parsed) ? 0 : parsed;
 
     if (paymentMethodPending === "Credit") {
-      setCalculatedChange(Math.max(0, numericValue - total));
+      setCalculatedChange(changeReturned);
       setCalculatedCredit(Math.max(0, total - numericValue));
     } else {
-      setCalculatedChange(Number.isNaN(parsed) ? 0 : Math.max(0, numericValue - total));
+      setCalculatedChange(changeReturned);
       setCalculatedCredit(0);
     }
-  }, [paymentDialogOpen, tenderedAmount, total, paymentMethodPending]);
+  }, [paymentDialogOpen, tenderedAmount, total, changeReturned, paymentMethodPending]);
 
   const generateTransactionId = () => {
     return `TXN${Date.now().toString().slice(-6)}`;
@@ -1180,6 +1235,8 @@ export function NewSale() {
     setTenderedAmount("");
     setCalculatedChange(0);
     setCalculatedCredit(0);
+    setAdvanceToApply(0);
+    setKeepExcessAsCredit(false);
     setPaymentError("");
   };
 
@@ -1211,8 +1268,14 @@ export function NewSale() {
       return;
     }
 
+    // Auto-apply whatever advance the customer has; the cashier can dial it back
+    // in the dialog if they'd rather leave the credit on the account.
+    const autoAdvance = method === "Credit" ? 0 : advanceApplicable;
+
     setPaymentMethodPending(method);
-    setTenderedAmount(method === "Credit" ? "0" : total.toFixed(2));
+    setAdvanceToApply(autoAdvance);
+    setKeepExcessAsCredit(false);
+    setTenderedAmount(method === "Credit" ? "0" : (total - autoAdvance).toFixed(2));
     setPaymentError("");
     setCalculatedChange(0);
     setCalculatedCredit(method === "Credit" ? total : 0);
@@ -1255,15 +1318,20 @@ export function NewSale() {
     const parsed = parseFloat(tenderedAmount);
     const amountNumber = Number.isNaN(parsed) ? 0 : parsed;
 
-    if (paymentMethodPending !== "Credit" && amountNumber < total) {
+    if (paymentMethodPending !== "Credit" && amountNumber < netPayable) {
       setPaymentError("Received amount cannot be less than the payable total.");
       return;
     }
 
-    const change = Math.max(0, amountNumber - total);
     setPaymentError("");
 
-    const result = await handlePayment(paymentMethodPending, amountNumber, change);
+    const result = await handlePayment(
+      paymentMethodPending,
+      amountNumber,
+      changeReturned,
+      advanceApplied,
+      excessKeptAsCredit
+    );
     if (result) {
       resetPaymentState();
       // Clear cart AFTER dialog closes so the total doesn't flicker to 0 while processing
@@ -1277,7 +1345,9 @@ export function NewSale() {
   const handlePayment = async (
     method: SalePaymentMethod,
     amountPaid: number,
-    changeAmount: number
+    changeAmount: number,
+    advanceUsed = 0,
+    excessKept = 0
   ): Promise<InvoiceData | null> => {
     const cartSnapshot = cart.map((item) => ({ ...item }));
 
@@ -1310,6 +1380,11 @@ export function NewSale() {
         }
         if (method === "Credit") {
           payload.paidAmount = amountPaid;
+        } else if (selectedCustomer) {
+          // Explicit, even when 0 — otherwise the server auto-applies the full advance
+          // and would ignore a cashier who chose to leave the credit on the account.
+          payload.advanceApplied = advanceUsed;
+          payload.excessToCredit = excessKept;
         }
 
         // Check if online
@@ -1457,6 +1532,13 @@ export function NewSale() {
         const fullAddress = "Shop no 109, 1st floor city shopping mall, Marston road Karachi, Pakistan.";
 
         const selectedCustomerObj = customers.find((c) => c.id === selectedCustomer);
+        const openingBalance = Number(selectedCustomerObj?.outstanding_balance || 0);
+        // Credit sales move the balance by whatever went unpaid; cash sales move it by the
+        // advance consumed less any overpayment parked back on the account.
+        const derivedClosing =
+          method === "Credit"
+            ? openingBalance + total - amountPaid
+            : openingBalance + advanceUsed - excessKept;
 
         return {
           storeName: receiptDataForServer?.storeName || "SARWAT TRADER",
@@ -1485,9 +1567,16 @@ export function NewSale() {
           total: total,
           paymentMethod: method === "Cash" ? "CASH" : method === "Credit" ? "CREDIT" : "CARD",
           balanceDue: method === "Credit" ? Math.max(0, total - amountPaid) : 0,
-          amountPaid: method === "Credit" ? amountPaid : total,
+          // Cash that actually crossed the counter, before any change was handed back.
+          amountPaid,
+          advanceApplied: advanceUsed,
+          excessKeptAsCredit: excessKept,
+          changeReturned: changeAmount,
           // Customer's unpaid balance from prior transactions (snapshot before this sale settled)
-          previousBalance: Number(selectedCustomerObj?.outstanding_balance || 0),
+          previousBalance: openingBalance,
+          // Negative = customer is in credit with us once this sale is settled. Prefer the
+          // server's recalculated figure; fall back to local maths for offline sales.
+          closingBalance: roundMoney(Number(saleData?.closing_balance ?? derivedClosing)),
         };
       } catch (error: unknown) {
         console.error("Payment error:", error);
@@ -2408,11 +2497,18 @@ export function NewSale() {
                 return (
                   <>
                     <div className="flex justify-between items-center">
-                      <span className="text-[11px] text-slate-400 font-bold uppercase tracking-wider">Current Due</span>
+                      <span className="text-[11px] text-slate-400 font-bold uppercase tracking-wider">
+                        {balance < 0 ? 'Advance Available' : 'Current Due'}
+                      </span>
                       <span className={`text-sm font-black ${balance > 0 ? 'text-red-600' : 'text-emerald-600'}`}>
-                        Rs {balance.toLocaleString()}
+                        Rs {Math.abs(balance).toLocaleString()}
                       </span>
                     </div>
+                    {balance < 0 && (
+                      <p className="text-[11px] text-emerald-600 font-medium leading-relaxed">
+                        Rs {Math.min(-balance, total).toLocaleString()} will be applied to this sale.
+                      </p>
+                    )}
                     {limit > 0 && (
                       <div className="flex justify-between items-center">
                         <span className="text-[11px] text-slate-400 font-bold uppercase tracking-wider">Credit limit</span>
@@ -3032,10 +3128,78 @@ export function NewSale() {
                   Rs {formatMoney(total)}
                 </span>
               </div>
+              {paymentMethodPending !== "Credit" && advanceAvailable > 0 && (
+                <>
+                  <div className="flex items-center justify-between text-emerald-600">
+                    <span>Advance Available</span>
+                    <span className="font-semibold">Rs {formatMoney(advanceAvailable)}</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3 text-emerald-700">
+                    <span className="shrink-0">Advance Applied</span>
+                    <div className="flex items-center gap-1">
+                      <span className="font-semibold">-Rs</span>
+                      <Input
+                        type="number"
+                        min="0"
+                        max={advanceApplicable}
+                        step="0.01"
+                        value={advanceToApply}
+                        onChange={(e) => {
+                          const parsed = parseFloat(e.target.value);
+                          const next = Number.isNaN(parsed) ? 0 : parsed;
+                          const clamped = Math.min(Math.max(0, next), advanceApplicable);
+                          setAdvanceToApply(clamped);
+                          setTenderedAmount(roundMoney(total - clamped).toFixed(2));
+                          setPaymentError("");
+                        }}
+                        className="h-7 w-24 text-right text-sm font-semibold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between border-t border-slate-200 pt-2 text-blue-700 font-bold">
+                    <span>Net Payable</span>
+                    <span>Rs {formatMoney(netPayable)}</span>
+                  </div>
+                </>
+              )}
               {paymentMethodPending === "Credit" && calculatedCredit > 0 && (
                 <div className="flex items-center justify-between text-amber-600 font-semibold">
                   <span>Credit Balance</span>
                   <span>Rs {calculatedCredit.toFixed(2)}</span>
+                </div>
+              )}
+              {canKeepExcessAsCredit && (
+                <div className="rounded-md border border-slate-200 bg-white p-2 space-y-2">
+                  <div className="flex items-center justify-between font-semibold text-slate-700">
+                    <span>Extra Received</span>
+                    <span>Rs {formatMoney(tenderedExcess)}</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={keepExcessAsCredit ? "default" : "outline"}
+                      onClick={() => setKeepExcessAsCredit(true)}
+                      className="h-8 text-xs"
+                    >
+                      Keep as credit
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={keepExcessAsCredit ? "outline" : "default"}
+                      onClick={() => setKeepExcessAsCredit(false)}
+                      className="h-8 text-xs"
+                    >
+                      Return as change
+                    </Button>
+                  </div>
+                </div>
+              )}
+              {excessKeptAsCredit > 0 && (
+                <div className="flex items-center justify-between text-emerald-600 font-semibold">
+                  <span>Added to Advance Credit</span>
+                  <span>Rs {formatMoney(excessKeptAsCredit)}</span>
                 </div>
               )}
               {calculatedChange > 0 && (
@@ -3364,11 +3528,29 @@ export function NewSale() {
                   <p className="text-sm text-gray-500 mb-1">Total Received</p>
                   <p className="text-3xl font-bold text-gray-900">
                     <span className="text-xl mr-1">Rs</span>
-                    {tenderedAmount ? parseFloat(tenderedAmount).toLocaleString() : checkoutSuccessData.total.toLocaleString()}
+                    {tenderedAmount
+                      ? parseFloat(tenderedAmount).toLocaleString()
+                      : (checkoutSuccessData.amountPaid ?? checkoutSuccessData.total).toLocaleString()}
                   </p>
-                  {calculatedChange > 0 && (
-                    <p className="text-green-600 font-medium text-sm mt-2">
-                      Change Due: Rs {calculatedChange.toLocaleString()}
+                  {(checkoutSuccessData.advanceApplied ?? 0) > 0 && (
+                    <p className="text-emerald-600 font-medium text-sm mt-2">
+                      Rs {(checkoutSuccessData.advanceApplied ?? 0).toLocaleString()} settled from advance credit
+                    </p>
+                  )}
+                  {(checkoutSuccessData.excessKeptAsCredit ?? 0) > 0 && (
+                    <p className="text-emerald-600 font-medium text-sm mt-1">
+                      Rs {(checkoutSuccessData.excessKeptAsCredit ?? 0).toLocaleString()} added to advance credit
+                    </p>
+                  )}
+                  {(checkoutSuccessData.changeReturned ?? 0) > 0 && (
+                    <p className="text-green-600 font-medium text-sm mt-1">
+                      Change Due: Rs {(checkoutSuccessData.changeReturned ?? 0).toLocaleString()}
+                    </p>
+                  )}
+                  {(checkoutSuccessData.closingBalance ?? 0) < -0.009 && (
+                    <p className="text-slate-500 text-xs mt-2">
+                      Advance credit balance: Rs{" "}
+                      {Math.abs(checkoutSuccessData.closingBalance ?? 0).toLocaleString()}
                     </p>
                   )}
                 </div>

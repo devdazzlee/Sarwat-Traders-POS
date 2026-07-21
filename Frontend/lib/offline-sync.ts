@@ -183,6 +183,14 @@ class OfflineSyncManager {
         ) {
           const { notifyDashboardStatsChanged } = await import('./dashboard-stats-sync');
           notifyDashboardStatsChanged();
+
+          // A queued sale only moves a balance once it lands on the server, so the
+          // customer's due is stale everywhere until this point.
+          const syncedCustomerId = (item.payload as { customerId?: string } | undefined)?.customerId;
+          if (syncedCustomerId) {
+            const { notifyCustomerLedgerChanged } = await import('./customer-ledger-sync');
+            notifyCustomerLedgerChanged(syncedCustomerId);
+          }
         }
         console.log(`Synced: ${item.method} ${item.url}`);
       } else {

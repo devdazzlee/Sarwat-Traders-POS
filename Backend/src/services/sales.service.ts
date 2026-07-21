@@ -6,6 +6,16 @@ import { ledgerBalanceEngine } from './ledger-balance.engine';
 import { saleUpfrontPaymentDescription } from '../utils/sale-ledger-revision';
 import { buildSaleLedgerSnapshot } from '../utils/sale-ledger-derivation';
 
+const round2 = (n: number) => Number(n.toFixed(2));
+
+/** Ledger description for advance credit consumed by a cash/card sale. */
+export const advanceAppliedDescription = (saleNumber: string) =>
+  `Advance credit used - ${saleNumber}`;
+
+/** Ledger description for overpayment kept on account as new advance credit. */
+export const advanceReceivedDescription = (saleNumber: string) =>
+  `Advance credit kept from ${saleNumber}`;
+
 export type CreditSaleLedgerFields = {
   /** Amount collected at the counter when the sale was made (not Receive Payment). */
   paidAtSale: number;
@@ -583,6 +593,8 @@ class SaleService {
     discountAmount,
     createdBy,
     paidAmount,
+    advanceApplied,
+    excessToCredit,
   }: {
     branchId: string;
     customerId?: string;
@@ -591,6 +603,17 @@ class SaleService {
     discountAmount?: number;
     createdBy: string;
     paidAmount?: number; // for credit sales: amount actually paid upfront
+    /**
+     * For non-credit sales: how much of the customer's existing advance credit
+     * (negative ledger balance) settles this invoice. Omit to auto-apply the
+     * full available advance, capped at the invoice total.
+     */
+    advanceApplied?: number;
+    /**
+     * For non-credit sales: cash tendered beyond the net payable that the customer
+     * wants left on their account as advance credit rather than taken as change.
+     */
+    excessToCredit?: number;
   }) {
     const isCreditSale = paymentMethod === 'CREDIT';
 
@@ -704,7 +727,23 @@ class SaleService {
     const dbPaymentMethod = isCreditSale ? 'CREDIT' : paymentMethod as Prisma.SaleCreateInput['payment_method'];
     const saleNumber = `SALE-${Date.now()}`;
 
-    const creditPaidAmount = isCreditSale ? Math.min(Math.max(0, paidAmount ?? 0), finalTotal) : finalTotal;
+    // A negative ledger balance means the customer is in credit (advance paid earlier).
+    // On a cash/card sale that advance settles the invoice first, so only the remainder
+    // is actually collected at the counter.
+    const availableAdvance = !isCreditSale && customerId ? Math.max(0, -ledgerBalance) : 0;
+    const applicableAdvance = Math.min(availableAdvance, finalTotal);
+    const appliedAdvance = round2(
+      Math.min(Math.max(0, advanceApplied ?? applicableAdvance), applicableAdvance),
+    );
+
+    // Cash tendered above the net payable can be parked back on the account as fresh
+    // advance credit instead of being handed over as change.
+    const parkedAsCredit =
+      !isCreditSale && customerId ? round2(Math.max(0, excessToCredit ?? 0)) : 0;
+
+    const creditPaidAmount = isCreditSale
+      ? Math.min(Math.max(0, paidAmount ?? 0), finalTotal)
+      : round2(finalTotal - appliedAdvance);
     const creditOwedAmount = isCreditSale ? finalTotal - creditPaidAmount : 0;
     const dbPaymentStatus = isCreditSale
       ? creditPaidAmount >= finalTotal ? 'PAID' : creditPaidAmount > 0 ? 'PARTIAL' : 'PENDING'
@@ -827,15 +866,53 @@ class SaleService {
           },
         }),
       );
+
+      // CASH_SALE itself is balance-neutral, so consuming the advance needs its own
+      // DEBIT adjustment — it moves the balance from negative back toward zero.
+      if (appliedAdvance > 0.009) {
+        ops.push(
+          prisma.customerLedger.create({
+            data: {
+              customer_id: customerId,
+              entry_type: LedgerEntryType.ADJUSTMENT,
+              amount: new Prisma.Decimal(appliedAdvance),
+              description: advanceAppliedDescription(saleNumber),
+              sale_id: saleNumber,
+              reference_no: 'DEBIT',
+              balance_after: 0,
+              created_by: createdBy,
+            },
+          }),
+        );
+      }
+
+      // Deliberately account-level (no sale_id): this money settles nothing on THIS
+      // invoice, so tying it to the sale would make per-invoice snapshots read as overpaid.
+      if (parkedAsCredit > 0.009) {
+        ops.push(
+          prisma.customerLedger.create({
+            data: {
+              customer_id: customerId,
+              entry_type: LedgerEntryType.PAYMENT_RECEIVED,
+              amount: new Prisma.Decimal(parkedAsCredit),
+              description: advanceReceivedDescription(saleNumber),
+              reference_no: saleNumber,
+              balance_after: 0,
+              created_by: createdBy,
+            },
+          }),
+        );
+      }
     }
 
     const [sale] = await prisma.$transaction(ops);
 
+    let closingBalance = ledgerBalance;
     if (customerId && customer) {
       const needsSync =
         (isCreditSale && finalTotal > 0) || (!isCreditSale && finalTotal > 0);
       if (needsSync) {
-        await ledgerBalanceEngine.syncCustomerBalances(customerId);
+        closingBalance = await ledgerBalanceEngine.syncCustomerBalances(customerId);
       }
     }
 
@@ -846,9 +923,15 @@ class SaleService {
     if (!created) throw new AppError(500, 'Sale created but could not be loaded');
 
     const [hydrated] = await this.hydrateCreditSaleInvoiceTotals([created]);
-    return hydrated;
+    return {
+      ...hydrated,
+      advance_applied: appliedAdvance,
+      excess_kept_as_credit: parkedAsCredit,
+      // Negative = customer is in credit with us after this sale.
+      closing_balance: closingBalance,
+    };
   }
-  
+
 
   async getTodaySales({ branchId }: { branchId?: string }) {
     const { gte, lt } = getReportingPeriodCreatedAtFilter();

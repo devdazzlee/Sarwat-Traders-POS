@@ -52,7 +52,11 @@ export interface InvoiceData {
   paymentMethod: string;
   balanceDue: number; // if credit sale
   amountPaid?: number; // actual amount received
-  previousBalance?: number; // customer's unpaid balance from prior transactions (before this sale)
+  previousBalance?: number; // customer's balance before this sale (negative = advance credit held)
+  advanceApplied?: number; // advance credit from the customer's ledger used to settle this sale
+  excessKeptAsCredit?: number; // overpayment left on the account as new advance credit
+  changeReturned?: number; // cash handed back at the counter
+  closingBalance?: number; // customer's balance after this sale (negative = advance credit held)
 }
 
 export interface InventoryReportData {
@@ -230,111 +234,144 @@ const buildInvoiceDoc = (data: InvoiceData, logoDataUrl: string | null): jsPDF =
     currentY += rowHeight;
   });
 
-  // Summary — ensure room; if not, push to a new page
-  const previousBalance = data.previousBalance && data.previousBalance > 0 ? data.previousBalance : 0;
-  const hasPrevBalance = previousBalance > 0;
-  let summaryHeight = data.discount > 0 ? 28 : 20;
-  if (hasPrevBalance) summaryHeight += 24;
+  // Summary — built as a row list first so the settlement story reads top to bottom
+  // and the block height is known before deciding whether it needs a fresh page.
+  const isCreditInvoice = String(data.paymentMethod).toUpperCase() === 'CREDIT';
+  const advanceUsed = Math.max(0, data.advanceApplied ?? 0);
+  const excessKept = Math.max(0, data.excessKeptAsCredit ?? 0);
+  const changeGiven = Math.max(0, data.changeReturned ?? 0);
+  const openingDue = Math.max(0, data.previousBalance ?? 0);
+  const closingBalance = data.closingBalance ?? 0;
+  const closingCredit = Math.max(0, -closingBalance);
+
+  type SummaryRow = {
+    label: string;
+    value: string;
+    tone?: 'red' | 'green';
+    emphasis?: boolean;
+    ruleBefore?: 'thin' | 'thick';
+  };
+
+  const rows: SummaryRow[] = [
+    { label: 'Subtotal', value: formatAmount(data.subtotal) },
+  ];
+
+  if (data.discount > 0) {
+    rows.push({ label: 'Discount', value: `- ${formatAmount(data.discount)}`, tone: 'red' });
+  }
+
+  rows.push({
+    label: openingDue > 0 ? 'This Sale Total' : 'Grand Total',
+    value: `PKR ${formatAmount(data.total)}`,
+    tone: 'red',
+    emphasis: true,
+    ruleBefore: 'thick',
+  });
+
+  if (isCreditInvoice) {
+    rows.push({
+      label: 'Amount Paid',
+      value: `PKR ${formatAmount(data.amountPaid ?? 0)}`,
+      ruleBefore: 'thin',
+    });
+    rows.push({
+      label: 'Balance Due',
+      value: `PKR ${formatAmount(data.balanceDue ?? 0)}`,
+      tone: 'red',
+      emphasis: true,
+    });
+  } else if (advanceUsed > 0 || excessKept > 0) {
+    // Only spell out the settlement when ledger credit was actually involved — an
+    // ordinary walk-in cash sale keeps the plain Subtotal/Grand Total layout.
+    const settlement: SummaryRow[] = [];
+    if (advanceUsed > 0) {
+      settlement.push({
+        label: 'Advance Credit Used',
+        value: `- ${formatAmount(advanceUsed)}`,
+        tone: 'green',
+      });
+    }
+    settlement.push({ label: 'Cash Received', value: formatAmount(data.amountPaid ?? 0) });
+    if (changeGiven > 0) {
+      settlement.push({ label: 'Change Returned', value: `- ${formatAmount(changeGiven)}` });
+    }
+    if (excessKept > 0) {
+      settlement.push({
+        label: 'Kept as Advance Credit',
+        value: formatAmount(excessKept),
+        tone: 'green',
+      });
+    }
+    settlement[0].ruleBefore = 'thin';
+    rows.push(...settlement);
+  }
+
+  if (openingDue > 0) {
+    // Customer already owed us money before this sale — show it and the combined figure.
+    rows.push({
+      label: 'Previous Balance',
+      value: `PKR ${formatAmount(openingDue)}`,
+      tone: 'red',
+      ruleBefore: 'thin',
+    });
+    rows.push({
+      label: 'Net Payable',
+      value: `PKR ${formatAmount(openingDue + data.total)}`,
+      tone: 'red',
+      emphasis: true,
+      ruleBefore: 'thick',
+    });
+  } else if (closingCredit > 0.009) {
+    rows.push({
+      label: 'Advance Credit Balance',
+      value: `PKR ${formatAmount(closingCredit)}`,
+      tone: 'green',
+      emphasis: true,
+      ruleBefore: 'thick',
+    });
+  }
+
+  const rowGap = 8;
+  const ruleGap = 3;
+  const summaryHeight =
+    5 + rows.length * rowGap + rows.filter((r) => r.ruleBefore).length * ruleGap;
   if (currentY + summaryHeight > pageHeight - bottomReserveMid) {
     doc.addPage();
     currentY = drawHeader();
   }
 
-  const summaryY = currentY + 5;
   const sLabelX = pageWidth - 100;
   const sValueX = pageWidth - margin;
+  let rowY = currentY + 5;
 
-  doc.setFontSize(10);
-  doc.setTextColor(100, 100, 100);
-  doc.setFont('helvetica', 'normal');
-  doc.text('Subtotal', sLabelX, summaryY);
-  doc.setTextColor(0, 0, 0);
-  doc.setFont('helvetica', 'bold');
-  doc.text(formatAmount(data.subtotal), sValueX, summaryY, { align: 'right' });
+  rows.forEach((row, index) => {
+    if (row.ruleBefore) {
+      const ruleY = rowY - 4;
+      if (row.ruleBefore === 'thick') {
+        doc.setDrawColor(0, 0, 0);
+        doc.setLineWidth(0.5);
+      } else {
+        doc.setDrawColor(180, 180, 180);
+        doc.setLineWidth(0.3);
+      }
+      doc.line(sLabelX, ruleY, sValueX, ruleY);
+      rowY += ruleGap;
+    }
 
-  let lastRowY = summaryY;
-  if (data.discount > 0) {
-    lastRowY = summaryY + 8;
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(100, 100, 100);
-    doc.text('Discount', sLabelX, lastRowY);
-    doc.setTextColor(200, 0, 0);
+    doc.setFontSize(row.emphasis ? 11 : 10);
+    doc.setFont('helvetica', row.emphasis ? 'bold' : 'normal');
+    doc.setTextColor(...(row.emphasis ? ([0, 0, 0] as const) : ([100, 100, 100] as const)));
+    doc.text(row.label, sLabelX, rowY);
+
     doc.setFont('helvetica', 'bold');
-    doc.text(`- ${formatAmount(data.discount)}`, sValueX, lastRowY, { align: 'right' });
-  }
+    if (row.tone === 'red') doc.setTextColor(200, 0, 0);
+    else if (row.tone === 'green') doc.setTextColor(0, 130, 70);
+    else doc.setTextColor(0, 0, 0);
+    doc.text(row.value, sValueX, rowY, { align: 'right' });
 
-  const dividerY = lastRowY + 4;
-  doc.setDrawColor(0, 0, 0);
-  doc.setLineWidth(0.5);
-  doc.line(sLabelX, dividerY, sValueX, dividerY);
-
-  const grandTotalY = dividerY + 7;
-  doc.setFontSize(11);
-  doc.setFont('helvetica', 'bold');
-  doc.setTextColor(0, 0, 0);
-  doc.text(hasPrevBalance ? 'This Sale Total' : 'Grand Total', sLabelX, grandTotalY);
-  doc.setTextColor(200, 0, 0);
-  doc.text(`PKR ${formatAmount(data.total)}`, sValueX, grandTotalY, { align: 'right' });
-  doc.setTextColor(0, 0, 0);
-
-  let summaryBottomY = grandTotalY;
-
-  // Credit sales: show how much the customer paid and what remains due on this invoice.
-  if (String(data.paymentMethod).toUpperCase() === 'CREDIT') {
-    const paidY = grandTotalY + 10;
-    doc.setDrawColor(180, 180, 180);
-    doc.setLineWidth(0.3);
-    doc.line(sLabelX, paidY - 5, sValueX, paidY - 5);
-
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(100, 100, 100);
-    doc.text('Amount Paid', sLabelX, paidY);
-    doc.setFont('helvetica', 'bold');
     doc.setTextColor(0, 0, 0);
-    doc.text(`PKR ${formatAmount(data.amountPaid ?? 0)}`, sValueX, paidY, { align: 'right' });
-
-    const balanceDueY = paidY + 7;
-    doc.setFontSize(11);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(0, 0, 0);
-    doc.text('Balance Due', sLabelX, balanceDueY);
-    doc.setTextColor(200, 0, 0);
-    doc.text(`PKR ${formatAmount(data.balanceDue ?? 0)}`, sValueX, balanceDueY, { align: 'right' });
-    doc.setTextColor(0, 0, 0);
-
-    summaryBottomY = balanceDueY;
-  }
-
-  // Previous unpaid balance — shown separately, clearly distinct from current sale
-  if (hasPrevBalance) {
-    const prevLabelY = summaryBottomY + 10;
-    doc.setDrawColor(180, 180, 180);
-    doc.setLineWidth(0.3);
-    doc.line(sLabelX, prevLabelY - 5, sValueX, prevLabelY - 5);
-
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(100, 100, 100);
-    doc.text('Previous Balance', sLabelX, prevLabelY);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(200, 0, 0);
-    doc.text(`PKR ${formatAmount(previousBalance)}`, sValueX, prevLabelY, { align: 'right' });
-
-    const totalDueDividerY = prevLabelY + 4;
-    doc.setDrawColor(0, 0, 0);
-    doc.setLineWidth(0.5);
-    doc.line(sLabelX, totalDueDividerY, sValueX, totalDueDividerY);
-
-    const totalDueY = totalDueDividerY + 7;
-    doc.setFontSize(11);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(0, 0, 0);
-    doc.text('Net Payable', sLabelX, totalDueY);
-    doc.setTextColor(200, 0, 0);
-    doc.text(`PKR ${formatAmount(previousBalance + data.total)}`, sValueX, totalDueY, { align: 'right' });
-    doc.setTextColor(0, 0, 0);
-  }
+    if (index < rows.length - 1) rowY += rowGap;
+  });
 
   // Draw footer on every page now that total count is known
   const totalPages = doc.getNumberOfPages();
