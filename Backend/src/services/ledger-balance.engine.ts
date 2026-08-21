@@ -77,6 +77,70 @@ export class LedgerBalanceEngine {
     return this.computeRunningBalance(entries);
   }
 
+  /**
+   * Live "balance owed right before each sale", for receipts/history — the running
+   * balance immediately prior to whichever ledger entries carry that sale's
+   * sale_number, replayed from the CURRENT set of ledger rows for each customer.
+   *
+   * Unlike Sale.previous_balance (a snapshot frozen at creation/edit time), this
+   * stays correct even when an EARLIER sale for the same customer is later edited
+   * or reassigned to someone else — it can only ever go stale by re-querying it.
+   *
+   * Batched across all requested customers in one query, since a list of sales can
+   * span many customers and each customer's ledger only needs replaying once.
+   */
+  async getPreviousBalancesForSales(
+    tx: TxClient,
+    customerIds: string[],
+  ): Promise<Map<string, Map<string, number>>> {
+    const result = new Map<string, Map<string, number>>();
+    if (customerIds.length === 0) return result;
+
+    const entries = await tx.customerLedger.findMany({
+      where: { customer_id: { in: customerIds } },
+      orderBy: [{ customer_id: 'asc' }, { created_at: 'asc' }, { id: 'asc' }],
+      select: {
+        customer_id: true,
+        entry_type: true,
+        amount: true,
+        balance_after: true,
+        reference_no: true,
+        description: true,
+        sale_id: true,
+      },
+    });
+
+    const runningByCustomer = new Map<string, number>();
+    const seenSaleForCustomer = new Map<string, Set<string>>();
+
+    for (const entry of entries) {
+      const cid = entry.customer_id;
+      const running = runningByCustomer.get(cid) ?? 0;
+
+      if (entry.sale_id) {
+        let seen = seenSaleForCustomer.get(cid);
+        if (!seen) {
+          seen = new Set();
+          seenSaleForCustomer.set(cid, seen);
+        }
+        if (!seen.has(entry.sale_id)) {
+          seen.add(entry.sale_id);
+          let bySale = result.get(cid);
+          if (!bySale) {
+            bySale = new Map();
+            result.set(cid, bySale);
+          }
+          bySale.set(entry.sale_id, running);
+        }
+      }
+
+      const next = Number((running + this.computeSignedDelta(entry, running)).toFixed(3));
+      runningByCustomer.set(cid, next);
+    }
+
+    return result;
+  }
+
   async recalculateRunningBalances(tx: TxClient, customerId: string): Promise<number> {
     const entries = await tx.customerLedger.findMany({
       where: { customer_id: customerId },

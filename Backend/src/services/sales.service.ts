@@ -169,6 +169,42 @@ class SaleService {
     });
   }
 
+  /**
+   * Overrides each sale's previous_balance with the LIVE value computed from the
+   * customer's current ledger (LedgerBalanceEngine.getPreviousBalancesForSales),
+   * instead of trusting the raw stored snapshot column. That column is written once
+   * at creation/edit time for whichever customer the sale belonged to then, so it
+   * goes stale the moment an EARLIER sale for that customer is edited or reassigned
+   * to someone else — the live figure can't drift like that since it's recomputed
+   * from the ledger on every read, never cached.
+   */
+  private async hydrateLivePreviousBalance<
+    T extends {
+      sale_number: string;
+      customer_id: string | null;
+      previous_balance: Prisma.Decimal;
+    },
+  >(sales: T[]): Promise<T[]> {
+    const customerIds = [
+      ...new Set(sales.filter((s) => s.customer_id).map((s) => s.customer_id as string)),
+    ];
+
+    const previousBalances =
+      customerIds.length > 0
+        ? await ledgerBalanceEngine.getPreviousBalancesForSales(prisma, customerIds)
+        : new Map<string, Map<string, number>>();
+
+    return sales.map((sale) => {
+      if (!sale.customer_id) {
+        // Walk-in (or reassigned away from a customer) — no previous-balance concept applies.
+        return { ...sale, previous_balance: new Prisma.Decimal(0) };
+      }
+      const live = previousBalances.get(sale.customer_id)?.get(sale.sale_number);
+      if (live === undefined) return sale; // no matching ledger rows — keep the stored value
+      return { ...sale, previous_balance: new Prisma.Decimal(live) };
+    });
+  }
+
   async getSales({
     branchId,
     page,
@@ -250,8 +286,10 @@ class SaleService {
         include,
         orderBy: { sale_date: 'desc' },
       });
-      const hydrated = await this.hydrateCreditSaleInvoiceTotals(
-        await this.hydrateReturnSaleCustomers(data),
+      const hydrated = await this.hydrateLivePreviousBalance(
+        await this.hydrateCreditSaleInvoiceTotals(
+          await this.hydrateReturnSaleCustomers(data),
+        ),
       );
       return {
         data: hydrated,
@@ -279,8 +317,10 @@ class SaleService {
       }),
     ]);
 
-    const hydrated = await this.hydrateCreditSaleInvoiceTotals(
-      await this.hydrateReturnSaleCustomers(data),
+    const hydrated = await this.hydrateLivePreviousBalance(
+      await this.hydrateCreditSaleInvoiceTotals(
+        await this.hydrateReturnSaleCustomers(data),
+      ),
     );
     return {
       data: hydrated,
@@ -471,9 +511,11 @@ class SaleService {
       };
     });
 
-    const [hydrated] = await this.hydrateCreditSaleInvoiceTotals([
-      { ...sale, sale_items: saleItems, original_sale },
-    ]);
+    const [hydrated] = await this.hydrateLivePreviousBalance(
+      await this.hydrateCreditSaleInvoiceTotals([
+        { ...sale, sale_items: saleItems, original_sale },
+      ]),
+    );
     return hydrated;
   }
 
@@ -1674,6 +1716,13 @@ class SaleService {
         ? `Sale edited: ${data.notes.trim()}`
         : `Sale edited (${oldSale.sale_number})`;
 
+      // previous_balance is a point-in-time snapshot (see createSale) of "what the
+      // customer owed right before this sale". It only means something relative to
+      // whoever the sale's customer actually is, so it must be re-snapshotted here
+      // whenever that customer changes — otherwise the bill keeps showing the old
+      // customer's balance forever, even after being reassigned.
+      let nextPreviousBalance = oldSale.previous_balance;
+
       if (customerChanged) {
         if (oldCustomerId) {
           await ledgerBalanceEngine.syncSaleLedgerEntries(tx, {
@@ -1688,6 +1737,15 @@ class SaleService {
           });
         }
         if (newCustomerId) {
+          // Snapshot BEFORE syncing this sale's ledger entries onto the new
+          // customer's account, so it reflects their balance prior to this sale
+          // (mirroring how createSale captures it), not their balance after.
+          const newCustomerBalanceBeforeSync = await ledgerBalanceEngine.getRunningBalance(
+            tx,
+            newCustomerId,
+          );
+          nextPreviousBalance = new Prisma.Decimal(newCustomerBalanceBeforeSync);
+
           await ledgerBalanceEngine.syncCreditSaleLedgerFromRecord(tx, {
             customerId: newCustomerId,
             saleNumber: oldSale.sale_number,
@@ -1710,6 +1768,9 @@ class SaleService {
               reason: `Customer assigned to sale (${oldSale.sale_number})`,
             });
           }
+        } else {
+          // Reassigned to walk-in — no customer, so no "previous balance" context applies.
+          nextPreviousBalance = new Prisma.Decimal(0);
         }
       } else if (newCustomerId) {
         if (newPaymentMethod === 'CREDIT') {
@@ -1747,6 +1808,7 @@ class SaleService {
           payment_status: paymentStatus,
           payment_received: new Prisma.Decimal(paymentReceived),
           change_amount: new Prisma.Decimal(changeAmount),
+          previous_balance: nextPreviousBalance,
           notes: data.notes ?? oldSale.notes,
           customer_id: newCustomerId,
           sale_items: { create: saleItemsData },
