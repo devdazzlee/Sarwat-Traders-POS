@@ -76,6 +76,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Check, ChevronsUpDown } from "lucide-react";
+import { format, parseISO } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { useHoldSales } from "@/hooks/use-hold-sales";
 import { normalizeBranchId } from "@/lib/branch-utils";
@@ -132,6 +133,47 @@ interface Product {
   maximum_stock?: number;
   unitId?: string;
   unitName?: string;
+}
+
+interface PreviousSaleCustomer {
+  id: string;
+  name?: string;
+}
+
+interface PreviousSaleSummary {
+  id: string;
+  sale_number: string;
+  sale_date: string;
+  total_amount: string | number;
+  status: string;
+  customer: PreviousSaleCustomer | null;
+}
+
+interface PreviousSaleItemDetail {
+  id: string;
+  product_id: string;
+  product: {
+    id: string;
+    name: string;
+    is_active?: boolean;
+    display_on_pos?: boolean;
+    unit?: { id?: string; name?: string };
+  } | null;
+  quantity: string | number;
+  unit_price: string | number;
+}
+
+interface PreviousSaleDetail extends PreviousSaleSummary {
+  sale_items: PreviousSaleItemDetail[];
+}
+
+/** "Aug 20, 2026" — used for previous-sale list/preview, tolerant of bad/missing dates. */
+function formatPreviousSaleDate(dateStr: string): string {
+  try {
+    return format(parseISO(dateStr), "MMM d, yyyy");
+  } catch {
+    return dateStr || "";
+  }
 }
 
 // Printer type from global hook
@@ -287,6 +329,19 @@ export function NewSale() {
   const [deleteTargetHoldSale, setDeleteTargetHoldSale] = useState<number | null>(null);
   const [isDeletingHoldSale, setIsDeletingHoldSale] = useState(false);
   const [resumingHoldIndex, setResumingHoldIndex] = useState<number | null>(null);
+
+  // Previous Sale Selection — copy products from an earlier bill into this new sale.
+  // Search is server-side (debounced + request-race-guarded, same pattern as returns.tsx)
+  // so opening the dropdown never pulls the whole sales table to the browser.
+  const [previousSaleSearchOpen, setPreviousSaleSearchOpen] = useState(false);
+  const [previousSaleSearchTerm, setPreviousSaleSearchTerm] = useState("");
+  const [previousSales, setPreviousSales] = useState<PreviousSaleSummary[]>([]);
+  const [previousSalesLoading, setPreviousSalesLoading] = useState(false);
+  const [previousSaleDetail, setPreviousSaleDetail] = useState<PreviousSaleDetail | null>(null);
+  const [previousSaleDetailLoading, setPreviousSaleDetailLoading] = useState(false);
+  const [isApplyingPreviousSale, setIsApplyingPreviousSale] = useState(false);
+  const latestPreviousSalesRequestRef = useRef(0);
+  const previousSaleSearchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [globalDiscountType, setGlobalDiscountType] = useState<"percentage" | "fixed">("fixed");
   const [globalDiscountValue, setGlobalDiscountValue] = useState<string>("");
@@ -1091,6 +1146,161 @@ export function NewSale() {
       }
     }
     setResumingHoldIndex(null);
+  };
+
+  // Previous Sale Selection: fetch the list for the dropdown, scoped to the
+  // selected customer if one is chosen, or every sale in the system (customer +
+  // walk-in) when the sale is being made walk-in. Search runs on the server
+  // (search param already supported by GET /sale) with a small page size —
+  // opening the dropdown never pulls the whole sales table to the browser,
+  // and typing doesn't just filter whatever page happened to load first.
+  const fetchPreviousSales = async (search: string) => {
+    const requestId = ++latestPreviousSalesRequestRef.current;
+    setPreviousSalesLoading(true);
+    try {
+      const res = await apiClient.get("/sale", {
+        params: {
+          branchId: getStoredBranchIdForSale(),
+          customerId: selectedCustomer || undefined,
+          search: search || undefined,
+          limit: 20,
+        },
+      });
+      if (requestId !== latestPreviousSalesRequestRef.current) return;
+      const list: PreviousSaleSummary[] = (res.data?.data || []).filter(
+        (sale: PreviousSaleSummary) => sale.status !== "CANCELLED"
+      );
+      setPreviousSales(list);
+    } catch (error) {
+      if (requestId !== latestPreviousSalesRequestRef.current) return;
+      toast({
+        variant: "destructive",
+        title: "Failed to load previous sales",
+        description: "Could not load previous sales history.",
+      });
+    } finally {
+      if (requestId === latestPreviousSalesRequestRef.current) {
+        setPreviousSalesLoading(false);
+      }
+    }
+  };
+
+  const triggerPreviousSaleSearch = (value: string) => {
+    setPreviousSaleSearchTerm(value);
+    if (previousSaleSearchDebounceRef.current) {
+      clearTimeout(previousSaleSearchDebounceRef.current);
+    }
+    previousSaleSearchDebounceRef.current = setTimeout(() => {
+      previousSaleSearchDebounceRef.current = null;
+      fetchPreviousSales(value.trim());
+    }, 300);
+  };
+
+  const handlePreviousSaleOpenChange = (open: boolean) => {
+    setPreviousSaleSearchOpen(open);
+    if (open) {
+      setPreviousSaleSearchTerm("");
+      if (previousSaleSearchDebounceRef.current) {
+        clearTimeout(previousSaleSearchDebounceRef.current);
+        previousSaleSearchDebounceRef.current = null;
+      }
+      fetchPreviousSales("");
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (previousSaleSearchDebounceRef.current) {
+        clearTimeout(previousSaleSearchDebounceRef.current);
+      }
+    };
+  }, []);
+
+  const handlePreviousSaleSelect = async (saleId: string) => {
+    setPreviousSaleSearchOpen(false);
+    setPreviousSaleDetail(null);
+    setPreviousSaleDetailLoading(true);
+    try {
+      const res = await apiClient.get(`/sale/${saleId}`);
+      // Backend wraps payloads as { success, message, data } — unwrap it.
+      const payload = (res.data as { data?: PreviousSaleDetail })?.data ?? res.data;
+      if (!payload?.id || !Array.isArray(payload.sale_items)) {
+        throw new Error("Invalid sale response");
+      }
+      setPreviousSaleDetail(payload);
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Failed to load sale",
+        description: "Could not load this bill's products.",
+      });
+    } finally {
+      setPreviousSaleDetailLoading(false);
+    }
+  };
+
+  // Copies the previewed previous sale's line items into the CURRENT cart as new,
+  // independently editable lines. The source sale itself is never touched — this
+  // only ever reads it, then builds a fresh cart for whatever gets saved next.
+  const applyPreviousSaleToCart = () => {
+    if (!previousSaleDetail) return;
+
+    if (cart.length > 0) {
+      const shouldReplace = window.confirm(
+        `Current cart will be replaced with products from Bill #${previousSaleDetail.sale_number}. Continue?`
+      );
+      if (!shouldReplace) return;
+    }
+
+    setIsApplyingPreviousSale(true);
+
+    const unavailableNames: string[] = [];
+    const newItems: CartItem[] = previousSaleDetail.sale_items.map((item, index) => {
+      const liveProduct = products.find((p) => p.id === item.product_id);
+      const sourceProduct = item.product;
+      const isUnavailable =
+        !liveProduct || liveProduct.is_active === false || liveProduct.display_on_pos === false;
+      const displayName = liveProduct?.name || sourceProduct?.name || "Unknown product";
+      if (isUnavailable) unavailableNames.push(displayName);
+
+      const unitPrice = Number(item.unit_price ?? 0);
+      return {
+        id: `${item.product_id}_${Date.now()}_${index}_${Math.random().toString(36).substr(2, 9)}`,
+        productId: item.product_id,
+        name: displayName,
+        price: unitPrice,
+        originalPrice: liveProduct ? Number(liveProduct.price) : unitPrice,
+        actualUnitPrice: unitPrice,
+        quantity: Number(item.quantity ?? 0),
+        category: liveProduct?.category || "",
+        unitId: liveProduct?.unitId || sourceProduct?.unit?.id,
+        unitName: liveProduct?.unitName || sourceProduct?.unit?.name,
+        unit: liveProduct?.unitName || sourceProduct?.unit?.name,
+      };
+    });
+
+    setCartSync(() => newItems);
+    setQuantityInputs({});
+    setQuantityModes({});
+    setAmountInputs({});
+    setShowAmountEditors({});
+    setGlobalDiscountValue("");
+
+    if (previousSaleDetail.customer?.id && !selectedCustomer) {
+      setSelectedCustomer(previousSaleDetail.customer.id);
+    }
+
+    toast({
+      variant: unavailableNames.length > 0 ? "destructive" : "default",
+      title: "Products added",
+      description:
+        unavailableNames.length > 0
+          ? `Copied ${newItems.length} product(s) from Bill #${previousSaleDetail.sale_number}. No longer available: ${unavailableNames.join(", ")}.`
+          : `Copied ${newItems.length} product(s) from Bill #${previousSaleDetail.sale_number}.`,
+    });
+
+    setIsApplyingPreviousSale(false);
+    setPreviousSaleDetail(null);
   };
 
   const handleViewHeldSales = async () => {
@@ -2527,6 +2737,156 @@ export function NewSale() {
             </div>
           )}
         </div>
+
+        {/* Previous Sales */}
+        <div className="mb-4 bg-white text-black rounded-lg border border-gray-200 shadow-sm p-4">
+          <label className="block text-sm font-bold text-slate-800 mb-2">
+            Previous Sales
+            <span className="text-[10px] text-slate-400 font-medium ml-1">
+              {selectedCustomer ? "(this customer's bills)" : "(all bills — select a customer to filter)"}
+            </span>
+          </label>
+          <Popover
+            open={previousSaleSearchOpen}
+            onOpenChange={handlePreviousSaleOpenChange}
+          >
+            <PopoverTrigger asChild>
+              <Button
+                variant="outline"
+                role="combobox"
+                aria-expanded={previousSaleSearchOpen}
+                className="w-full justify-between font-medium text-left bg-white border-gray-200 hover:bg-slate-50 overflow-hidden"
+              >
+                <div className="flex items-center gap-2 truncate">
+                  <FileText className="h-4 w-4 text-slate-400" />
+                  <span className="truncate text-slate-500">Select a previous bill to copy products…</span>
+                </div>
+                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-[360px] p-0" align="start">
+              {/* shouldFilter=false: the list is already the server-side search result
+                  for previousSaleSearchTerm, so cmdk must not re-filter it client-side */}
+              <Command className="border-none shadow-none" shouldFilter={false}>
+                <CommandInput
+                  placeholder="Search bill #, customer or amount..."
+                  className="h-10"
+                  value={previousSaleSearchTerm}
+                  onValueChange={triggerPreviousSaleSearch}
+                />
+                <CommandList className="max-h-[320px]">
+                  {previousSalesLoading ? (
+                    <div className="py-6 flex items-center justify-center gap-2 text-sm text-slate-400">
+                      <Loader2 className="h-4 w-4 animate-spin" /> Loading previous sales...
+                    </div>
+                  ) : (
+                    <>
+                      <CommandEmpty>
+                        {selectedCustomer
+                          ? "No previous sales found for this customer."
+                          : "No previous sales found."}
+                      </CommandEmpty>
+                      <CommandGroup>
+                        {previousSales.map((sale) => (
+                          <CommandItem
+                            key={sale.id}
+                            value={sale.id}
+                            onSelect={() => handlePreviousSaleSelect(sale.id)}
+                            className="flex items-center justify-between gap-2 py-2.5"
+                          >
+                            <div className="flex flex-col min-w-0">
+                              <span className="font-semibold text-slate-900 truncate">
+                                Bill #{sale.sale_number}
+                              </span>
+                              <span className="text-[11px] text-slate-500 truncate">
+                                {formatPreviousSaleDate(sale.sale_date)} · {sale.customer?.name || "Walk-in"}
+                              </span>
+                            </div>
+                            <span className="text-sm font-bold text-slate-700 shrink-0">
+                              Rs {Number(sale.total_amount).toLocaleString()}
+                            </span>
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </>
+                  )}
+                </CommandList>
+              </Command>
+            </PopoverContent>
+          </Popover>
+        </div>
+
+        {/* Previous Sale preview — copying its products never modifies the original bill */}
+        <Dialog
+          open={!!previousSaleDetail || previousSaleDetailLoading}
+          onOpenChange={(open) => {
+            if (!open) setPreviousSaleDetail(null);
+          }}
+        >
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>
+                {previousSaleDetail ? `Bill #${previousSaleDetail.sale_number}` : "Loading bill..."}
+              </DialogTitle>
+              {previousSaleDetail && (
+                <DialogDescription>
+                  {formatPreviousSaleDate(previousSaleDetail.sale_date)} ·{" "}
+                  {previousSaleDetail.customer?.name || "Walk-in"} · Rs{" "}
+                  {Number(previousSaleDetail.total_amount).toLocaleString()}
+                </DialogDescription>
+              )}
+            </DialogHeader>
+
+            {previousSaleDetailLoading && (
+              <div className="py-8 flex items-center justify-center gap-2 text-slate-500">
+                <Loader2 className="h-5 w-5 animate-spin" /> Loading products...
+              </div>
+            )}
+
+            {previousSaleDetail && (
+              <>
+                <ScrollArea className="max-h-[320px] pr-2">
+                  <div className="space-y-1">
+                    {previousSaleDetail.sale_items.map((item) => {
+                      const liveProduct = products.find((p) => p.id === item.product_id);
+                      const isUnavailable =
+                        !liveProduct || liveProduct.is_active === false || liveProduct.display_on_pos === false;
+                      return (
+                        <div
+                          key={item.id}
+                          className="flex items-center justify-between gap-2 py-1.5 border-b border-slate-100 last:border-0"
+                        >
+                          <div className="flex flex-col min-w-0">
+                            <span className="text-sm font-medium text-slate-800 truncate">
+                              {liveProduct?.name || item.product?.name || "Unknown product"}
+                            </span>
+                            <span className="text-[11px] text-slate-500">
+                              Qty {Number(item.quantity)} {item.product?.unit?.name || ""} × Rs{" "}
+                              {Number(item.unit_price).toLocaleString()}
+                            </span>
+                          </div>
+                          {isUnavailable && (
+                            <Badge variant="destructive" className="text-[10px] shrink-0">
+                              No longer available
+                            </Badge>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </ScrollArea>
+                <DialogFooter className="gap-2 sm:gap-2">
+                  <Button variant="outline" onClick={() => setPreviousSaleDetail(null)}>
+                    Cancel
+                  </Button>
+                  <Button onClick={applyPreviousSaleToCart} disabled={isApplyingPreviousSale}>
+                    {isApplyingPreviousSale ? "Adding..." : "Use Products in New Sale"}
+                  </Button>
+                </DialogFooter>
+              </>
+            )}
+          </DialogContent>
+        </Dialog>
 
         {/* Categories */}
         <div className="flex space-x-2 mb-6 overflow-x-auto">
