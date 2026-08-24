@@ -545,8 +545,11 @@ const buildReturnNoteDoc = (data: ReturnNoteData, logoDataUrl: string | null): j
   doc.setLineWidth(0.5);
   doc.line(pageWidth - 85, summaryY + 12, pageWidth - margin, summaryY + 12);
 
-  // Dynamic label: pure refund → "Refund Amount"; exchange → "Net Refund" / "Net Payable"
-  const rnNetValue = data.refundTotal - data.exchangeTotal;
+  // Dynamic label: pure refund → "Refund Amount"; exchange → "Net Refund" / "Net Payable".
+  // Derived from netAmount (the backend's authoritative total) rather than raw
+  // refundTotal - exchangeTotal, since only the paid-for share of a return counts as
+  // trade-in equity toward an exchange.
+  const rnNetValue = -data.netAmount;
   const rnHasExchange = data.exchangeTotal > 0;
   const rnNetLabel = !rnHasExchange
     ? 'Refund Amount'
@@ -578,7 +581,10 @@ const buildReturnNoteDoc = (data: ReturnNoteData, logoDataUrl: string | null): j
     doc.setTextColor(0, 0, 0);
     doc.text(`PKR ${formatAmount(rnPrevBalance)}`, balValueX, prevBalY, { align: 'right' });
 
-    const updatedBalance = rnPrevBalance + (data.exchangeTotal - data.refundTotal);
+    const updatedBalance =
+      data.updatedBalance !== undefined
+        ? data.updatedBalance
+        : rnPrevBalance + (data.exchangeTotal - data.refundTotal);
     const updBalDividerY = prevBalY + 4;
     doc.setDrawColor(0, 0, 0);
     doc.setLineWidth(0.5);
@@ -654,7 +660,12 @@ export interface ReturnNoteData {
   netAmount: number; // negative = net refund, positive = customer pays
   customerWhatsApp?: string;
   customerEmail?: string;
-  previousBalance?: number; // customer's outstanding account balance (informational)
+  previousBalance?: number; // customer's outstanding account balance before this transaction
+  // Balance right after this transaction, as computed by the backend. Not derivable as
+  // previousBalance + netAmount: a cash-settled exchange charge never touches the balance,
+  // and a cancelled unpaid debt isn't part of netAmount at all. Falls back to that (wrong
+  // for those cases, but the closest available guess) only when the backend didn't send it.
+  updatedBalance?: number;
 }
 
 export const downloadReturnNote = async (data: ReturnNoteData) => {

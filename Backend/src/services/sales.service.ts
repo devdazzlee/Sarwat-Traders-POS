@@ -1257,9 +1257,50 @@ class SaleService {
       stocks.map((stock) => [stock.product_id, new Prisma.Decimal(stock.current_quantity)]),
     );
     let total = new Prisma.Decimal(0);
+    // Tracked separately from `total` (their net) because the ledger posts them
+    // independently: a returned item's credit must be given back regardless of how
+    // the exchange difference is settled — see the posting logic below.
+    let refundTotal = new Prisma.Decimal(0);
+    // The portion of refundTotal that was actually paid for (cash, or the paid slice of a
+    // partially-paid credit sale) — see paidRefundTotal below for why this is tracked apart
+    // from refundTotal.
+    let paidRefundTotal = new Prisma.Decimal(0);
+    let exchangeTotal = new Prisma.Decimal(0);
     const hasReturn = returnedItems.length > 0;
     const hasExchange = exchangedItems.length > 0;
-    const resolvedExchangePaymentMethod = (exchangePaymentMethod ?? 'CASH').toUpperCase() as 'CASH' | 'CREDIT';
+    // No silent default: guessing CASH here has real financial consequences (it decides
+    // whether the exchange charge is collected now or added to the customer's account),
+    // so an exchange must say explicitly how it's being settled.
+    const normalizedExchangePaymentMethod = exchangePaymentMethod?.trim().toUpperCase();
+    if (hasExchange && normalizedExchangePaymentMethod !== 'CASH' && normalizedExchangePaymentMethod !== 'CREDIT') {
+      throw new AppError(400, 'exchangePaymentMethod must be CASH or CREDIT for an exchange');
+    }
+    const resolvedExchangePaymentMethod = (normalizedExchangePaymentMethod ?? 'CASH') as 'CASH' | 'CREDIT';
+
+    // The original sale's discount is stored only at the order level (not per line item),
+    // so a returned line has to be refunded net of its proportional share of that discount —
+    // otherwise the store refunds more than the customer actually paid.
+    const originalSubtotal = originalSale.subtotal
+      ? new Prisma.Decimal(originalSale.subtotal)
+      : originalSale.sale_items.reduce(
+          (sum, item) => sum.plus(new Prisma.Decimal(item.unit_price).mul(item.quantity)),
+          new Prisma.Decimal(0),
+        );
+    const originalDiscount = new Prisma.Decimal(originalSale.discount_amount ?? 0);
+    const discountRatio =
+      originalSubtotal.isPositive() && originalDiscount.isPositive()
+        ? Prisma.Decimal.min(1, originalDiscount.div(originalSubtotal))
+        : new Prisma.Decimal(0);
+
+    // How much of the original sale was ever actually paid for, as a fraction (0 = fully
+    // unpaid credit, 1 = fully paid). Only this fraction of a returned line's value counts
+    // as real "trade-in equity" toward an exchange — crediting the unpaid portion would let
+    // a customer swap an item they never paid for straight into a pricier one for free.
+    const originalTotalAmount = new Prisma.Decimal(originalSale.total_amount ?? 0);
+    const originalPaymentReceived = new Prisma.Decimal(originalSale.payment_received ?? 0);
+    const originalPaidFraction = originalTotalAmount.isPositive()
+      ? Prisma.Decimal.min(1, Prisma.Decimal.max(0, originalPaymentReceived.div(originalTotalAmount)))
+      : new Prisma.Decimal(0);
 
     const recordMovement = ({
       productId,
@@ -1297,8 +1338,12 @@ class SaleService {
       }
 
       const returnQuantity = new Prisma.Decimal(ret.quantity);
-      const lineTotal = new Prisma.Decimal(originalItem.unit_price).mul(returnQuantity).mul(-1);
+      const originalUnitPrice = new Prisma.Decimal(originalItem.unit_price);
+      const netUnitPrice = originalUnitPrice.mul(new Prisma.Decimal(1).minus(discountRatio));
+      const lineTotal = netUnitPrice.mul(returnQuantity).mul(-1);
       total = total.plus(lineTotal);
+      refundTotal = refundTotal.plus(lineTotal.abs());
+      paidRefundTotal = paidRefundTotal.plus(lineTotal.abs().mul(originalPaidFraction));
 
       const disposition = ret.disposition ?? 'RESTOCK';
       if (disposition !== 'UNSELLABLE') {
@@ -1318,11 +1363,11 @@ class SaleService {
       saleItems.push({
         product_id: ret.productId,
         quantity: returnQuantity.mul(-1),
-        unit_price: originalItem.unit_price,
+        unit_price: netUnitPrice,
         tax_rate: originalItem.tax_rate,
         discount_rate: originalItem.discount_rate,
         tax_amount: new Prisma.Decimal(0),
-        discount_amount: new Prisma.Decimal(0),
+        discount_amount: originalUnitPrice.minus(netUnitPrice).mul(returnQuantity),
         line_total: lineTotal,
         item_type: SaleItemType.RETURN,
         ref_sale_item_id: originalItem.id,
@@ -1342,6 +1387,7 @@ class SaleService {
       const unitPrice = new Prisma.Decimal(item.price);
       const lineTotal = unitPrice.mul(exchangeQuantity);
       total = total.plus(lineTotal);
+      exchangeTotal = exchangeTotal.plus(lineTotal);
 
       recordMovement({
         productId: item.productId,
@@ -1364,6 +1410,23 @@ class SaleService {
       });
     }
 
+    // Only the paid-for portion of a return counts as trade-in equity toward an exchange
+    // (see originalPaidFraction above). unpaidRefundTotal is the rest — an unpaid credit
+    // debt being cancelled, not real value the customer contributed — so it always gets
+    // refunded/cancelled in full but never reduces what's charged for the exchange.
+    const unpaidRefundTotal = refundTotal.minus(paidRefundTotal);
+    // Positive: still owed for the exchange after applying real trade-in equity.
+    // Negative: paid trade-in equity exceeds the exchange value — a genuine extra refund.
+    const exchangeNet = exchangeTotal.minus(paidRefundTotal);
+    const excessPaidRefund = exchangeNet.isNegative() ? exchangeNet.abs() : new Prisma.Decimal(0);
+    const refundToPost = unpaidRefundTotal.plus(excessPaidRefund);
+    const exchangeChargeDue = exchangeNet.isPositive() ? exchangeNet : new Prisma.Decimal(0);
+    // This composite sale's own total: for a pure return it's still the full return value
+    // (unchanged behavior); for an exchange it's just the new charge net of real trade-in
+    // equity. The cancelled unpaid debt is tracked separately via the refund posted below,
+    // not folded in here, so an unpaid trade-in can't silently discount today's charge.
+    const displayTotal = hasExchange ? exchangeNet : total;
+
     const resolvedCustomerId = customerId ?? originalSale.customer_id ?? undefined;
     const returnSaleNumber = `SALE-${Date.now()}`;
 
@@ -1372,6 +1435,9 @@ class SaleService {
     if (refundMethod) metaParts.push(`Refund: ${refundMethod}`);
     if (hasExchange) metaParts.push(`ExchangePayment: ${resolvedExchangePaymentMethod}`);
     if (orderScope) metaParts.push(`Scope: ${orderScope}`);
+    if (hasExchange && unpaidRefundTotal.isPositive()) {
+      metaParts.push(`UnpaidTradeInExcluded: Rs ${unpaidRefundTotal.toFixed(2)}`);
+    }
     const dispositionSummary = returnedItems
       .filter((r) => r.disposition && r.disposition !== 'RESTOCK')
       .map((r) => `${r.productId}=${r.disposition}`)
@@ -1379,37 +1445,39 @@ class SaleService {
     if (dispositionSummary) metaParts.push(`Disposition: ${dispositionSummary}`);
     const composedNotes = [metaParts.join(' | '), notes?.trim()].filter(Boolean).join('\n');
 
-    // Settlement note:
-    // total = exchangeTotal - refundTotal
-    // total > 0 => customer owes
-    // total < 0 => store owes/refund
+    // The refund and the exchange charge are posted to the ledger independently rather
+    // than netted: a returned item's credit has to be given back to the account even when
+    // the exchange difference is settled in cash at the counter. Netting them meant a
+    // cash-settled exchange silently skipped crediting back a returned item that was
+    // originally sold on credit, leaving its old "unpaid" balance stuck on the account —
+    // and, worse, let an unpaid item's sticker price silently discount a paid exchange.
     let returnPreviousBalance = new Prisma.Decimal(0);
-    let returnUpdatedBalance = new Prisma.Decimal(0);
     let returnAdjustsAccount = false;
-    const shouldPostToLedger =
-      !!resolvedCustomerId &&
-      !total.isZero() &&
-      (
-        total.isNegative() || // net refund still credits customer account
-        (total.isPositive() && resolvedExchangePaymentMethod === 'CREDIT') // net payable only on credit mode
-      );
+    const shouldPostRefund = !!resolvedCustomerId && refundToPost.isPositive();
+    const shouldPostExchangeCredit =
+      !!resolvedCustomerId && exchangeChargeDue.isPositive() && resolvedExchangePaymentMethod === 'CREDIT';
+    // Cash-settled exchange: no balance impact (CASH_SALE is a zero-delta entry type),
+    // but still recorded so the statement shows the exchange and the cash actually
+    // collected — otherwise a cash exchange leaves no trace next to its refund line.
+    const shouldPostExchangeCash =
+      !!resolvedCustomerId && resolvedExchangePaymentMethod === 'CASH' && exchangeChargeDue.isPositive();
+    const shouldPostToLedger = shouldPostRefund || shouldPostExchangeCredit || shouldPostExchangeCash;
 
     if (shouldPostToLedger && resolvedCustomerId) {
       returnAdjustsAccount = true;
       returnPreviousBalance = new Prisma.Decimal(
         await ledgerBalanceEngine.getRunningBalance(prisma, resolvedCustomerId),
       );
-      returnUpdatedBalance = returnPreviousBalance.plus(total);
     }
 
-    if (hasExchange && total.isPositive() && resolvedExchangePaymentMethod === 'CREDIT' && !resolvedCustomerId) {
+    if (hasExchange && exchangeChargeDue.isPositive() && resolvedExchangePaymentMethod === 'CREDIT' && !resolvedCustomerId) {
       throw new AppError(400, 'Customer is required when exchange payment option is CREDIT');
     }
 
     const salePaymentMethod: 'CASH' | 'CREDIT' =
       hasExchange ? resolvedExchangePaymentMethod : 'CASH';
     const salePaymentStatus: 'PAID' | 'PENDING' =
-      salePaymentMethod === 'CREDIT' && total.isPositive() ? 'PENDING' : 'PAID';
+      salePaymentMethod === 'CREDIT' && exchangeChargeDue.isPositive() ? 'PENDING' : 'PAID';
 
     const ops: Prisma.PrismaPromise<any>[] = [];
 
@@ -1421,8 +1489,8 @@ class SaleService {
           customer_id: resolvedCustomerId,
           original_sale_id: originalSaleId,
           notes: composedNotes || undefined,
-          subtotal: total,
-          total_amount: total,
+          subtotal: displayTotal,
+          total_amount: displayTotal,
           payment_method: salePaymentMethod,
           payment_status: salePaymentStatus,
           previous_balance: returnPreviousBalance,
@@ -1490,29 +1558,56 @@ class SaleService {
 
     const [sale] = await prisma.$transaction(ops);
 
-    if (returnAdjustsAccount && resolvedCustomerId && !total.isZero()) {
+    if (returnAdjustsAccount && resolvedCustomerId) {
       await prisma.$transaction(async (tx) => {
-        if (total.isNegative()) {
+        if (shouldPostRefund) {
           await ledgerBalanceEngine.postRefund(tx, {
             customerId: resolvedCustomerId,
-            amount: Number(total.abs()),
+            amount: Number(refundToPost),
             createdBy,
             description: `Return refund credited to account - ${returnSaleNumber}`,
-            saleId: returnSaleNumber,
+            // Tagged to the ORIGINAL sale, not this composite return/exchange sale — it's
+            // the original invoice's charge being cancelled. Tagging it with returnSaleNumber
+            // instead would make the statement nest this refund under the sibling credit-sale
+            // entry for the NEW item just because they share a sale number, showing it as if
+            // the customer had "paid" toward the new item when they paid nothing at all.
+            saleId: originalSale.sale_number,
           });
-        } else {
+        }
+        if (shouldPostExchangeCredit) {
           await ledgerBalanceEngine.postCreditSale(tx, {
             customerId: resolvedCustomerId,
-            amount: Number(total),
+            amount: Number(exchangeChargeDue),
             createdBy,
             description: `Exchange on credit - ${returnSaleNumber}`,
             saleId: returnSaleNumber,
           });
         }
+        if (shouldPostExchangeCash) {
+          await ledgerBalanceEngine.postCashSale(tx, {
+            customerId: resolvedCustomerId,
+            amount: Number(exchangeChargeDue),
+            saleId: returnSaleNumber,
+            createdBy,
+            description: `Cash collected for exchange - ${returnSaleNumber}`,
+          });
+        }
       });
     }
 
-    return sale as Prisma.SaleGetPayload<{ include: { sale_items: true } }>;
+    // "previous_balance + this sale's total" (the formula used for an ordinary new sale's
+    // receipt) does NOT hold for a return/exchange: a cash-settled exchange charge never
+    // touches the balance, and the cancelled unpaid debt isn't part of the sale's own total
+    // at all. Read the balance back after posting so callers show the real figure instead
+    // of re-deriving it with that formula.
+    const updatedBalance = resolvedCustomerId
+      ? await ledgerBalanceEngine.getRunningBalance(prisma, resolvedCustomerId)
+      : null;
+
+    return {
+      ...sale,
+      updated_balance: updatedBalance,
+    } as Prisma.SaleGetPayload<{ include: { sale_items: true } }> & { updated_balance: number | null };
   }
 
   async getRecentSaleItemsProductNameAndPrice(branchId?: string) {

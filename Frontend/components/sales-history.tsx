@@ -587,7 +587,11 @@ export function SalesHistory() {
         sale.payment_method === "CREDIT"
           ? (creditLedgerFields(sale)?.invoiceTotalPaid ?? 0)
           : (parseFloat(sale.payment_received || "0") || total),
-      previousBalance: parseFloat(sale.previous_balance || "0"),
+      // A return/exchange receipt's "total" can itself be a refund or a cash-settled
+      // charge that cancels part of the prior balance — "previousBalance + total" only
+      // means "what you'll owe next" for an ordinary new sale. Showing it here would
+      // claim a debt (previousBalance + total) that the return/exchange just cancelled.
+      previousBalance: getSaleType(sale) === "sale" ? parseFloat(sale.previous_balance || "0") : 0,
     };
   };
 

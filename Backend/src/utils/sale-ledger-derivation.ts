@@ -10,6 +10,9 @@ export type SaleLedgerSnapshot = {
   upfrontPaid: number;
   accountPaymentsCollected: number;
   totalPaid: number;
+  // Charge cancelled because the item was returned/exchanged — not money the customer
+  // handed over, so kept apart from totalPaid (which drives the "Paid" display).
+  refunded: number;
   amountDue: number;
   paymentStatus: SalePaymentStatus;
   hasCreditSaleRow: boolean;
@@ -76,6 +79,7 @@ export function buildSaleLedgerSnapshot(
   let creditCharged = 0;
   let upfrontPaid = 0;
   let accountPaymentsCollected = 0;
+  let refunded = 0;
 
   for (const row of rows) {
     const amt = Number(row.amount);
@@ -87,16 +91,22 @@ export function buildSaleLedgerSnapshot(
       } else {
         accountPaymentsCollected += amt;
       }
+    } else if (row.entry_type === LedgerEntryType.REFUND) {
+      // A return/exchange cancelling this invoice's charge — e.g. an unpaid item being
+      // returned. Reduces amountDue like a payment would, but must not be counted as
+      // totalPaid: no money changed hands, so it can't be shown as "paid".
+      refunded += amt;
     }
   }
 
   creditCharged = roundMoney(creditCharged);
   upfrontPaid = roundMoney(upfrontPaid);
   accountPaymentsCollected = roundMoney(accountPaymentsCollected);
+  refunded = roundMoney(refunded);
   const totalPaid = roundMoney(upfrontPaid + accountPaymentsCollected);
 
   const chargedBase = creditCharged > 0.009 ? creditCharged : roundMoney(invoiceTotal);
-  const amountDue = roundMoney(Math.max(0, chargedBase - totalPaid));
+  const amountDue = roundMoney(Math.max(0, chargedBase - totalPaid - refunded));
 
   return {
     saleNumber,
@@ -105,6 +115,7 @@ export function buildSaleLedgerSnapshot(
     upfrontPaid,
     accountPaymentsCollected,
     totalPaid,
+    refunded,
     amountDue,
     paymentStatus: derivePaymentStatus(amountDue, totalPaid),
     hasCreditSaleRow: creditCharged > 0.009,

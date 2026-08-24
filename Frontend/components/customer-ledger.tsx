@@ -86,6 +86,7 @@ interface LedgerEntry {
   invoiceDue?: number;
   invoicePaid?: number;
   invoiceTotal?: number;
+  invoiceReturned?: number;
   saleId?: string | null;
   paymentStatus?: string | null;
   isCollectable?: boolean;
@@ -245,15 +246,27 @@ function enrichLedgerEntry(entry: LedgerEntry, allEntries: LedgerEntry[]): Enric
       "Customer purchased on credit. This amount was added to what they owe you.";
     changeClass = "text-rose-700";
     borderClass = "border-l-rose-400";
-    if (entry.paymentStatus === "PAID") {
+    const returned = entry.invoiceReturned ?? 0;
+    const paidAmt = entry.invoicePaid ?? 0;
+    if ((entry.invoiceDue ?? 0) > 0.009) {
+      if (paidAmt > 0.009) {
+        statusLabel = "Partially Paid";
+        statusClass = "text-amber-600";
+      } else {
+        statusLabel = "Unpaid";
+        statusClass = "text-rose-600";
+      }
+    } else if (returned > 0.009 && paidAmt <= 0.009) {
+      // Settled purely by returning the item — no money was ever paid, so "Paid" would
+      // be a false claim. This is the common case: an unpaid credit item gets returned.
+      statusLabel = "Returned";
+      statusClass = "text-sky-600";
+    } else if (returned > 0.009) {
+      statusLabel = "Paid & Returned";
+      statusClass = "text-sky-600";
+    } else if (entry.paymentStatus === "PAID") {
       statusLabel = "Paid";
       statusClass = "text-emerald-600";
-    } else if (entry.paymentStatus === "PARTIAL") {
-      statusLabel = "Partially Paid";
-      statusClass = "text-amber-600";
-    } else if ((entry.invoiceDue ?? 0) > 0.009) {
-      statusLabel = "Unpaid";
-      statusClass = "text-rose-600";
     }
   } else if (entry.type === "CASH_SALE") {
     const paidVia =
@@ -397,7 +410,13 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
   const [dateTo, setDateTo] = useState<Date | undefined>(undefined);
   const [summary, setSummary] = useState({
     totalDebits: 0,
+    // Every balance-decreasing entry (payments AND refunds). Correct for the balance
+    // formula, but NOT the same thing as "money paid" — use totalPayments for that.
     totalCredits: 0,
+    // Real money the customer handed over (PAYMENT_RECEIVED only).
+    totalPayments: 0,
+    // Charges cancelled by a return/exchange — no money changed hands.
+    totalRefunds: 0,
     balance: 0,
     balanceDue: 0,
     advanceBalance: 0,
@@ -477,6 +496,8 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
         setSummary({
           totalDebits: data.summary?.totalDebits ?? data.summary?.totalSales ?? 0,
           totalCredits: data.summary?.totalCredits ?? data.summary?.totalPayments ?? 0,
+          totalPayments: data.summary?.totalPayments ?? 0,
+          totalRefunds: data.summary?.totalRefunds ?? 0,
           balance: bal,
           balanceDue: data.summary?.balanceDue ?? Math.max(0, bal),
           advanceBalance: data.summary?.advanceBalance ?? Math.max(0, -bal),
@@ -552,7 +573,12 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
         parent: EnrichedLedgerEntry;
         children: EnrichedLedgerEntry[];
         charged: number;
+        // Cash/credit actually handed over by the customer.
         paid: number;
+        // Reduced because the item was returned/exchanged — no money changed hands, the
+        // charge was cancelled. Kept apart from `paid` so the UI never claims the
+        // customer "paid" for something they returned unpaid.
+        returned: number;
         remaining: number;
       };
 
@@ -589,9 +615,14 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
       const children = childrenByParent.get(entry.id);
       if (children && children.length > 0) {
         const charged = Number(entry.amount ?? entry.changeAmount ?? 0);
-        const paid = children.reduce((sum, c) => sum + Number(c.changeAmount ?? 0), 0);
-        const remaining = Math.max(0, Number((charged - paid).toFixed(2)));
-        rows.push({ kind: "invoice", key: entry.id, parent: entry, children, charged, paid, remaining });
+        const paid = children
+          .filter((c) => c.type === "PAYMENT_RECEIVED")
+          .reduce((sum, c) => sum + Number(c.changeAmount ?? 0), 0);
+        const returned = children
+          .filter((c) => c.type === "REFUND")
+          .reduce((sum, c) => sum + Number(c.changeAmount ?? 0), 0);
+        const remaining = Math.max(0, Number((charged - paid - returned).toFixed(2)));
+        rows.push({ kind: "invoice", key: entry.id, parent: entry, children, charged, paid, returned, remaining });
       } else {
         rows.push({ kind: "single", key: entry.id, entry });
       }
@@ -1338,7 +1369,12 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
               Paid by Customer
               <Info className="h-3 w-3" />
             </p>
-            <p className="text-xl font-semibold text-emerald-700 mt-1 tabular-nums">{money(summary.totalCredits)}</p>
+            <p className="text-xl font-semibold text-emerald-700 mt-1 tabular-nums">{money(summary.totalPayments)}</p>
+            {summary.totalRefunds > 0.009 && (
+              <p className="text-[10px] text-sky-600 mt-0.5 tabular-nums">
+                + Rs {money(summary.totalRefunds)} returned (not cash)
+              </p>
+            )}
             <p className="text-[10px] text-emerald-600 mt-1 underline decoration-dotted">Payments received — view</p>
           </button>
           {netBalance.variant === "credit" ? (
@@ -1454,7 +1490,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                     if (row.kind === "single") {
                       return renderEntryRow(row.entry);
                     }
-                    const { parent, children, paid, remaining } = row;
+                    const { parent, children, paid, returned, remaining } = row;
                     const expanded = expandedInvoices.has(parent.id);
                     return (
                       <React.Fragment key={parent.id}>
@@ -1489,13 +1525,22 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                                   Paid {money(paid)}
                                 </span>
                               )}
+                              {returned > 0.009 && (
+                                <span className="rounded bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700 tabular-nums whitespace-nowrap">
+                                  Returned {money(returned)}
+                                </span>
+                              )}
                               <span
                                 className={cn(
                                   "rounded px-1.5 py-0.5 text-[10px] font-semibold tabular-nums whitespace-nowrap",
                                   remaining > 0.009 ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700",
                                 )}
                               >
-                                {remaining > 0.009 ? `Due ${money(remaining)}` : "Settled"}
+                                {remaining > 0.009
+                                  ? `Due ${money(remaining)}`
+                                  : paid > 0.009 && returned <= 0.009
+                                    ? "Settled"
+                                    : "Cancelled"}
                               </span>
                             </div>
                             <button
@@ -1507,7 +1552,8 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                               className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-sky-700 hover:text-sky-900"
                             >
                               {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                              {children.length} payment{children.length === 1 ? "" : "s"} · {expanded ? "hide" : "show"}
+                              {children.length} {children.every((c) => c.type === "REFUND") ? "return" : children.every((c) => c.type === "PAYMENT_RECEIVED") ? "payment" : "entry"}
+                              {children.length === 1 ? "" : "s"} · {expanded ? "hide" : "show"}
                             </button>
                           </td>
                           <td className="px-3 py-3 align-middle whitespace-nowrap">
@@ -1579,7 +1625,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                         <div className="min-w-0">
                           <p className="text-sm font-bold uppercase tracking-wide text-slate-700">Totals</p>
                           <p className="text-[11px] text-slate-500 mt-0.5">
-                            Total charged minus total paid = balance
+                            Total charged minus paid minus returned = balance
                           </p>
                         </div>
                         <div className="flex flex-wrap items-stretch gap-2 sm:gap-3">
@@ -1592,9 +1638,35 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                           <div className="rounded-lg border border-emerald-100 bg-white px-4 py-2 shadow-sm">
                             <p className="text-[10px] font-medium uppercase tracking-wide text-slate-400">Paid</p>
                             <p className="text-base font-bold text-emerald-600 tabular-nums whitespace-nowrap">
-                              −{money(summary.totalCredits)}
+                              −{money(summary.totalPayments)}
                             </p>
                           </div>
+                          {summary.totalRefunds > 0.009 && (
+                            <div className="rounded-lg border border-sky-100 bg-white px-4 py-2 shadow-sm">
+                              <p className="text-[10px] font-medium uppercase tracking-wide text-slate-400">Returned</p>
+                              <p className="text-base font-bold text-sky-600 tabular-nums whitespace-nowrap">
+                                −{money(summary.totalRefunds)}
+                              </p>
+                            </div>
+                          )}
+                          {(() => {
+                            // Manual balance adjustments (rare) reduce the balance without being
+                            // a payment or a refund — surface them too so Charged/Paid/Returned
+                            // actually add up to the balance shown, instead of silently omitting
+                            // whatever they don't cover.
+                            const otherCredits = Number(
+                              (summary.totalCredits - summary.totalPayments - summary.totalRefunds).toFixed(2),
+                            );
+                            if (otherCredits <= 0.009) return null;
+                            return (
+                              <div className="rounded-lg border border-slate-200 bg-white px-4 py-2 shadow-sm">
+                                <p className="text-[10px] font-medium uppercase tracking-wide text-slate-400">Adjusted</p>
+                                <p className="text-base font-bold text-slate-600 tabular-nums whitespace-nowrap">
+                                  −{money(otherCredits)}
+                                </p>
+                              </div>
+                            );
+                          })()}
                           <div className={cn("rounded-lg border px-4 py-2 shadow-sm", netBalance.cardClass)}>
                             <p className="text-[10px] font-medium uppercase tracking-wide text-slate-400">
                               {netBalance.label}
@@ -1619,10 +1691,13 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           {breakdownType && (() => {
             const isCharged = breakdownType === "charged";
+            // "Paid by customer" means real money handed over — PAYMENT_RECEIVED only.
+            // A REFUND also carries a credit amount (it reduces the balance too) but it's
+            // a charge being cancelled by a return, not a payment, so it's excluded here.
             const list = enrichedEntries.filter((e) =>
-              isCharged ? Number(e.debit) > 0.009 : Number(e.credit) > 0.009,
+              isCharged ? Number(e.debit) > 0.009 : e.type === "PAYMENT_RECEIVED" && Number(e.credit) > 0.009,
             );
-            const total = isCharged ? summary.totalDebits : summary.totalCredits;
+            const total = isCharged ? summary.totalDebits : summary.totalPayments;
             const amountClass = isCharged ? "text-rose-700" : "text-emerald-700";
             const sign = isCharged ? "+" : "−";
             return (
@@ -1635,7 +1710,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                   <DialogDescription>
                     {isCharged
                       ? "Every sale or charge that increased what this customer owes."
-                      : "Every payment or credit that reduced what this customer owes."}
+                      : "Every payment the customer actually handed over. Charges cancelled by a return show separately, not here."}
                   </DialogDescription>
                 </DialogHeader>
 
@@ -1704,7 +1779,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                 <p className="font-semibold mt-1 tabular-nums text-rose-700">{money(summary.totalDebits)}</p>
               </div>
               <div className="bg-white p-3">
-                <p className="text-[10px] uppercase tracking-wide text-slate-500">Total paid</p>
+                <p className="text-[10px] uppercase tracking-wide text-slate-500">Total paid & returned</p>
                 <p className="font-semibold mt-1 tabular-nums text-emerald-700">{money(summary.totalCredits)}</p>
               </div>
               <div className="bg-emerald-50 p-3">
@@ -1715,11 +1790,11 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
 
             <div>
               <p className="text-[11px] uppercase tracking-wide text-slate-500 font-medium mb-2">
-                Over-payments that created this credit
+                Over-payments and returns that created this credit
               </p>
               {creditSources.length === 0 ? (
                 <p className="text-sm text-slate-500">
-                  The credit is the difference between total paid and total charged ({money(summary.totalCredits)} − {money(summary.totalDebits)} = {money(netBalance.amount)}).
+                  The credit is the difference between total paid & returned and total charged ({money(summary.totalCredits)} − {money(summary.totalDebits)} = {money(netBalance.amount)}).
                 </p>
               ) : (
                 <div className="border border-slate-200 rounded-md divide-y divide-slate-100">
@@ -1820,6 +1895,9 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                     <p className="text-[10px] uppercase tracking-wide text-slate-500 font-medium">Invoice</p>
                     <p>Total: {money(viewEntry.invoiceTotal ?? 0)}</p>
                     <p>Paid: {money(viewEntry.invoicePaid ?? 0)}</p>
+                    {(viewEntry.invoiceReturned ?? 0) > 0.009 && (
+                      <p>Returned: {money(viewEntry.invoiceReturned ?? 0)}</p>
+                    )}
                     <p className="font-semibold text-slate-900">
                       Due: {money(viewEntry.invoiceDue ?? 0)}
                     </p>

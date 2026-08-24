@@ -18,7 +18,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageLoader } from "@/components/ui/page-loader";
 import { StatCardSkeleton } from "@/components/ui/stat-card-skeleton";
 import { Badge } from "@/components/ui/badge";
-import { DollarSign, CheckCircle2, XCircle, Users } from "lucide-react";
+import { CheckCircle2, XCircle, Users } from "lucide-react";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 
 interface Employee {

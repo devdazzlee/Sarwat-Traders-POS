@@ -40,9 +40,16 @@ class CustomerLedgerService {
     const runningBalances = new Map<string, number>();
     let running = 0;
     let totalDebits = 0;
+    // Every entry that reduced the balance — payments AND refunds alike. This is the
+    // correct denominator for the balance formula (totalDebits - totalCredits = balance),
+    // but it is NOT "money the customer paid": a REFUND reduces the balance by cancelling
+    // an unpaid credit charge, no cash changes hands. Callers that display "paid" must use
+    // totalPayments/totalRefunds below, never this raw total, or they'll claim a return was
+    // a payment.
     let totalCredits = 0;
     let totalSales = 0;
     let totalPayments = 0;
+    let totalRefunds = 0;
 
     for (const e of entries) {
       const delta = this.computeSignedDelta(e, running);
@@ -62,6 +69,7 @@ class CustomerLedgerService {
       const amt = Number(e.amount);
       if (e.entry_type === 'CREDIT_SALE') totalSales += amt;
       else if (e.entry_type === 'PAYMENT_RECEIVED') totalPayments += amt;
+      else if (e.entry_type === 'REFUND') totalRefunds += amt;
     }
 
     return {
@@ -72,6 +80,7 @@ class CustomerLedgerService {
       totalCredits,
       totalSales,
       totalPayments,
+      totalRefunds,
     };
   }
 
@@ -562,6 +571,7 @@ class CustomerLedgerService {
       totalCredits,
       totalSales,
       totalPayments,
+      totalRefunds,
     } = this.computeLedgerTotals(visibleAllAsc);
 
     type SaleRow = {
@@ -612,6 +622,7 @@ class CustomerLedgerService {
       const isSynthetic = e.id.startsWith('synthetic-');
       const invoicePaid = isCreditSale && snap ? snap.totalPaid : isCashSale ? invoiceTotal : 0;
       const invoiceDue = isCreditSale && snap ? snap.amountDue : 0;
+      const invoiceReturned = isCreditSale && snap ? snap.refunded : 0;
 
       const amounts = debitCreditById.get(e.id) ?? { debit: 0, credit: 0 };
 
@@ -642,6 +653,7 @@ class CustomerLedgerService {
         invoiceTotal,
         invoicePaid,
         invoiceDue,
+        invoiceReturned,
         saleId: saleInfo?.id ?? null,
         paymentStatus: isCreditSale && snap ? snap.paymentStatus : null,
         isCollectable: isCreditSale && invoiceDue > 0.009,
@@ -670,6 +682,7 @@ class CustomerLedgerService {
       summary: {
         totalSales,
         totalPayments,
+        totalRefunds,
         totalDebits,
         totalCredits,
         currentBalance,

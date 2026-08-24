@@ -77,6 +77,12 @@ interface Sale {
   }
   sale_date: string
   total_amount: number
+  /** Pre-discount total of the sale (sum of unit_price * quantity across lines) */
+  subtotal?: number
+  /** Order-level discount applied at sale time; not stored per line item */
+  discount_amount?: number
+  /** How much of total_amount was actually collected at sale time (0 for an unpaid credit sale) */
+  payment_received?: number
   sale_items: Array<{
     id: string
     product: {
@@ -249,6 +255,12 @@ const normalizeSaleRecord = (sale: any): Sale => ({
       ? sale.sale_date
       : new Date(sale?.sale_date || Date.now()).toISOString(),
   total_amount: Number(sale?.total_amount || 0),
+  subtotal: sale?.subtotal !== undefined && sale?.subtotal !== null ? Number(sale.subtotal) : undefined,
+  discount_amount: Number(sale?.discount_amount || 0),
+  payment_received:
+    sale?.payment_received !== undefined && sale?.payment_received !== null
+      ? Number(sale.payment_received)
+      : undefined,
   sale_items: Array.isArray(sale?.sale_items)
     ? sale.sale_items.map((item: any) => {
         const soldQty = Number(item?.quantity || 0)
@@ -280,6 +292,33 @@ const normalizeSaleRecord = (sale: any): Sale => ({
       }
     : undefined,
 })
+
+/**
+ * The order-level discount on a sale isn't stored per line item, so a returned
+ * line's fair value has to be the original unit price minus its proportional
+ * share of that discount (otherwise a return refunds more than the customer paid).
+ */
+const getNetUnitPrice = (sale: Sale, unitPrice: number) => {
+  const subtotal =
+    sale.subtotal ?? sale.sale_items.reduce((sum, i) => sum + i.unit_price * i.quantity, 0)
+  const discount = sale.discount_amount ?? 0
+  if (!subtotal || !discount) return unitPrice
+  const ratio = Math.min(1, Math.max(0, discount / subtotal))
+  return unitPrice * (1 - ratio)
+}
+
+/**
+ * How much of the original sale was ever actually paid for, as a fraction (0 = fully
+ * unpaid credit, 1 = fully paid). Only this fraction of a returned item's value is real
+ * trade-in equity toward an exchange — crediting the unpaid portion would let a customer
+ * swap an item they never paid for straight into a pricier one for free. Mirrors the
+ * same calculation the backend uses when it actually charges/posts the exchange.
+ */
+const getPaidFraction = (sale: Sale | null) => {
+  if (!sale || !sale.total_amount) return 0
+  const paymentReceived = sale.payment_received ?? sale.total_amount
+  return Math.min(1, Math.max(0, paymentReceived / sale.total_amount))
+}
 
 const matchesSaleSearch = (sale: any, term: string) => {
   if (!term) return true
@@ -384,7 +423,7 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
     customerId: "",
     returnType: "REFUND",
     refundMethod: "",
-    exchangePaymentMethod: "CASH",
+    exchangePaymentMethod: undefined,
     returnReason: "",
     orderScope: "PARTIAL",
     returnedItems: [],
@@ -567,7 +606,7 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
         customerId: "",
         returnType: "REFUND",
         refundMethod: "",
-        exchangePaymentMethod: "CASH",
+        exchangePaymentMethod: undefined,
         returnReason: "",
         orderScope: "PARTIAL",
         returnedItems: [],
@@ -615,16 +654,24 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
     [exchangeItems]
   )
 
+  // Only the paid-for share of the return counts as trade-in equity toward the exchange —
+  // an unpaid credit item's sticker price can't discount what's charged for the new item.
+  const tradeInEligibleSubtotal = useMemo(
+    () => returnSubtotal * getPaidFraction(selectedSale),
+    [returnSubtotal, selectedSale]
+  )
+
   const balanceSummary = useMemo(() => {
-    const diff = exchangeSubtotal - returnSubtotal
+    const diff = exchangeSubtotal - tradeInEligibleSubtotal
     return {
       returnSubtotal,
       exchangeSubtotal,
+      tradeInEligibleSubtotal,
       additionalDue: diff > 0 ? diff : 0,
       refundDue: diff < 0 ? Math.abs(diff) : 0,
       net: diff,
     }
-  }, [returnSubtotal, exchangeSubtotal])
+  }, [returnSubtotal, exchangeSubtotal, tradeInEligibleSubtotal])
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -882,7 +929,16 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
       return false
     }
 
-    if (isExchangeFlow && (newReturn.exchangePaymentMethod || "CASH") === "CREDIT" && !newReturn.customerId) {
+    if (isExchangeFlow && !newReturn.exchangePaymentMethod) {
+      toast({
+        title: "Payment option required",
+        description: "Select how the exchange difference is being settled — cash or credit.",
+        variant: "destructive",
+      })
+      return false
+    }
+
+    if (isExchangeFlow && newReturn.exchangePaymentMethod === "CREDIT" && !newReturn.customerId) {
       toast({
         title: "Customer required",
         description: "Select a customer before choosing credit for exchange balance.",
@@ -995,9 +1051,30 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
       }))
       const refundTotal = retItems.reduce((s, i) => s + i.qty * i.price, 0)
       const exchangeTotal = exchItems.reduce((s, i) => s + i.qty * i.price, 0)
+      const createdSale = response.data?.data
+
+      // netAmount/previousBalance come from the sale the backend actually created — it
+      // already accounts for how much of the returned item was ever paid for, which a
+      // naive (exchangeTotal - refundTotal) here would ignore (crediting unpaid trade-in).
+      const netAmount =
+        createdSale?.total_amount !== undefined && createdSale?.total_amount !== null
+          ? Number(createdSale.total_amount)
+          : exchangeTotal - refundTotal
+      const previousBalance =
+        createdSale?.previous_balance !== undefined && createdSale?.previous_balance !== null
+          ? Number(createdSale.previous_balance)
+          : Number(selectedSale?.customer?.outstanding_balance || 0)
+      // The real post-transaction balance, read back from the ledger server-side — NOT
+      // previousBalance + netAmount, which breaks for return/exchange sales (a cash-settled
+      // exchange charge never touches the balance, and a cancelled unpaid debt isn't part
+      // of netAmount at all).
+      const updatedBalance =
+        createdSale?.updated_balance !== undefined && createdSale?.updated_balance !== null
+          ? Number(createdSale.updated_balance)
+          : undefined
 
       setReturnSuccessData({
-        saleNumber: response.data?.data?.sale_number || `SALE-${Date.now()}`,
+        saleNumber: createdSale?.sale_number || `SALE-${Date.now()}`,
         originalSaleNumber: selectedSale?.sale_number || newReturn.saleId,
         customerName: selectedSale?.customer?.name,
         customerPhone: selectedSale?.customer?.phone_number || "",
@@ -1008,8 +1085,9 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
         exchangedItems: exchItems,
         refundTotal,
         exchangeTotal,
-        netAmount: exchangeTotal - refundTotal,
-        previousBalance: Number(selectedSale?.customer?.outstanding_balance || 0),
+        netAmount,
+        previousBalance,
+        updatedBalance,
       })
 
       // Close process modal
@@ -1021,7 +1099,7 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
         customerId: "",
         returnType: "REFUND",
         refundMethod: "",
-        exchangePaymentMethod: "CASH",
+        exchangePaymentMethod: undefined,
         returnReason: "",
         orderScope: "PARTIAL",
         returnedItems: [],
@@ -1113,7 +1191,7 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
           soldQuantity: sold,
           alreadyReturned: item.quantity_already_returned,
           returnQuantity: maxReturnable,
-          unitPrice: item.unit_price,
+          unitPrice: getNetUnitPrice(fresh, item.unit_price),
           included: true,
           disposition: "RESTOCK" as InventoryDisposition,
         }
@@ -1148,7 +1226,7 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
             soldQuantity: sold,
             alreadyReturned: item.quantity_already_returned,
             returnQuantity: maxReturnable,
-            unitPrice: item.unit_price,
+            unitPrice: getNetUnitPrice(cached, item.unit_price),
             included: true,
             disposition: "RESTOCK" as InventoryDisposition,
           }
@@ -1224,7 +1302,7 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
       ...prev,
       returnType: mode === "exchanges" ? "EXCHANGE" : "REFUND",
       refundMethod: mode === "exchanges" ? "" : prev.refundMethod,
-      exchangePaymentMethod: mode === "exchanges" ? (prev.exchangePaymentMethod || "CASH") : "CASH",
+      exchangePaymentMethod: mode === "exchanges" ? prev.exchangePaymentMethod : undefined,
       exchangedItems: mode === "returns" ? [] : prev.exchangedItems,
     }))
     if (mode === "returns") {
@@ -1703,15 +1781,21 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
                   saleDetailsLoading && "pointer-events-none opacity-50"
                 )}
               >
-                <div className="space-y-2">
-                  <Label htmlFor="return-reason">Return reason (optional)</Label>
+                <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <Label htmlFor="return-reason" className="flex items-center gap-1.5 text-sm font-semibold text-slate-700">
+                    <RotateCcw className="h-4 w-4" />
+                    Return reason (optional)
+                  </Label>
+                  <p className="text-xs text-slate-500">
+                    Helps track why items come back. Doesn't affect the refund or exchange amount.
+                  </p>
                   <Select
                     value={newReturn.returnReason || ""}
                     onValueChange={(value) =>
                       setNewReturn((prev) => ({ ...prev, returnReason: value as ReturnReason }))
                     }
                   >
-                    <SelectTrigger id="return-reason">
+                    <SelectTrigger id="return-reason" className="bg-white">
                       <SelectValue placeholder="Select reason" />
                     </SelectTrigger>
                     <SelectContent>
@@ -1724,15 +1808,21 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
                   </Select>
                 </div>
                 {processMode === "returns" && (
-                  <div className="space-y-2">
-                    <Label htmlFor="refund-method">Refund option *</Label>
+                  <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <Label htmlFor="refund-method" className="flex items-center gap-1.5 text-sm font-semibold text-slate-700">
+                      <DollarSign className="h-4 w-4" />
+                      Refund option *
+                    </Label>
+                    <p className="text-xs text-slate-500">
+                      How the refunded amount is given back to the customer.
+                    </p>
                     <Select
                       value={newReturn.refundMethod || ""}
                       onValueChange={(value) =>
                         setNewReturn((prev) => ({ ...prev, refundMethod: value }))
                       }
                     >
-                      <SelectTrigger id="refund-method">
+                      <SelectTrigger id="refund-method" className="bg-white">
                         <SelectValue placeholder="Select refund method" />
                       </SelectTrigger>
                       <SelectContent>
@@ -1746,16 +1836,28 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
                   </div>
                 )}
                 {processMode === "exchanges" && (
-                  <div className="space-y-2">
-                    <Label htmlFor="exchange-payment-method">Exchange payment option *</Label>
+                  <div className="space-y-2 rounded-lg border-2 border-amber-300 bg-amber-50 p-3">
+                    <Label htmlFor="exchange-payment-method" className="flex items-center gap-1.5 text-sm font-semibold text-amber-900">
+                      <CreditCard className="h-4 w-4" />
+                      How is the exchange difference being settled? *
+                    </Label>
+                    <p className="text-xs text-amber-800">
+                      Cash means the customer pays the difference at the counter now. Credit adds it to their account balance.
+                    </p>
                     <Select
-                      value={newReturn.exchangePaymentMethod || "CASH"}
+                      value={newReturn.exchangePaymentMethod ?? ""}
                       onValueChange={(value) =>
                         setNewReturn((prev) => ({ ...prev, exchangePaymentMethod: value as ExchangePaymentMethod }))
                       }
                     >
-                      <SelectTrigger id="exchange-payment-method">
-                        <SelectValue placeholder="Select payment option" />
+                      <SelectTrigger
+                        id="exchange-payment-method"
+                        className={cn(
+                          "bg-white",
+                          !newReturn.exchangePaymentMethod && "border-amber-400 ring-1 ring-amber-400",
+                        )}
+                      >
+                        <SelectValue placeholder="Select payment option (required)" />
                       </SelectTrigger>
                       <SelectContent>
                         {EXCHANGE_PAYMENT_METHODS.map((m) => (
@@ -2126,6 +2228,12 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
                       <span>Returned products value</span>
                       <span className="text-red-600 font-medium">Rs {returnSubtotal.toLocaleString()}</span>
                     </div>
+                    {processMode === "exchanges" && returnSubtotal - tradeInEligibleSubtotal > 0.009 && (
+                      <div className="flex justify-between text-xs text-muted-foreground">
+                        <span>Unpaid credit — not applied as trade-in</span>
+                        <span>Rs {(returnSubtotal - tradeInEligibleSubtotal).toLocaleString()}</span>
+                      </div>
+                    )}
                     {processMode === "exchanges" && (
                       <div className="flex justify-between">
                         <span>Replacement products value</span>
@@ -2186,9 +2294,9 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
                   {processMode === "exchanges" && (
                     <p>
                       Payment:{" "}
-                      {EXCHANGE_PAYMENT_METHOD_LABEL[newReturn.exchangePaymentMethod || "CASH"] ||
-                        newReturn.exchangePaymentMethod ||
-                        "CASH"}
+                      {newReturn.exchangePaymentMethod
+                        ? EXCHANGE_PAYMENT_METHOD_LABEL[newReturn.exchangePaymentMethod] || newReturn.exchangePaymentMethod
+                        : "Not selected"}
                     </p>
                   )}
                   <p>Return value: Rs {returnSubtotal.toLocaleString()}</p>
@@ -2552,9 +2660,21 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
                     </div>
                     <div className="flex justify-between font-bold">
                       <span>Updated Balance</span>
-                      <span className={((returnSuccessData.previousBalance || 0) + returnSuccessData.netAmount) < 0 ? "text-emerald-600" : "text-red-600"}>
-                        Rs {((returnSuccessData.previousBalance || 0) + returnSuccessData.netAmount).toLocaleString()}
-                      </span>
+                      {(() => {
+                        // previousBalance + netAmount does NOT hold for a return/exchange
+                        // (a cash-settled exchange charge never touches the balance, and a
+                        // cancelled unpaid debt isn't part of netAmount) — use the real
+                        // post-transaction balance the backend read back from the ledger.
+                        const updated =
+                          returnSuccessData.updatedBalance !== undefined
+                            ? returnSuccessData.updatedBalance
+                            : (returnSuccessData.previousBalance || 0) + returnSuccessData.netAmount
+                        return (
+                          <span className={updated < 0 ? "text-emerald-600" : "text-red-600"}>
+                            Rs {updated.toLocaleString()}
+                          </span>
+                        )
+                      })()}
                     </div>
                   </>
                 )}
