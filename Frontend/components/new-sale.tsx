@@ -48,9 +48,6 @@ import {
 } from "lucide-react";
 import { downloadA4Invoice, shareOnWhatsApp, shareOnEmail, printA4Invoice, type InvoiceData } from "@/lib/pdf-generator";
 import apiClient from "@/lib/apiClient";
-import { offlineAPIClient } from "@/lib/offline-api-client";
-import { offlineDB } from "@/lib/offline-db";
-import { syncManager } from "@/lib/offline-sync";
 import { usePosData } from "@/hooks/use-pos-data";
 import { printReceiptViaServer, type ReceiptData } from "@/lib/print-server";
 import { usePrinterSettings } from "@/hooks/use-printer-settings";
@@ -134,6 +131,10 @@ interface Product {
   unitId?: string;
   unitName?: string;
 }
+
+/** Shared id so rapid repeated stock warnings (e.g. holding the + button) update one
+ * toast in place instead of stacking a new one per click. */
+const LOW_STOCK_TOAST_ID = "cart-low-stock-warning";
 
 interface PreviousSaleCustomer {
   id: string;
@@ -392,25 +393,6 @@ export function NewSale() {
       }
     };
   }, []); // Empty dependency array since we only want to fetch once on mount
-
-  // Event-driven refresh, not polling: re-pull stock the moment the cashier actually
-  // looks at this screen again (switched back from another app/window), which is the
-  // only moment stale numbers matter. Costs nothing while nobody's looking, unlike a
-  // timer that keeps re-fetching the full catalog whether or not anything changed.
-  useEffect(() => {
-    const onFocusOrVisible = () => {
-      if (document.visibilityState === "hidden") return;
-      fetchProducts({ force: true }).catch(() => {
-        // Stale numbers are better than a crash; the next focus/mount will retry.
-      });
-    };
-    window.addEventListener("focus", onFocusOrVisible);
-    document.addEventListener("visibilitychange", onFocusOrVisible);
-    return () => {
-      window.removeEventListener("focus", onFocusOrVisible);
-      document.removeEventListener("visibilitychange", onFocusOrVisible);
-    };
-  }, [fetchProducts]);
 
   // Customer balances are cached in the store for 5 minutes, so the "Current Due" line
   // would keep showing a pre-sale figure until a hard refresh. Re-pull on any ledger
@@ -684,11 +666,59 @@ export function NewSale() {
     [products],
   );
 
+  // On-demand only — never a bulk/background refresh. Hits the lightweight per-product
+  // /stock endpoint (a handful of bytes) instead of re-pulling the whole product
+  // catalog (232KB via /products?fetch_all=true), and only ever runs for the one
+  // product actually being added — and only when the cached number already looks
+  // like a problem, so a well-stocked scan never triggers an extra request at all.
+  //
+  // Per-product cooldown: repeatedly tapping the same low/out-of-stock item (or
+  // bumping its quantity a few times in a row) must not fire a fresh request per
+  // click — the answer for that product isn't going to change within a few seconds,
+  // so a recent result is reused instead of re-hitting the server every time.
+  const liveStockCacheRef = useRef<Map<string, { value: number | null; checkedAt: number }>>(new Map());
+  const LIVE_STOCK_COOLDOWN_MS = 8_000;
+
+  const verifyLiveStock = useCallback(async (productId: string): Promise<number | null> => {
+    const cached = liveStockCacheRef.current.get(productId);
+    if (cached && Date.now() - cached.checkedAt < LIVE_STOCK_COOLDOWN_MS) {
+      return cached.value;
+    }
+    try {
+      const branchId = getStoredBranchIdForSale();
+      const res = await apiClient.get<{ data: Array<{ current_quantity: number | string }> }>(
+        "/stock",
+        { params: { productId, ...(branchId ? { branchId } : {}) } },
+      );
+      const rows = res.data?.data ?? [];
+      const value = rows.reduce((sum, r) => sum + Number(r.current_quantity ?? 0), 0);
+      liveStockCacheRef.current.set(productId, { value, checkedAt: Date.now() });
+      return value;
+    } catch {
+      return null; // Can't verify right now — leave the cached-based warning as-is.
+    }
+  }, []);
+
+  /** Shows the cached-based warning immediately (no added latency on the click), then
+   * silently confirms against live stock in the background and retracts the toast if
+   * it turns out to be a false alarm from a stale local cache. */
+  const warnLowStock = useCallback(
+    (productId: string, message: string, requested: number) => {
+      const shown = toast({ id: LOW_STOCK_TOAST_ID, variant: "warning", title: "Low stock", description: message });
+      void verifyLiveStock(productId).then((liveAvailable) => {
+        if (liveAvailable !== null && requested <= liveAvailable + 0.0001) {
+          shown.dismiss();
+        }
+      });
+    },
+    [verifyLiveStock],
+  );
+
   const resolveCartLineProductId = (line: CartItem) =>
     line.productId || line.id.split("_")[0];
 
   const validateCartStock = useCallback(
-    (cartItems: CartItem[]): string | null => {
+    (cartItems: CartItem[]): { message: string; productId: string; requested: number } | null => {
       if (cartItems.length === 0) return null;
 
       const qtyByProduct = new Map<string, number>();
@@ -704,10 +734,14 @@ export function NewSale() {
         const available = getProductStock(productId);
         const name = nameByProduct.get(productId) ?? "Product";
         if (available <= 0) {
-          return `${name} is out of stock.`;
+          return { message: `${name} is out of stock.`, productId, requested };
         }
         if (requested > available + 0.0001) {
-          return `Insufficient stock for ${name}. Available: ${available}, requested: ${requested}.`;
+          return {
+            message: `Insufficient stock for ${name}. Available: ${available}, requested: ${requested}.`,
+            productId,
+            requested,
+          };
         }
       }
 
@@ -722,10 +756,11 @@ export function NewSale() {
     // stock check at checkout, so this must never block adding to the cart.
     const availableStock = getProductStock(product.id);
     if (availableStock <= 0) {
-      toast({
-        title: "Low stock",
-        description: `${product.name} shows no stock as of the last sync — you can still add it.`,
-      });
+      warnLowStock(
+        product.id,
+        `${product.name} shows no stock as of the last sync — you can still add it.`,
+        quantity,
+      );
     }
 
     // When custom price is provided, it represents the TOTAL PRICE from barcode
@@ -805,10 +840,11 @@ export function NewSale() {
     // real, live stock check at checkout. Never block adding to the cart on this.
     const stockError = validateCartStock(nextCart);
     if (stockError) {
-      toast({
-        title: "Low stock",
-        description: `${stockError} You can still proceed — this is based on the last synced count.`,
-      });
+      warnLowStock(
+        stockError.productId,
+        `${stockError.message} You can still proceed — this is based on the last synced count.`,
+        stockError.requested,
+      );
     }
 
     setCartSync(() => nextCart);
@@ -1033,10 +1069,11 @@ export function NewSale() {
     );
     const stockError = validateCartStock(nextCart);
     if (stockError) {
-      toast({
-        title: "Low stock",
-        description: `${stockError} You can still proceed — this is based on the last synced count.`,
-      });
+      warnLowStock(
+        stockError.productId,
+        `${stockError.message} You can still proceed — this is based on the last synced count.`,
+        stockError.requested,
+      );
     }
     setCartSync(() => nextCart);
   };
@@ -1088,10 +1125,11 @@ export function NewSale() {
     });
     const stockError = validateCartStock(nextCart);
     if (stockError) {
-      toast({
-        title: "Low stock",
-        description: `${stockError} You can still proceed — this is based on the last synced count.`,
-      });
+      warnLowStock(
+        stockError.productId,
+        `${stockError.message} You can still proceed — this is based on the last synced count.`,
+        stockError.requested,
+      );
     }
     setCartSync(() => nextCart);
   };
@@ -1604,16 +1642,11 @@ export function NewSale() {
           payload.excessToCredit = excessKept;
         }
 
-        // Check if online
-        const isOnline = syncManager.canMakeRequest();
-        
         let saleData: any;
         let transactionId: string;
-        
-        if (isOnline) {
-          // Online: Call create sale API
-          try {
-            const saleResponse = await apiClient.post("/sale", payload);
+
+        try {
+          const saleResponse = await apiClient.post("/sale", payload);
             saleData = saleResponse.data.data;
             transactionId = saleData.sale_number || generateTransactionId();
             notifyDashboardStatsChanged();
@@ -1625,118 +1658,23 @@ export function NewSale() {
               saleData?.stock_warnings ?? [];
             if (stockWarnings.length > 0) {
               toast({
+                variant: "warning",
                 title: "Sold below recorded stock",
                 description: stockWarnings
                   .map((w) => `${w.name}: had ${w.available}, sold ${w.requested}`)
                   .join(" · ") + " — flagged for a stock recount.",
               });
             }
-          } catch (error: any) {
-            // Distinguish real API errors (validation, business rules) from network failures.
-            // - 4xx/5xx with a server response → surface the actual error to the user, do NOT silently queue
-            // - true network failure (no response) → fall back to offline queue
-            const hasServerResponse = !!error?.response;
-            const isNetworkFailure =
-              !hasServerResponse ||
-              error?.code === "ERR_NETWORK" ||
-              error?.code === "ECONNABORTED";
-
-            if (hasServerResponse && !isNetworkFailure) {
-              const apiMsg = formatSaleApiError(error);
-              console.error("Sale API error:", error.response?.data ?? error);
-              toast({
-                variant: "destructive",
-                title: "Sale failed",
-                description: apiMsg,
-              });
-              markSaleErrorUserNotified(error);
-              throw error;
-            }
-
-            // True offline / unreachable backend: queue for sync
-            console.warn("Network unreachable, saving offline:", error);
-            transactionId = generateTransactionId();
-            saleData = {
-              sale_number: transactionId,
-              id: `offline_${transactionId}`,
-              _pending: true,
-              _offline: true
-            };
-
-            await offlineDB.saveSale({
-              id: transactionId,
-              products: saleItems,
-              total: total,
-              customer: selectedCustomer ? { id: selectedCustomer } : null,
-              payment: {
-                method: toApiPaymentMethod(method),
-                amountPaid,
-                changeAmount
-              },
-              employeeId: localStorage.getItem("userId") || undefined,
-              branchId: getStoredBranchIdForSale(),
-              timestamp: Date.now(),
-              synced: false,
-              discountAmount: globalDiscountAmount,
-            });
-
-            await offlineDB.enqueue({
-              operationId: crypto.randomUUID(),
-              type: 'sale',
-              url: '/sale',
-              method: 'POST',
-              payload,
-              maxRetries: 5,
-              priority: 10,
-              headers: {},
-            });
-
-            toast({
-              title: "Saved offline",
-              description: "Network is unavailable — sale will sync when you're back online.",
-            });
-          }
-        } else {
-          // Offline: Generate local sale ID and save to IndexedDB
-          transactionId = generateTransactionId();
-          saleData = {
-            sale_number: transactionId,
-            id: `offline_${transactionId}`,
-            _pending: true,
-            _offline: true
-          };
-          
-          // Save sale to IndexedDB for later sync
-          await offlineDB.saveSale({
-            id: transactionId,
-            products: saleItems,
-            total: total,
-            customer: selectedCustomer ? { id: selectedCustomer } : null,
-            payment: {
-              method: toApiPaymentMethod(method),
-              amountPaid,
-              changeAmount
-            },
-            employeeId: localStorage.getItem("userId") || undefined,
-            branchId: getStoredBranchIdForSale(),
-            timestamp: Date.now(),
-            synced: false,
-            discountAmount: globalDiscountAmount,
+        } catch (error: any) {
+          const apiMsg = formatSaleApiError(error);
+          console.error("Sale API error:", error.response?.data ?? error);
+          toast({
+            variant: "destructive",
+            title: "Sale failed",
+            description: apiMsg,
           });
-
-          // Queue for sync — direct enqueue, no extra API call
-          await offlineDB.enqueue({
-            operationId: crypto.randomUUID(),
-            type: 'sale',
-            url: '/sale',
-            method: 'POST',
-            payload,
-            maxRetries: 5,
-            priority: 10,
-            headers: {},
-          });
-
-          console.log("Sale saved offline, will sync when connection restored");
+          markSaleErrorUserNotified(error);
+          throw error;
         }
         const receiptData = generateReceiptData(
           transactionId,
@@ -1805,7 +1743,7 @@ export function NewSale() {
           // Customer's unpaid balance from prior transactions (snapshot before this sale settled)
           previousBalance: openingBalance,
           // Negative = customer is in credit with us once this sale is settled. Prefer the
-          // server's recalculated figure; fall back to local maths for offline sales.
+          // server's recalculated figure; fall back to local maths if it's missing.
           closingBalance: roundMoney(Number(saleData?.closing_balance ?? derivedClosing)),
         };
       } catch (error: unknown) {
@@ -3786,49 +3724,14 @@ export function NewSale() {
                       : 0,
                   };
 
-                  if (!navigator.onLine) {
-                    // Queue creation; proceed without selecting customer (no server ID yet)
-                    await offlineDB.enqueue({
-                      operationId: crypto.randomUUID(),
-                      type: 'customer',
-                      url: '/customer',
-                      method: 'POST',
-                      payload: custPayload,
-                      maxRetries: 5,
-                      priority: 7,
-                      headers: {},
-                    });
-                    toast({
-                      title: "Saved Offline",
-                      description: "Customer will be created when connection is restored.",
-                    });
-                  } else {
-                    try {
-                      const res = await apiClient.post("/customer", custPayload);
-                      await fetchCustomers(true);
-                      if (res.data?.data?.id) setSelectedCustomer(res.data.data.id);
-                      toast({
-                        title: "Success",
-                        description: "Customer added and selected successfully",
-                        className: "bg-emerald-50 border-emerald-200 text-emerald-800",
-                      });
-                    } catch {
-                      await offlineDB.enqueue({
-                        operationId: crypto.randomUUID(),
-                        type: 'customer',
-                        url: '/customer',
-                        method: 'POST',
-                        payload: custPayload,
-                        maxRetries: 5,
-                        priority: 7,
-                        headers: {},
-                      });
-                      toast({
-                        title: "Saved for sync",
-                        description: "Could not reach the server. Customer will be created when connection is stable.",
-                      });
-                    }
-                  }
+                  const res = await apiClient.post("/customer", custPayload);
+                  await fetchCustomers(true);
+                  if (res.data?.data?.id) setSelectedCustomer(res.data.data.id);
+                  toast({
+                    title: "Success",
+                    description: "Customer added and selected successfully",
+                    className: "bg-emerald-50 border-emerald-200 text-emerald-800",
+                  });
 
                   setIsAddCustomerOpen(false);
                   setNewCustomerData({

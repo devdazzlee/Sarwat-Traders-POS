@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { usePWAInstall } from '@/hooks/use-pwa-install';
 import { Button } from '@/components/ui/button';
-import { X, Download, Smartphone, Monitor, Zap, Shield, Wifi } from 'lucide-react';
+import { X, Download, Smartphone, Monitor, Zap, Shield } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface PWAInstallPromptProps {
@@ -95,10 +95,6 @@ export function PWAInstallPrompt({ className }: PWAInstallPromptProps) {
               <div className="flex items-center space-x-3 text-slate-300">
                 <Monitor className="w-5 h-5 text-blue-400" />
                 <span className="text-sm">Full screen app experience</span>
-              </div>
-              <div className="flex items-center space-x-3 text-slate-300">
-                <Wifi className="w-5 h-5 text-green-400" />
-                <span className="text-sm">Works offline after first visit</span>
               </div>
               <div className="flex items-center space-x-3 text-slate-300">
                 <Shield className="w-5 h-5 text-purple-400" />

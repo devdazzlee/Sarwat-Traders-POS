@@ -55,8 +55,6 @@ import {
 } from "lucide-react";
 import apiClient from "@/lib/apiClient";
 import { API_BASE } from "@/config/constants";
-import { offlineDB } from "@/lib/offline-db";
-import { queueMutation } from "@/lib/offline-helpers";
 import {
   fetchCustomersForManagementTab,
   refreshCustomerListGlobally,
@@ -129,14 +127,6 @@ export function Customers({ onViewLedger }: CustomersProps) {
   const fetchCustomers = async () => {
     setIsLoading(true);
     try {
-      if (!navigator.onLine) {
-        const cached = await offlineDB.getCustomers();
-        if (cached.length > 0) {
-          const list = cached.map((c) => c.data as Customer);
-          setCustomers(list);
-          return;
-        }
-      }
       const data = await fetchCustomersForManagementTab();
       setCustomers(data);
     } catch (err: any) {
@@ -148,7 +138,6 @@ export function Customers({ onViewLedger }: CustomersProps) {
   };
 
   const fetchCreditSummary = async () => {
-    if (!navigator.onLine) return; // skip when offline — cached value stays
     setIsSummaryLoading(true);
     try {
       const res = await apiClient.get(`${API_BASE}/customer-ledger/summary`);
@@ -214,17 +203,14 @@ export function Customers({ onViewLedger }: CustomersProps) {
     setIsAdding(true);
     try {
       const payload = buildCustomerPayload(newCustomer);
-      const { queued, data } = await queueMutation<Customer>('POST', '/customer', payload, 'customer');
+      const res = await apiClient.post<{ data: Customer }>('/customer', payload);
+      const data = res.data?.data;
       setNewCustomer({});
       setIsAddDialogOpen(false);
-      if (queued) {
-        toast({ title: "Saved Offline", description: "Customer will sync when connected." });
-      } else {
-        if (data?.id) upsertCustomerInStore(data);
-        await refreshCustomerListGlobally();
-        setCustomers(useStore.getState().customers);
-        toast({ title: "Success", description: "Customer created successfully." });
-      }
+      if (data?.id) upsertCustomerInStore(data);
+      await refreshCustomerListGlobally();
+      setCustomers(useStore.getState().customers);
+      toast({ title: "Success", description: "Customer created successfully." });
     } catch (err: any) {
       toast({ title: "Error", description: err.response?.data?.message || "Failed to create customer", variant: "destructive" });
     } finally {
@@ -246,17 +232,11 @@ export function Customers({ onViewLedger }: CustomersProps) {
     setIsEditing(true);
     try {
       const payload = buildCustomerPayload(editingCustomer, false);
-      const { queued } = await queueMutation('PUT', `/customer/${editingCustomer.id}`, payload, 'customer');
+      await apiClient.put(`/customer/${editingCustomer.id}`, payload);
       setEditingCustomer(null);
-      if (queued) {
-        // Optimistic local update
-        setCustomers((prev) => prev.map((c) => c.id === editingCustomer.id ? { ...c, ...payload } : c));
-        toast({ title: "Saved Offline", description: "Customer update will sync when connected." });
-      } else {
-        await refreshCustomerListGlobally();
-        setCustomers(useStore.getState().customers);
-        toast({ title: "Success", description: "Customer updated successfully." });
-      }
+      await refreshCustomerListGlobally();
+      setCustomers(useStore.getState().customers);
+      toast({ title: "Success", description: "Customer updated successfully." });
     } catch (err: any) {
       toast({ title: "Error", description: err.response?.data?.message || "Failed to update customer", variant: "destructive" });
     } finally {
@@ -269,16 +249,10 @@ export function Customers({ onViewLedger }: CustomersProps) {
     if (!deleteTargetCustomer) return;
     setIsDeletingCustomer(true);
     try {
-      const { queued } = await queueMutation('DELETE', `/customer/${deleteTargetCustomer.id}`, undefined, 'customer');
-      if (queued) {
-        // Optimistic local removal
-        setCustomers((prev) => prev.filter((c) => c.id !== deleteTargetCustomer.id));
-        toast({ title: "Deleted Offline", description: "Deletion will sync when connected." });
-      } else {
-        await refreshCustomerListGlobally();
-        setCustomers(useStore.getState().customers);
-        toast({ title: "Success", description: "Customer deleted successfully." });
-      }
+      await apiClient.delete(`/customer/${deleteTargetCustomer.id}`);
+      await refreshCustomerListGlobally();
+      setCustomers(useStore.getState().customers);
+      toast({ title: "Success", description: "Customer deleted successfully." });
       setDeleteTargetCustomer(null);
     } catch (err: any) {
       toast({ title: "Error", description: err.response?.data?.message || "Failed to delete customer", variant: "destructive" });

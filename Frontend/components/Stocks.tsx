@@ -37,7 +37,6 @@ import {
 } from "lucide-react";
 import apiClient from "@/lib/apiClient";
 import { API_BASE } from "@/config/constants";
-import { cachedGet, queueMutation } from "@/lib/offline-helpers";
 import { useToast } from "@/hooks/use-toast";
 import { PageLoader } from "@/components/ui/page-loader";
 import { usePosData } from "@/hooks/use-pos-data";
@@ -118,13 +117,13 @@ export function Stocks() {
     reason: "",
   });
 
-  // 1) Fetch branches on mount (offline-aware)
+  // 1) Fetch branches on mount
   useEffect(() => {
     const loadMeta = async () => {
       setIsInitialLoading(true);
       try {
-        const data = await cachedGet<Branch[]>('/branches', { fetch_all: true }, 'branches');
-        setBranches(data || []);
+        const res = await apiClient.get<{ data: Branch[] }>('/branches', { params: { fetch_all: true } });
+        setBranches(res.data?.data || []);
       } catch (e: any) {
         console.log(e);
         toast({ title: "Error", description: "Failed to load branches", variant: "destructive" });
@@ -149,12 +148,12 @@ export function Stocks() {
     const fetchData = async () => {
       setIsLoading(true);
       try {
-        const [stockData, histData] = await Promise.all([
-          cachedGet<Stock[]>('/stock', { branchId: branchFilter }, `stock-${branchFilter}`),
-          cachedGet<Movement[]>('/stock/history', { branchId: branchFilter }, `stock-history-${branchFilter}`),
+        const [stockRes, histRes] = await Promise.all([
+          apiClient.get<{ data: Stock[] }>('/stock', { params: { branchId: branchFilter } }),
+          apiClient.get<{ data: Movement[] }>('/stock/history', { params: { branchId: branchFilter } }),
         ]);
-        setStocks(stockData || []);
-        setHistory(histData || []);
+        setStocks(stockRes.data?.data || []);
+        setHistory(histRes.data?.data || []);
       } catch (e: any) {
         console.log(e);
         toast({ title: "Error", description: "Failed to load stock data", variant: "destructive" });
@@ -180,7 +179,8 @@ export function Stocks() {
           params.search = productSearch;
         }
 
-        const raw = await cachedGet<any>('/products', params, `products-stock-${JSON.stringify(params)}`);
+        const res = await apiClient.get<any>('/products', { params });
+        const raw = res.data?.data ?? res.data;
         const arr = raw?.products || (Array.isArray(raw) ? raw : []);
         setProducts(arr);
         setTotalProducts(raw?.meta?.total || arr.length);
@@ -212,20 +212,16 @@ export function Stocks() {
   const handleAdd = async () => {
     setIsAdding(true);
     try {
-      const { queued } = await queueMutation('POST', '/stock', {
+      await apiClient.post('/stock', {
         productId: addForm.productId,
         branchId: addForm.branchId,
         quantity: addForm.quantity,
-      }, 'stock');
+      });
       setIsAddOpen(false);
       setAddForm({ productId: "", branchId: "", quantity: 1 });
-      if (queued) {
-        toast({ title: "Saved Offline", description: "Stock entry will sync when connected." });
-      } else {
-        const fresh = await cachedGet<Stock[]>('/stock', { branchId: branchFilter }, `stock-${branchFilter}`);
-        setStocks(fresh || []);
-        toast({ title: "Success", description: "Stock added successfully." });
-      }
+      const fresh = await apiClient.get<{ data: Stock[] }>('/stock', { params: { branchId: branchFilter } });
+      setStocks(fresh.data?.data || []);
+      toast({ title: "Success", description: "Stock added successfully." });
     } catch (e: any) {
       console.log(e);
       toast({ title: "Error", description: e.response?.data?.message || "Failed to add stock", variant: "destructive" });
@@ -247,25 +243,21 @@ export function Stocks() {
   const handleAdjust = async () => {
     setIsAdjusting(true);
     try {
-      const { queued } = await queueMutation('PATCH', '/stock/adjust', {
+      await apiClient.patch('/stock/adjust', {
         productId: adjForm.productId,
         branchId: adjForm.branchId,
         quantityChange: adjForm.quantityChange,
         reason: adjForm.reason,
-      }, 'stock-adjust');
+      });
       setIsAdjOpen(false);
       setAdjForm({ productId: "", branchId: "", quantityChange: 0, reason: "" });
-      if (queued) {
-        toast({ title: "Saved Offline", description: "Adjustment will sync when connected." });
-      } else {
-        const [freshStock, freshHistory] = await Promise.all([
-          cachedGet<Stock[]>('/stock', { branchId: branchFilter }, `stock-${branchFilter}`),
-          cachedGet<Movement[]>('/stock/history', { branchId: branchFilter }, `stock-history-${branchFilter}`),
-        ]);
-        setStocks(freshStock || []);
-        setHistory(freshHistory || []);
-        toast({ title: "Success", description: "Stock adjusted successfully." });
-      }
+      const [freshStock, freshHistory] = await Promise.all([
+        apiClient.get<{ data: Stock[] }>('/stock', { params: { branchId: branchFilter } }),
+        apiClient.get<{ data: Movement[] }>('/stock/history', { params: { branchId: branchFilter } }),
+      ]);
+      setStocks(freshStock.data?.data || []);
+      setHistory(freshHistory.data?.data || []);
+      toast({ title: "Success", description: "Stock adjusted successfully." });
     } catch (e: any) {
       console.log(e);
       toast({ title: "Error", description: e.response?.data?.message || "Failed to adjust stock", variant: "destructive" });

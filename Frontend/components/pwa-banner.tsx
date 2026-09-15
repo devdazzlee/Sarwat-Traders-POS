@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { usePWAInstall } from '@/hooks/use-pwa-install';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { Button } from '@/components/ui/button';
-import { X, Download, Smartphone, Monitor, Zap, Shield, Wifi } from 'lucide-react';
+import { X, Download, Smartphone, Monitor, Zap, Shield } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface PWABannerProps {
@@ -83,7 +83,7 @@ export function PWABanner({ className }: PWABannerProps) {
                 Install our <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-400">App</span>
               </h3>
               <p className={`${isMobile ? 'text-xs' : 'text-sm'} text-slate-300`}>
-                Get faster access, offline support, and a better experience
+                Get faster access and a better experience
               </p>
             </div>
 
@@ -92,10 +92,6 @@ export function PWABanner({ className }: PWABannerProps) {
               <div className="flex items-center space-x-1">
                 <Zap className="w-4 h-4 text-yellow-400" />
                 <span className="text-xs">Fast</span>
-              </div>
-              <div className="flex items-center space-x-1">
-                <Wifi className="w-4 h-4 text-green-400" />
-                <span className="text-xs">Offline</span>
               </div>
               <div className="flex items-center space-x-1">
                 <Monitor className="w-4 h-4 text-blue-400" />

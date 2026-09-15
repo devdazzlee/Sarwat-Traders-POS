@@ -136,7 +136,6 @@ export function SupplierProfile({ supplierId, onBack, initialTab = "ledger" }: S
     try {
       const res = await apiClient.get(`${API_BASE}/supplier-ledger/${supplierId}`, {
         params: { limit: 500 },
-        headers: { "X-Skip-Offline-Cache": "true" },
       });
       setData(res.data.data);
     } catch (error: any) {

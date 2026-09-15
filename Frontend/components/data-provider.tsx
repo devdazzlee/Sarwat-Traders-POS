@@ -3,8 +3,6 @@
 import { useEffect } from 'react'
 import { useStore } from '@/lib/store'
 import { useToast } from '@/hooks/use-toast'
-import { initializeOfflineMode } from '@/lib/offline-init'
-import { OfflineIndicator } from '@/components/offline-indicator'
 
 interface DataProviderProps {
   children: React.ReactNode
@@ -19,12 +17,6 @@ export function DataProvider({ children }: DataProviderProps) {
     if (!token) return
 
     const initializeData = async () => {
-      try {
-        await initializeOfflineMode()
-      } catch (error) {
-        console.log('Offline init skipped:', error)
-      }
-
       const results = await Promise.allSettled([
         fetchProducts({ force: true }),
         fetchCategories(true),
@@ -55,10 +47,5 @@ export function DataProvider({ children }: DataProviderProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  return (
-    <>
-      {children}
-      <OfflineIndicator />
-    </>
-  )
+  return <>{children}</>
 }

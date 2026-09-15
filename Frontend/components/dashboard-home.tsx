@@ -31,7 +31,6 @@ import apiClient from "@/lib/apiClient"
 import {
   DASHBOARD_STATS_REFRESH_EVENT,
   fetchDashboardStatsFresh,
-  invalidateDashboardStatsCaches,
 } from "@/lib/dashboard-stats-sync"
 import { isAdminRole } from "@/lib/branch-utils"
 import { normalizeUserRole, type UserRole } from "@/lib/role-utils"
@@ -239,7 +238,6 @@ export function DashboardHome({ onNavigate }: DashboardHomeProps) {
 
   const getStats = async () => {
     try {
-      await invalidateDashboardStatsCaches()
       const data = await fetchDashboardStatsFresh()
       setStats(data)
     } catch (error: any) {

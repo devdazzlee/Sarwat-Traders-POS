@@ -132,26 +132,42 @@ function dispatch(action: Action) {
   })
 }
 
-type Toast = Omit<ToasterToast, "id">
+type Toast = Omit<ToasterToast, "id" | "variant"> & {
+  /** Stable id: a second call with the same id replaces the existing toast in place
+   * instead of stacking a new one. Use this for anything that can re-fire from a
+   * repeated user action (e.g. holding down a +/- button). */
+  id?: string
+  /** "warning" is its own amber style — never route a caution/heads-up message
+   * through "success" (green checkmark) just because it isn't a hard failure.
+   * A green toast followed by a red one reads as "it worked, then it didn't". */
+  variant?: "default" | "destructive" | "warning"
+}
 
 import { toast as sonnerToast } from "sonner"
 
-function toast({ title, description, variant, ...props }: Toast) {
-  const message = title ? `${title}: ${description}` : description;
-  
+function toast({ title, description, variant, id, ...props }: Toast) {
   if (variant === "destructive") {
     sonnerToast.error(title || "Error", {
       description: description,
+      id,
+    });
+  } else if (variant === "warning") {
+    sonnerToast.warning(title || "Warning", {
+      description: description,
+      id,
     });
   } else {
     sonnerToast.success(title || "Info", {
       description: description,
+      id,
     });
   }
 
   return {
-    id: genId(),
-    dismiss: () => {},
+    id: id ?? genId(),
+    dismiss: () => {
+      if (id) sonnerToast.dismiss(id)
+    },
     update: () => {},
   }
 }

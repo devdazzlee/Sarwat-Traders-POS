@@ -500,16 +500,13 @@ export function SupplierLedger({
     }
     try {
       const [supplierRes, ledgerRes] = await Promise.all([
-        apiClient.get(`${API_BASE}/suppliers/${supplierId}`, {
-          headers: { "X-Skip-Offline-Cache": "true" },
-        }),
+        apiClient.get(`${API_BASE}/suppliers/${supplierId}`),
         apiClient.get(`${API_BASE}/supplier-ledger/${supplierId}`, {
           params: {
             limit: 200,
             ...(dateFrom ? { startDate: format(dateFrom, "yyyy-MM-dd") } : {}),
             ...(dateTo ? { endDate: format(dateTo, "yyyy-MM-dd") } : {}),
           },
-          headers: { "X-Skip-Offline-Cache": "true" },
         }),
       ]);
 
@@ -897,7 +894,6 @@ export function SupplierLedger({
           date: editDate ? format(editDate, "yyyy-MM-dd") : undefined,
           ...(editingEntry.type === "ADJUSTMENT" ? { direction: editDirection } : {}),
         },
-        { headers: { "X-Skip-Offline-Cache": "true" } },
       );
 
       const synced = await fetchLedgerData({ silent: true });
@@ -929,7 +925,6 @@ export function SupplierLedger({
         `${API_BASE}/supplier-ledger/${supplierId}/entries/${deleteTarget.id}`,
         {
           data: { reason: deleteReason.trim() || undefined },
-          headers: { "X-Skip-Offline-Cache": "true" },
         },
       );
 

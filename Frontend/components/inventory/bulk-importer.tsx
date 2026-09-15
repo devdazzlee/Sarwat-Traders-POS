@@ -57,25 +57,14 @@ type RowResult = {
   sku?: string;
   error?: string;
   data?: any;
-  /** True when the row was accepted locally and will sync when back online */
-  _syncPending?: boolean;
 };
 
-/** Normalize bulk-upload response: API returns an array; offline/synthetic legacy shape used `products` on data.data. */
+/** Normalize bulk-upload response: API returns an array of row results. */
 function extractBulkUploadRowResults(res: AxiosResponse): RowResult[] {
   const root = res.data as Record<string, unknown> | undefined;
   if (!root) return [];
   const raw = root.data !== undefined ? root.data : root;
   if (Array.isArray(raw)) return raw as RowResult[];
-  if (raw && typeof raw === "object" && Array.isArray((raw as { products?: unknown }).products)) {
-    const pending = Boolean(root._syncPending || (raw as { _syncPending?: boolean })._syncPending);
-    return ((raw as { products: Record<string, unknown>[] }).products || []).map((p, idx) => ({
-      success: true,
-      name: String(p?.name ?? p?.Name ?? "").trim() || `Row ${idx + 1}`,
-      sku: (p?.sku ?? p?.SKU) as string | undefined,
-      _syncPending: pending,
-    }));
-  }
   return [];
 }
 
@@ -253,13 +242,7 @@ export function BulkImporter({ open, onOpenChange }: BulkImporterProps) {
           { timeout: BULK_UPLOAD_AXIOS_TIMEOUT_MS }
         );
         const chunkResults = extractBulkUploadRowResults(res);
-        const resRoot = res.data as { _syncPending?: boolean } | undefined;
-        const chunkWasPending = Boolean(resRoot?._syncPending);
-        if (
-          !chunkWasPending &&
-          chunkResults.length > 0 &&
-          chunkResults.length !== chunk.length
-        ) {
+        if (chunkResults.length > 0 && chunkResults.length !== chunk.length) {
           toast.warning(
             `Batch rows ${i + 1}–${batchEnd}: API returned ${chunkResults.length} result(s) for ${chunk.length} row(s). Check server logs.`
           );
@@ -286,14 +269,9 @@ export function BulkImporter({ open, onOpenChange }: BulkImporterProps) {
       setResults(all);
       const ok = all.filter((r) => r.success).length;
       const fail = all.length - ok;
-      const anyPending = all.some((r) => r._syncPending);
       if (ok > 0) {
         toast.success(
-          anyPending
-            ? `${ok} product row(s) queued locally; they will sync when you are back online.${
-                fail ? ` ${fail} failed.` : ""
-              }`
-            : `${ok} product${ok === 1 ? "" : "s"} uploaded${fail ? `, ${fail} failed` : ""}.`
+          `${ok} product${ok === 1 ? "" : "s"} uploaded${fail ? `, ${fail} failed` : ""}.`
         );
         fetchProducts({ force: true });
       } else {
@@ -531,14 +509,8 @@ export function BulkImporter({ open, onOpenChange }: BulkImporterProps) {
           {stagingData.length !== results.length ? (
             <p className="text-amber-800 font-medium">
               Unexpected: the upload reported {results.length} result row(s) for {stagingData.length} submitted
-              row(s). If you were offline, ensure each batch synced; otherwise inspect{" "}
+              row(s). Inspect{" "}
               <code className="rounded bg-amber-100/80 px-1">POST /products/bulk-upload</code> responses.
-            </p>
-          ) : null}
-          {results.some((r) => r._syncPending) ? (
-            <p className="text-amber-800">
-              Rows marked pending are stored in the offline queue on this device and are not in the database
-              until sync completes.
             </p>
           ) : null}
         </div>
@@ -564,15 +536,9 @@ export function BulkImporter({ open, onOpenChange }: BulkImporterProps) {
                   <tr key={i} className={r.success ? "" : "bg-red-50/30"}>
                     <td className="px-3 py-3">
                       {r.success ? (
-                        r._syncPending ? (
-                          <span className="inline-flex items-center gap-1 text-xs font-semibold text-amber-800">
-                            <Loader2 className="h-4 w-4 animate-spin" /> Pending sync
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700">
-                            <CheckCircle2 className="h-4 w-4" /> Success
-                          </span>
-                        )
+                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700">
+                          <CheckCircle2 className="h-4 w-4" /> Success
+                        </span>
                       ) : (
                         <span className="inline-flex items-center gap-1 text-xs font-semibold text-red-600">
                           <AlertCircle className="h-4 w-4" /> Failed
@@ -581,15 +547,9 @@ export function BulkImporter({ open, onOpenChange }: BulkImporterProps) {
                     </td>
                     <td className="px-3 py-3 font-medium text-slate-800">{r.name || r.data?.name || "—"}</td>
                     <td
-                      className={`px-3 py-3 text-xs ${
-                        r.success ? (r._syncPending ? "text-amber-800" : "text-slate-500") : "text-red-600"
-                      }`}
+                      className={`px-3 py-3 text-xs ${r.success ? "text-slate-500" : "text-red-600"}`}
                     >
-                      {r.success
-                        ? r._syncPending
-                          ? `Queued on this device — will upload when online${r.name ? ` (${r.name})` : ""}`
-                          : `Saved${r.name ? ` (${r.name})` : ""}`
-                        : r.error || "Unknown error"}
+                      {r.success ? `Saved${r.name ? ` (${r.name})` : ""}` : r.error || "Unknown error"}
                     </td>
                   </tr>
                 ))}

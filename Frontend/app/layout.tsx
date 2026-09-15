@@ -50,15 +50,15 @@ export default function RootLayout({
           <ToasterOutlet position="bottom-right" richColors />
         </DataProvider>
         <PWABanner />
-        {/* Unregister stale service workers in development to prevent timeout issues */}
+        {/* Unregister any previously-installed service worker — the app is always-online now, no offline cache */}
         <script
           dangerouslySetInnerHTML={{
             __html: `
-              if ('serviceWorker' in navigator && location.hostname === 'localhost') {
+              if ('serviceWorker' in navigator) {
                 navigator.serviceWorker.getRegistrations().then(function(registrations) {
                   registrations.forEach(function(registration) {
                     registration.unregister().then(function() {
-                      console.log('[SW] Unregistered stale service worker for development');
+                      console.log('[SW] Unregistered stale service worker');
                     });
                   });
                 });

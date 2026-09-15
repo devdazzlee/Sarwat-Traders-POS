@@ -34,7 +34,6 @@ import {
   Clock
 } from "lucide-react";
 import apiClient from "@/lib/apiClient";
-import { cachedGet, queueMutation } from "@/lib/offline-helpers";
 import { API_BASE } from "@/config/constants";
 import { toast } from "sonner";
 import { usePosData } from "@/hooks/use-pos-data";
@@ -67,8 +66,8 @@ export function StockAdjustment() {
   const fetchAdjustments = useCallback(async () => {
     try {
       setLoading(true);
-      const data = await cachedGet<any[]>('/stock-adjustments', { page: 1, limit: 100 }, 'stock-adjustments');
-      setAdjustments(data || []);
+      const res = await apiClient.get<{ data: any[] }>('/stock-adjustments', { params: { page: 1, limit: 100 } });
+      setAdjustments(res.data?.data || []);
     } catch (e: any) {
       toast.error(e?.response?.data?.message || "Failed to load adjustment history");
     } finally {
@@ -78,9 +77,9 @@ export function StockAdjustment() {
 
   const fetchStockLevels = useCallback(async () => {
     try {
-      const stockList = await cachedGet<any[]>('/stock', { limit: 1000 }, 'stock-levels');
+      const stockRes = await apiClient.get<{ data: any[] }>('/stock', { params: { limit: 1000 } });
       const map: Record<string, number> = {};
-      (stockList || []).forEach((s: any) => {
+      (stockRes.data?.data || []).forEach((s: any) => {
         map[`${s.product_id}-${s.branch_id}`] = Number(s.current_quantity || 0);
       });
       setStocks(map);
@@ -158,22 +157,18 @@ export function StockAdjustment() {
 
     try {
       setSubmitting(true);
-      const { queued } = await queueMutation('POST', '/stock-adjustments', payload, 'stock-adjustment', 6);
+      await apiClient.post('/stock-adjustments', payload);
       setDialogOpen(false);
       setForm({ ...form, productId: "", physicalCount: "", changeQuantity: "", referenceNo: "", reason: "" });
       setSearchTerm("");
-      if (queued) {
-        toast.success("Saved offline — adjustment will sync when connected");
-      } else {
-        toast.success("Inventory synchronized successfully");
-        fetchAdjustments();
-        fetchStockLevels();
-        // Push the corrected quantity into the shared product store so New Sale (and
-        // every other screen reading from it) sees it immediately, not after its own
-        // 5-minute cache window — purchases.tsx and stock-out.tsx already do this,
-        // this was the one stock-mutating screen missing it.
-        fetchProducts({ force: true }).catch(() => {});
-      }
+      toast.success("Inventory synchronized successfully");
+      fetchAdjustments();
+      fetchStockLevels();
+      // Push the corrected quantity into the shared product store so New Sale (and
+      // every other screen reading from it) sees it immediately, not after its own
+      // 5-minute cache window — purchases.tsx and stock-out.tsx already do this,
+      // this was the one stock-mutating screen missing it.
+      fetchProducts({ force: true }).catch(() => {});
     } catch (e: any) {
       toast.error(e?.response?.data?.message || e?.message || "Failed to execute stock adjustment");
     } finally {

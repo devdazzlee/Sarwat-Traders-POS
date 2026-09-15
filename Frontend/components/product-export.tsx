@@ -190,9 +190,7 @@ export function ProductExport() {
     } catch {
       toast({
         title: "Export failed",
-        description: navigator.onLine
-          ? "Could not export products right now."
-          : "No cached export for these filters. Run export once while online, then you can download the same export offline.",
+        description: "Could not export products right now.",
         variant: "destructive",
       })
     } finally {

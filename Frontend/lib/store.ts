@@ -1,8 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import apiClient, { offlineRequestCacheKey } from './apiClient'
-import { offlineDB } from './offline-db'
-import { syncManager } from './offline-sync'
+import apiClient from './apiClient'
 
 interface Product {
   id: string
@@ -211,28 +209,17 @@ export const useStore = create<StoreState>()(
           }
         }
 
-        set({ productsLoading: true, ...(force ? { lastProductsFetch: null } : {}) })
+        // Only show the loading state when there's nothing on screen yet. A forced
+        // background revalidation (e.g. refetch on tab focus) already has data to
+        // display — flipping productsLoading here would blank the whole product grid
+        // to skeletons mid-sale for a refresh the cashier never asked to see.
+        const hasExistingData = state.products.length > 0
+        set({
+          ...(hasExistingData ? {} : { productsLoading: true }),
+          ...(force ? { lastProductsFetch: null } : {}),
+        })
 
         try {
-          // Check if online
-          const isOnline = syncManager.canMakeRequest()
-          
-          // If offline, try to load from IndexedDB first
-          if (!isOnline) {
-            console.log('📡 Offline mode - loading products from IndexedDB')
-            const offlineProducts = await offlineDB.getProducts()
-            if (offlineProducts.length > 0) {
-              const mappedProducts = offlineProducts.map(p => mapProductFromApi(p.data || p))
-              set({
-                products: mappedProducts,
-                productsLoading: false,
-                lastProductsFetch: now,
-              })
-              console.log(`Loaded ${mappedProducts.length} products from offline cache`)
-              return
-            }
-          }
-          
           // Check if user is ADMIN - admins should see all products
           const userRole = localStorage.getItem("role")
           const isAdmin = userRole === "ADMIN" || userRole === "SUPER_ADMIN"
@@ -275,9 +262,6 @@ export const useStore = create<StoreState>()(
           const rawProducts = Array.isArray(res.data?.data) ? res.data.data : []
           const apiProducts = rawProducts.map(mapProductFromApi)
 
-          // Always sync IndexedDB with latest API result (including empty — clears stale data)
-          await offlineDB.saveProducts(rawProducts)
-
           set({
             products: apiProducts,
             productsLoading: false,
@@ -287,26 +271,6 @@ export const useStore = create<StoreState>()(
           console.log(`Loaded ${apiProducts.length} products${hasFilters ? ' (full search)' : ''}`)
         } catch (error) {
           console.log('Failed to fetch products:', error)
-          
-          // If online request failed, try offline cache
-          if (syncManager.canMakeRequest()) {
-            try {
-              const offlineProducts = await offlineDB.getProducts()
-              if (offlineProducts.length > 0) {
-                const mappedProducts = offlineProducts.map(p => mapProductFromApi(p.data || p))
-                set({
-                  products: mappedProducts,
-                  productsLoading: false,
-                  lastProductsFetch: now,
-                })
-                console.log(`Using offline cache: ${mappedProducts.length} products`)
-                return
-              }
-            } catch (offlineError) {
-              console.error('Failed to load from offline cache:', offlineError)
-            }
-          }
-          
           set({ productsLoading: false })
           throw error
         }
@@ -326,20 +290,9 @@ export const useStore = create<StoreState>()(
 
         set({ categoriesLoading: true })
 
-        if (!syncManager.canMakeRequest()) {
-          const cached = await offlineDB.getCachedData('categories')
-          if (cached) {
-            set({ categories: cached, categoriesLoading: false, lastCategoriesFetch: now })
-            console.log(`Loaded ${cached.length} categories from offline cache`)
-            return
-          }
-        }
-
         try {
           const res = await apiClient.get("/categories")
           const categories = [{ id: "all", name: "All" }, ...res.data.data]
-
-          await offlineDB.setCachedData('categories', categories)
 
           set({
             categories,
@@ -350,12 +303,6 @@ export const useStore = create<StoreState>()(
           console.log(`Loaded ${categories.length} categories`)
         } catch (error) {
           console.log('Failed to fetch categories:', error)
-          const cached = await offlineDB.getCachedData('categories')
-          if (cached) {
-            set({ categories: cached, categoriesLoading: false, lastCategoriesFetch: now })
-            console.log(`Using offline cache: ${cached.length} categories`)
-            return
-          }
           set({ categoriesLoading: false })
           throw error
         }
@@ -375,21 +322,8 @@ export const useStore = create<StoreState>()(
 
         set({ customersLoading: true })
 
-        if (!syncManager.canMakeRequest()) {
-          const cached = await offlineDB.getCustomers()
-          if (cached.length > 0) {
-            set({ customers: cached.map(c => c.data || c), customersLoading: false, lastCustomersFetch: now })
-            console.log(`Loaded ${cached.length} customers from offline cache`)
-            return
-          }
-        }
-
         try {
-          const res = await apiClient.get("/customer", force
-            ? { headers: { "X-Skip-Offline-Cache": "true" } }
-            : undefined)
-
-          await offlineDB.saveCustomers(res.data.data)
+          const res = await apiClient.get("/customer")
 
           set({
             customers: res.data.data,
@@ -400,12 +334,6 @@ export const useStore = create<StoreState>()(
           console.log(`Loaded ${res.data.data.length} customers`)
         } catch (error) {
           console.log('Failed to fetch customers:', error)
-          const cached = await offlineDB.getCustomers()
-          if (cached.length > 0) {
-            set({ customers: cached.map(c => c.data || c), customersLoading: false, lastCustomersFetch: now })
-            console.log(`Using offline cache: ${cached.length} customers`)
-            return
-          }
           set({ customersLoading: false })
           throw error
         }
@@ -427,24 +355,6 @@ export const useStore = create<StoreState>()(
         set({ branchesLoading: true })
 
         const branchParams = { fetch_all: true }
-        const branchCacheKey = offlineRequestCacheKey('GET', '/branches', branchParams)
-
-        if (!syncManager.canMakeRequest()) {
-          const hit = await offlineDB.getCachedData(branchCacheKey)
-          const branchesRaw = hit?.data ?? hit
-          const list = Array.isArray(branchesRaw) ? branchesRaw : []
-          if (list.length > 0) {
-            const branches = list.map((b: any) => ({
-              id: b.id,
-              name: b.name,
-              location: b.location,
-              is_active: b.is_active ?? true,
-            }))
-            set({ branches, branchesLoading: false, lastBranchesFetch: now })
-            console.log(`Loaded ${branches.length} branches from offline cache`)
-            return
-          }
-        }
 
         try {
           const res = await apiClient.get("/branches", { params: branchParams })
@@ -465,20 +375,6 @@ export const useStore = create<StoreState>()(
           console.log(`Loaded ${branches.length} branches`)
         } catch (error) {
           console.log('Failed to fetch branches:', error)
-          const hit = await offlineDB.getCachedData(branchCacheKey)
-          const branchesRaw = hit?.data ?? hit
-          const list = Array.isArray(branchesRaw) ? branchesRaw : []
-          if (list.length > 0) {
-            const branches = list.map((b: any) => ({
-              id: b.id,
-              name: b.name,
-              location: b.location,
-              is_active: b.is_active ?? true,
-            }))
-            set({ branches, branchesLoading: false, lastBranchesFetch: now })
-            console.log(`Using offline cache: ${branches.length} branches`)
-            return
-          }
           set({ branchesLoading: false })
           throw error
         }
@@ -498,18 +394,6 @@ export const useStore = create<StoreState>()(
 
         set({ suppliersLoading: true })
 
-        const suppliersCacheKey = offlineRequestCacheKey('GET', '/suppliers', undefined)
-
-        if (!syncManager.canMakeRequest()) {
-          const hit = await offlineDB.getCachedData(suppliersCacheKey)
-          const suppliers = Array.isArray(hit?.data) ? hit.data : Array.isArray(hit) ? hit : []
-          if (suppliers.length > 0) {
-            set({ suppliers, suppliersLoading: false, lastSuppliersFetch: now })
-            console.log(`Loaded ${suppliers.length} suppliers from offline cache`)
-            return
-          }
-        }
-
         try {
           const res = await apiClient.get("/suppliers")
           const suppliers = res.data.data || []
@@ -523,13 +407,6 @@ export const useStore = create<StoreState>()(
           console.log(`Loaded ${suppliers.length} suppliers`)
         } catch (error) {
           console.log('Failed to fetch suppliers:', error)
-          const hit = await offlineDB.getCachedData(suppliersCacheKey)
-          const suppliers = Array.isArray(hit?.data) ? hit.data : Array.isArray(hit) ? hit : []
-          if (suppliers.length > 0) {
-            set({ suppliers, suppliersLoading: false, lastSuppliersFetch: now })
-            console.log(`Using offline cache: ${suppliers.length} suppliers`)
-            return
-          }
           set({ suppliersLoading: false })
           throw error
         }

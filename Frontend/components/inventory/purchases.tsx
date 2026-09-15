@@ -31,7 +31,6 @@ import {
   RefreshCw
 } from "lucide-react";
 import apiClient, { BULK_UPLOAD_AXIOS_TIMEOUT_MS } from "@/lib/apiClient";
-import { cachedGet, queueMutation } from "@/lib/offline-helpers";
 import { API_BASE } from "@/config/constants";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
@@ -188,12 +187,12 @@ export function Purchases() {
   const fetchMeta = useCallback(async () => {
     setLoadingMeta(true);
     try {
-      const [products, suppliers] = await Promise.all([
-        cachedGet<any[]>('/products', { fetch_all: true, is_active: true }, 'products-purchases'),
-        cachedGet<any[]>('/suppliers', { is_active: true }, 'suppliers'),
+      const [productsRes, suppliersRes] = await Promise.all([
+        apiClient.get<{ data: any[] }>('/products', { params: { fetch_all: true, is_active: true } }),
+        apiClient.get<{ data: any[] }>('/suppliers', { params: { is_active: true } }),
       ]);
-      setProducts(products || []);
-      setSuppliers(suppliers || []);
+      setProducts(productsRes.data?.data || []);
+      setSuppliers(suppliersRes.data?.data || []);
     } catch (e) {
       console.error(e);
       toast({ title: "Error", description: "Failed to load master data", variant: "destructive" });
@@ -209,8 +208,8 @@ export function Purchases() {
       if (filters.supplierId) params.supplierId = filters.supplierId;
       if (filters.startDate) params.startDate = filters.startDate;
       if (filters.endDate) params.endDate = filters.endDate;
-      const data = await cachedGet<any[]>('/purchases', params, `purchases-${JSON.stringify(params)}`);
-      setPurchases(data || []);
+      const res = await apiClient.get<{ data: any[] }>('/purchases', { params });
+      setPurchases(res.data?.data || []);
     } catch (e) {
       console.error(e);
     } finally {
@@ -289,16 +288,12 @@ export function Purchases() {
           tGw: item.tGw,
         })),
       };
-      const { queued } = await queueMutation('POST', '/purchases', purchasePayload, 'purchase', 8);
+      await apiClient.post('/purchases', purchasePayload);
       setStagedItems([]);
       setHeader({ ...header, invoiceRef: "", notes: "" });
-      if (queued) {
-        toast({ title: "Saved Offline", description: `${stagedItems.length} items queued — will sync when connected.` });
-      } else {
-        toast({ title: "Stock Updated", description: `Successfully logged ${stagedItems.length} items.` });
-        refreshGlobalProducts({ force: true }).catch(() => {});
-        setActiveView("HISTORY");
-      }
+      toast({ title: "Stock Updated", description: `Successfully logged ${stagedItems.length} items.` });
+      refreshGlobalProducts({ force: true }).catch(() => {});
+      setActiveView("HISTORY");
     } catch (e: any) {
       toast({ title: "Submission Failed", description: e?.response?.data?.message || "Check your network connection", variant: "destructive" });
     } finally {

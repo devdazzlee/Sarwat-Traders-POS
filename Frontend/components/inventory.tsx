@@ -18,7 +18,6 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Search, Plus, Edit, Package, AlertTriangle, Upload, X, ImageIcon, RefreshCw, Trash2, Loader2, Mail, History, User } from "lucide-react"
 import apiClient from "@/lib/apiClient"
 import { useStore, mapProductFromApi } from "@/lib/store"
-import { isPendingImageUrl } from "@/lib/offline-queue-payload"
 import { usePosData } from "@/hooks/use-pos-data"
 import { shareInventoryReportOnEmail } from "@/lib/pdf-generator"
 import { cn } from "@/lib/utils"
@@ -680,7 +679,6 @@ export default function Inventory() {
     }) {
       const response = await apiClient.get("/products", {
         params,
-        headers: { "X-Skip-Offline-Cache": "true" },
       })
       return response.data
     },
@@ -1002,7 +1000,6 @@ export default function Inventory() {
           productId: product.id,
           ...(branchId ? { branchId } : {}),
         },
-        headers: { "X-Skip-Offline-Cache": "true" },
       })
 
       const sales = Array.isArray(response.data?.data) ? response.data.data : []
@@ -1192,14 +1189,10 @@ export default function Inventory() {
         // Compress the image
         const compressed = await compressImage(file)
 
-        // Upload immediately to Cloudinary via backend - returns a URL (or offline placeholder)
+        // Upload immediately to Cloudinary via backend - returns a URL
         const url = await apiService.uploadImage(compressed)
 
-        if (isPendingImageUrl(url)) {
-          setImagePreviews((prev) => [...prev, URL.createObjectURL(compressed)])
-        } else {
-          setImagePreviews((prev) => [...prev, url])
-        }
+        setImagePreviews((prev) => [...prev, url])
         setExistingImageUrls((prev) => [...prev, url])
       }
     } catch (error) {

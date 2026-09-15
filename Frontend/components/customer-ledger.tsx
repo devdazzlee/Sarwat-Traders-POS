@@ -475,16 +475,13 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
     const request = (async () => {
       try {
         const [custRes, ledgerRes] = await Promise.all([
-          apiClient.get(`${API_BASE}/customer/${customerId}`, {
-            headers: { "X-Skip-Offline-Cache": "true" },
-          }),
+          apiClient.get(`${API_BASE}/customer/${customerId}`),
           apiClient.get(`${API_BASE}/customer-ledger/${customerId}`, {
             params: {
               limit: 200,
               ...(dateFrom ? { startDate: format(dateFrom, "yyyy-MM-dd") } : {}),
               ...(dateTo ? { endDate: format(dateTo, "yyyy-MM-dd") } : {}),
             },
-            headers: { "X-Skip-Offline-Cache": "true" },
           }),
         ]);
 
@@ -1043,7 +1040,6 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
           date: editDate ? format(editDate, "yyyy-MM-dd") : undefined,
           ...(editingEntry.type === "ADJUSTMENT" ? { direction: editDirection } : {}),
         },
-        { headers: { "X-Skip-Offline-Cache": "true" } },
       );
 
       const synced = await fetchLedgerData();
@@ -1075,7 +1071,6 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
         `${API_BASE}/customer-ledger/${customerId}/entries/${deleteTarget.id}`,
         {
           data: { reason: deleteReason.trim() || undefined },
-          headers: { "X-Skip-Offline-Cache": "true" },
         },
       );
 

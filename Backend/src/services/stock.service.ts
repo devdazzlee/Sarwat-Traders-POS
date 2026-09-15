@@ -258,11 +258,11 @@ class StockService {
         });
     }
 
-    async getStockByBranch(branchId: string, page: number = 1, limit: number = 20, search?: string, userRole?: string, categoryId?: string) {
+    async getStockByBranch(branchId: string, page: number = 1, limit: number = 20, search?: string, userRole?: string, categoryId?: string, productId?: string) {
         const skip = (page - 1) * limit;
-        
+
         const where: any = {};
-        
+
         // Only filter by branch if branchId is provided AND user is not admin
         if (branchId && branchId.trim() !== "" && userRole !== "ADMIN" && userRole !== "SUPER_ADMIN") {
             where.branch_id = branchId;
@@ -270,7 +270,11 @@ class StockService {
             // Admin can still filter by specific branch if they choose
              where.branch_id = branchId;
         }
-        
+
+        if (productId && productId.trim() !== "") {
+            where.product_id = productId;
+        }
+
         if (search && search.trim() !== "" || categoryId) {
             where.product = {};
             

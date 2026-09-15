@@ -37,9 +37,7 @@ export function SaleBillDialog({ open, onOpenChange, saleRef }: SaleBillDialogPr
     setLoading(true);
     setSale(null);
     try {
-      const res = await apiClient.get(`/sale/${encodeURIComponent(saleRef.trim())}`, {
-        headers: { "X-Skip-Offline-Cache": "true" },
-      });
+      const res = await apiClient.get(`/sale/${encodeURIComponent(saleRef.trim())}`);
       const payload = (res.data as { data?: unknown })?.data ?? res.data;
       if (!(payload as { id?: string })?.id) {
         throw new Error("Invalid sale response");

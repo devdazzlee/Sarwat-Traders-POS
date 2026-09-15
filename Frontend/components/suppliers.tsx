@@ -133,7 +133,6 @@ const Suppliers: React.FC<SuppliersProps> = ({ onViewSupplier }) => {
     try {
       const res = await apiClient.get(`${API_BASE}/supplier-ledger/list-summaries`, {
         params: { search: q || undefined },
-        headers: { "X-Skip-Offline-Cache": "true" },
       });
       setList(res.data.data ?? []);
     } catch (e: any) {

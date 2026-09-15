@@ -30,7 +30,6 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import apiClient from "@/lib/apiClient"
-import { offlineDB } from "@/lib/offline-db"
 import { downloadReturnNote, printReturnNote, shareReturnNoteOnWhatsApp, shareReturnNoteOnEmail, type ReturnNoteData } from "@/lib/pdf-generator"
 import { Share2, Mail, ArrowLeftRight, Package } from "lucide-react"
 import {
@@ -1017,22 +1016,6 @@ export function Returns({ module = "returns" }: { module?: ReturnsModule }) {
       }
 
       console.log("Processing return with payload:", payload)
-
-      if (!navigator.onLine) {
-        await offlineDB.enqueue({
-          operationId: crypto.randomUUID(),
-          type: 'refund',
-          url: `/sale/${newReturn.saleId}/refund`,
-          method: 'PATCH',
-          payload,
-          maxRetries: 5,
-          priority: 9,
-          headers: {},
-        })
-        toast({ title: "Queued Offline", description: "Return will be processed when connection is restored." })
-        setLoading(false)
-        return
-      }
 
       const response = await apiClient.patch(`/sale/${newReturn.saleId}/refund`, payload)
 

@@ -35,7 +35,6 @@
   import { StatCardSkeleton } from "@/components/ui/stat-card-skeleton";
   import apiClient from "@/lib/apiClient";
   import { API_BASE } from "@/config/constants";
-  import { cachedGet, queueMutation } from "@/lib/offline-helpers";
   import { useToast } from "@/hooks/use-toast";
   import { CashRegister } from "@/components/cash-register";
   import { usePrinterSettings } from "@/hooks/use-printer-settings";
@@ -93,16 +92,19 @@ interface Sale {
       items: [{ productId: "", quantity: 1, price: 0 }],
     });
 
-    // 1) Load branches, customers, products (offline-aware)
+    // 1) Load branches, customers, products
     useEffect(() => {
       const loadMeta = async () => {
         setIsInitialLoading(true);
         try {
-          const [branches, customers, products] = await Promise.all([
-            cachedGet<Branch[]>('/branches', { fetch_all: true }, 'branches'),
-            cachedGet<Customer[]>('/customer', undefined, 'customers-sales'),
-            cachedGet<Product[]>('/products', { fetch_all: true }, 'products-sales'),
+          const [branchesRes, customersRes, productsRes] = await Promise.all([
+            apiClient.get<{ data: Branch[] }>('/branches', { params: { fetch_all: true } }),
+            apiClient.get<{ data: Customer[] }>('/customer'),
+            apiClient.get<{ data: Product[] }>('/products', { params: { fetch_all: true } }),
           ]);
+          const branches = branchesRes.data?.data;
+          const customers = customersRes.data?.data;
+          const products = productsRes.data?.data;
           setBranches(branches || []);
           setCustomers(customers || []);
           setProducts(products || []);
@@ -120,12 +122,12 @@ interface Sale {
       loadMeta();
     }, [toast]);
 
-    // 2) Fetch sales when branchFilter changes (offline-aware)
+    // 2) Fetch sales when branchFilter changes
     useEffect(() => {
       if (!branchFilter) return;
       setIsLoading(true);
-      cachedGet<Sale[]>('/sale', { branchId: branchFilter }, `sales-${branchFilter}`)
-        .then(data => setSales(data || []))
+      apiClient.get<{ data: Sale[] }>('/sale', { params: { branchId: branchFilter } })
+        .then(res => setSales(res.data?.data || []))
         .catch(err => {
           console.log(err);
           toast({ title: "Error", description: "Failed to load sales", variant: "destructive" });
@@ -151,16 +153,12 @@ interface Sale {
           paymentMethod: saleForm.paymentMethod,
           items: saleForm.items,
         };
-        const { queued } = await queueMutation('POST', '/sale', payload, 'sale', 10);
+        await apiClient.post('/sale', payload);
         setIsAddOpen(false);
         setSaleForm({ branchId, customerId: "", paymentMethod: "CASH", printerName: "", items: [{ productId: "", quantity: 1, price: 0 }] });
-        if (queued) {
-          toast({ title: "Saved Offline", description: "Sale will sync when connected." });
-        } else {
-          toast({ title: "Success", description: "Sale created successfully." });
-          const fresh = await cachedGet<Sale[]>('/sale', { branchId }, `sales-${branchId}`);
-          setSales(fresh || []);
-        }
+        toast({ title: "Success", description: "Sale created successfully." });
+        const fresh = await apiClient.get<{ data: Sale[] }>('/sale', { params: { branchId } });
+        setSales(fresh.data?.data || []);
       } catch (err) {
         console.log(err);
         toast({ title: "Error", description: "Failed to create sale", variant: "destructive" });
@@ -171,14 +169,10 @@ interface Sale {
 
     const handleRefund = async (saleId: string) => {
       try {
-        const { queued } = await queueMutation('PATCH', `/sale/${saleId}/refund`, {}, 'refund');
-        if (queued) {
-          toast({ title: "Queued Offline", description: "Refund will process when connected." });
-        } else {
-          toast({ title: "Success", description: "Sale refunded successfully." });
-          const fresh = await cachedGet<Sale[]>('/sale', { branchId }, `sales-${branchId}`);
-          setSales(fresh || []);
-        }
+        await apiClient.patch(`/sale/${saleId}/refund`, {});
+        toast({ title: "Success", description: "Sale refunded successfully." });
+        const fresh = await apiClient.get<{ data: Sale[] }>('/sale', { params: { branchId } });
+        setSales(fresh.data?.data || []);
       } catch (err) {
         console.log(err);
         toast({ title: "Error", description: "Failed to refund sale", variant: "destructive" });

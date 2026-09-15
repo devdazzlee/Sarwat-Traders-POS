@@ -237,7 +237,6 @@ export function DashboardFinancialDetails({ mode, onBack, onNavigate }: Dashboar
               ? { endDate: format(dateTo, "yyyy-MM-dd") }
               : { endDate: getDefaultReportingEndExclusive().toISOString() }),
           },
-          headers: { "X-Skip-Offline-Cache": "true" },
         });
         const rows = Array.isArray(res.data?.data) ? res.data.data : [];
         setExpenses(rows);
@@ -257,7 +256,6 @@ export function DashboardFinancialDetails({ mode, onBack, onNavigate }: Dashboar
           ...dateParams,
           ...getSaleQueryParams(),
         },
-        headers: { "X-Skip-Offline-Cache": "true" },
       });
 
       const saleRows: SaleRow[] = (Array.isArray(salesRes.data?.data) ? salesRes.data.data : []).filter(
@@ -284,7 +282,6 @@ export function DashboardFinancialDetails({ mode, onBack, onNavigate }: Dashboar
             ...(searchTerm.trim() ? { search: searchTerm.trim() } : {}),
             ...dateParams,
           },
-          headers: { "X-Skip-Offline-Cache": "true" },
         });
         setCollections(Array.isArray(colRes.data?.data) ? colRes.data.data : []);
       } else {

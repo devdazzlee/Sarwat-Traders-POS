@@ -26,7 +26,6 @@ import {
   RefreshCw,
 } from "lucide-react";
 import apiClient from "@/lib/apiClient";
-import { cachedGet, queueMutation } from "@/lib/offline-helpers";
 import { usePosData } from "@/hooks/use-pos-data";
 import { useStore } from "@/lib/store";
 import { toast } from "sonner";
@@ -141,8 +140,8 @@ export function StockOut() {
   const fetchMeta = useCallback(async () => {
     setLoadingMeta(true);
     try {
-      const customers = await cachedGet<any[]>('/customer', undefined, 'customers-stock-out');
-      setCustomers(customers || []);
+      const res = await apiClient.get<{ data: any[] }>('/customer');
+      setCustomers(res.data?.data || []);
       await fetchProducts();
     } catch (e) {
       console.error(e);
@@ -158,8 +157,8 @@ export function StockOut() {
       if (historyFilters.reason) params.reason = historyFilters.reason;
       if (historyFilters.startDate) params.startDate = historyFilters.startDate;
       if (historyFilters.endDate) params.endDate = historyFilters.endDate;
-      const data = await cachedGet<any[]>('/stock-out/history', params, `stock-out-history-${JSON.stringify(params)}`);
-      setHistory(data || []);
+      const res = await apiClient.get<{ data: any[] }>('/stock-out/history', { params });
+      setHistory(res.data?.data || []);
     } catch (e) {
       console.error(e);
     } finally {
@@ -173,8 +172,8 @@ export function StockOut() {
   // ── Available stock lookup ────────────────────────────────────────────────
   const fetchAvailableStock = useCallback(async (productId: string) => {
     try {
-      const stocks = await cachedGet<any[]>('/stock', { productId }, `stock-product-${productId}`);
-      const qty = (stocks || []).reduce((sum: number, s: any) => sum + Number(s.current_quantity), 0);
+      const res = await apiClient.get<{ data: any[] }>('/stock', { params: { productId } });
+      const qty = (res.data?.data || []).reduce((sum: number, s: any) => sum + Number(s.current_quantity), 0);
       setAvailableStock(qty);
     } catch {
       setAvailableStock(0);
@@ -363,7 +362,6 @@ export function StockOut() {
     if (stagedItems.length === 0) { toast.error("Please add at least one item"); return; }
     setSubmitting(true);
     try {
-      const dispatchCount = stagedItems.length;
       const datePart = header.date?.trim() ? `Date: ${header.date.trim()}` : "";
       const refPart = header.reference?.trim() ? `Ref: ${header.reference.trim()}` : "";
       const notesPart = header.notes?.trim() ?? "";
@@ -378,17 +376,13 @@ export function StockOut() {
           notes: i.notes?.trim() || undefined,
         })),
       };
-      const { queued } = await queueMutation('POST', '/stock-out/bulk', dispatchPayload, 'stock-out', 7);
+      await apiClient.post('/stock-out/bulk', dispatchPayload);
       setStagedItems([]);
       setSheetLoadSummary(null);
-      if (queued) {
-        toast.success(`${dispatchCount} item(s) queued offline — will sync when connected`);
-      } else {
-        toast.success("Inventory dispatched successfully");
-        refreshGlobalProducts({ force: true }).catch(() => {});
-        setActiveView("HISTORY");
-        fetchHistory();
-      }
+      toast.success("Inventory dispatched successfully");
+      refreshGlobalProducts({ force: true }).catch(() => {});
+      setActiveView("HISTORY");
+      fetchHistory();
     } catch (e: any) {
       toast.error(e?.response?.data?.message || "Dispatch failed");
     } finally {
