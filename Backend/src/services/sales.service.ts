@@ -672,6 +672,17 @@ class SaleService {
       if (defaultBranch) effectiveBranchId = defaultBranch.id;
     }
 
+    // A checkout should never be blocked by a stock-count mismatch — negative stock is a
+    // reconciliation signal (see stock_warnings below), not a reason to lose the sale.
+    // Per-branch opt-out: allow_neg_pos_stock defaults to false on new branches.
+    const branchStockSettings = effectiveBranchId
+      ? await prisma.branch.findUnique({
+          where: { id: effectiveBranchId },
+          select: { allow_neg_pos_stock: true },
+        })
+      : null;
+    const allowNegativeStock = branchStockSettings?.allow_neg_pos_stock ?? false;
+
     const customer = customerId
       ? await prisma.customer.findUnique({ where: { id: customerId } })
       : null;
@@ -729,14 +740,31 @@ class SaleService {
       {}
     );
 
+    const negativeStockWarnings: Array<{
+      productId: string;
+      name: string;
+      available: number;
+      requested: number;
+    }> = [];
     for (const gp of Object.values(grouped)) {
       const available = new Prisma.Decimal(stockMap.get(gp.productId)?.current_quantity ?? 0);
       if (gp.qty.gt(available)) {
         const label = productNameById.get(gp.productId) ?? gp.productId;
-        throw new AppError(
-          400,
-          `Insufficient stock for ${label}. Available: ${available.toNumber()}, requested: ${gp.qty.toNumber()}`,
+        if (!allowNegativeStock) {
+          throw new AppError(
+            400,
+            `Insufficient stock for ${label}. Available: ${available.toNumber()}, requested: ${gp.qty.toNumber()}`,
+          );
+        }
+        console.warn(
+          `⚠️ Sale will take "${label}" below recorded stock (branch allows it): available ${available.toNumber()}, requested ${gp.qty.toNumber()}`,
         );
+        negativeStockWarnings.push({
+          productId: gp.productId,
+          name: label,
+          available: available.toNumber(),
+          requested: gp.qty.toNumber(),
+        });
       }
     }
 
@@ -846,10 +874,15 @@ class SaleService {
               product_id: m.product_id,
               branch_id: effectiveBranchId,
               movement_type: 'SALE',
+              reference_type: 'sale',
+              reference_id: saleNumber,
               quantity_change: m.quantity_change,
               previous_qty: m.previous_qty,
               new_qty: m.new_qty,
               created_by: createdBy,
+              notes: m.new_qty.lt(0)
+                ? 'Sold below recorded stock (branch allows negative POS stock) — needs a cycle count.'
+                : undefined,
             },
           }),
         );
@@ -971,6 +1004,10 @@ class SaleService {
       excess_kept_as_credit: parkedAsCredit,
       // Negative = customer is in credit with us after this sale.
       closing_balance: closingBalance,
+      // Non-blocking: populated when this sale took a product's stock below zero
+      // (only possible when the branch has allow_neg_pos_stock enabled). The frontend
+      // surfaces this as an informational note, never as a reason to fail the sale.
+      stock_warnings: negativeStockWarnings,
     };
   }
 

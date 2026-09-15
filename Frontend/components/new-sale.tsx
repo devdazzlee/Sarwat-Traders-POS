@@ -359,7 +359,10 @@ export function NewSale() {
     fetchCategories,
     fetchCustomers,
   } = usePosData();
-  // Fetch initial data and focus search input
+  // Fetch initial data and focus search input.
+  // force:true bypasses the 5-minute store cache — this screen's stock numbers gate
+  // checkout warnings, so opening it should never show a snapshot from whenever some
+  // other screen last happened to fetch it.
   useEffect(() => {
     let mounted = true;
 
@@ -368,7 +371,7 @@ export function NewSale() {
 
       try {
         await Promise.all([
-          fetchProducts(),
+          fetchProducts({ force: true }),
           fetchCategories(),
           fetchCustomers(true),
         ]);
@@ -389,6 +392,25 @@ export function NewSale() {
       }
     };
   }, []); // Empty dependency array since we only want to fetch once on mount
+
+  // Event-driven refresh, not polling: re-pull stock the moment the cashier actually
+  // looks at this screen again (switched back from another app/window), which is the
+  // only moment stale numbers matter. Costs nothing while nobody's looking, unlike a
+  // timer that keeps re-fetching the full catalog whether or not anything changed.
+  useEffect(() => {
+    const onFocusOrVisible = () => {
+      if (document.visibilityState === "hidden") return;
+      fetchProducts({ force: true }).catch(() => {
+        // Stale numbers are better than a crash; the next focus/mount will retry.
+      });
+    };
+    window.addEventListener("focus", onFocusOrVisible);
+    document.addEventListener("visibilitychange", onFocusOrVisible);
+    return () => {
+      window.removeEventListener("focus", onFocusOrVisible);
+      document.removeEventListener("visibilitychange", onFocusOrVisible);
+    };
+  }, [fetchProducts]);
 
   // Customer balances are cached in the store for 5 minutes, so the "Current Due" line
   // would keep showing a pre-sale figure until a hard refresh. Re-pull on any ledger
@@ -695,14 +717,15 @@ export function NewSale() {
   );
 
   const addToCart = (product: Product, quantity: number = 1, customPrice?: number) => {
+    // Warn only — this reads the local product cache, which can be stale (e.g. a
+    // restock happened after this screen loaded). The backend does the real, live
+    // stock check at checkout, so this must never block adding to the cart.
     const availableStock = getProductStock(product.id);
     if (availableStock <= 0) {
       toast({
-        variant: "destructive",
-        title: "Out of stock",
-        description: `${product.name} has no available stock.`,
+        title: "Low stock",
+        description: `${product.name} shows no stock as of the last sync — you can still add it.`,
       });
-      return;
     }
 
     // When custom price is provided, it represents the TOTAL PRICE from barcode
@@ -778,14 +801,14 @@ export function NewSale() {
       ];
     }
 
+    // Warn only — the local product cache can be stale, and the backend does the
+    // real, live stock check at checkout. Never block adding to the cart on this.
     const stockError = validateCartStock(nextCart);
     if (stockError) {
       toast({
-        variant: "destructive",
-        title: "Insufficient stock",
-        description: stockError,
+        title: "Low stock",
+        description: `${stockError} You can still proceed — this is based on the last synced count.`,
       });
-      return;
     }
 
     setCartSync(() => nextCart);
@@ -1011,11 +1034,9 @@ export function NewSale() {
     const stockError = validateCartStock(nextCart);
     if (stockError) {
       toast({
-        variant: "destructive",
-        title: "Insufficient stock",
-        description: stockError,
+        title: "Low stock",
+        description: `${stockError} You can still proceed — this is based on the last synced count.`,
       });
-      return;
     }
     setCartSync(() => nextCart);
   };
@@ -1068,11 +1089,9 @@ export function NewSale() {
     const stockError = validateCartStock(nextCart);
     if (stockError) {
       toast({
-        variant: "destructive",
-        title: "Insufficient stock",
-        description: stockError,
+        title: "Low stock",
+        description: `${stockError} You can still proceed — this is based on the last synced count.`,
       });
-      return;
     }
     setCartSync(() => nextCart);
   };
@@ -1468,15 +1487,11 @@ export function NewSale() {
       return;
     }
 
-    const stockError = validateCartStock(cart);
-    if (stockError) {
-      toast({
-        variant: "destructive",
-        title: "Insufficient stock",
-        description: stockError,
-      });
-      return;
-    }
+    // No client-side stock gate here — the local product cache can be stale (see
+    // getProductStock), and the backend performs the real, live, transactional stock
+    // check at sale creation. Blocking checkout on a possibly-stale local number is
+    // exactly the bug where a cashier sees "insufficient stock" for a product that's
+    // actually available.
 
     // Auto-apply whatever advance the customer has; the cashier can dial it back
     // in the dialog if they'd rather leave the credit on the account.
@@ -1504,16 +1519,8 @@ export function NewSale() {
       return;
     }
 
-    const stockError = validateCartStock(cart);
-    if (stockError) {
-      setPaymentError(stockError);
-      toast({
-        variant: "destructive",
-        title: "Insufficient stock",
-        description: stockError,
-      });
-      return;
-    }
+    // No client-side stock gate here either — see the note in startPayment(). The
+    // backend's live check in apiClient.post("/sale", ...) below is authoritative.
 
     if (paymentMethodPending === "Credit" && !selectedCustomer) {
       setPaymentError("Select a customer for credit sales.");
@@ -1611,6 +1618,19 @@ export function NewSale() {
             transactionId = saleData.sale_number || generateTransactionId();
             notifyDashboardStatsChanged();
             notifyCustomerLedgerChanged(payload.customerId);
+
+            // Informational only — the sale already went through. The backend only
+            // populates this when the branch allows selling below recorded stock.
+            const stockWarnings: Array<{ name: string; available: number; requested: number }> =
+              saleData?.stock_warnings ?? [];
+            if (stockWarnings.length > 0) {
+              toast({
+                title: "Sold below recorded stock",
+                description: stockWarnings
+                  .map((w) => `${w.name}: had ${w.available}, sold ${w.requested}`)
+                  .join(" · ") + " — flagged for a stock recount.",
+              });
+            }
           } catch (error: any) {
             // Distinguish real API errors (validation, business rules) from network failures.
             // - 4xx/5xx with a server response → surface the actual error to the user, do NOT silently queue

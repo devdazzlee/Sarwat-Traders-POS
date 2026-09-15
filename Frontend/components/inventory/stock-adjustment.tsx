@@ -168,6 +168,11 @@ export function StockAdjustment() {
         toast.success("Inventory synchronized successfully");
         fetchAdjustments();
         fetchStockLevels();
+        // Push the corrected quantity into the shared product store so New Sale (and
+        // every other screen reading from it) sees it immediately, not after its own
+        // 5-minute cache window — purchases.tsx and stock-out.tsx already do this,
+        // this was the one stock-mutating screen missing it.
+        fetchProducts({ force: true }).catch(() => {});
       }
     } catch (e: any) {
       toast.error(e?.response?.data?.message || e?.message || "Failed to execute stock adjustment");
