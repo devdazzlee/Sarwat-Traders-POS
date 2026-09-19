@@ -1431,8 +1431,19 @@ export function NewSale() {
     paymentMethodPending === "Credit" ? 0 : Math.min(advanceToApply, advanceApplicable);
   const netPayable = Math.max(0, roundMoney(total - advanceApplied));
 
+  // A customer who owes us money can settle some or all of it at the counter with this
+  // sale. It rides on the same "extra received, kept on the account" path as advance
+  // credit (excessToCredit) — the server books it as a payment against the account —
+  // so it needs no separate API field.
+  const customerDue = Math.max(0, roundMoney(selectedCustomerBalance));
+  const showsPreviousBalance =
+    Boolean(selectedCustomer) && paymentMethodPending !== "Credit" && customerDue > 0;
+
   // Anything tendered above the net payable either goes back as change or stays on the
-  // customer's account as fresh advance credit — only one of the two, never both.
+  // customer's account — only one of the two, never both. For a customer who owes us
+  // there is no choice to make: Amount Received is what they actually paid, so the extra
+  // settles their due first and any remainder becomes advance credit. Handing back
+  // change would make no sense next to a "Collect full due" total.
   const tenderedNumeric = parseFloat(tenderedAmount);
   const tenderedExcess = Number.isNaN(tenderedNumeric)
     ? 0
@@ -1441,8 +1452,20 @@ export function NewSale() {
   // only offered on cash/card sales for a known customer.
   const canKeepExcessAsCredit =
     Boolean(selectedCustomer) && paymentMethodPending !== "Credit" && tenderedExcess > 0;
-  const excessKeptAsCredit = canKeepExcessAsCredit && keepExcessAsCredit ? tenderedExcess : 0;
+  const excessKeptAsCredit =
+    canKeepExcessAsCredit && (showsPreviousBalance || keepExcessAsCredit) ? tenderedExcess : 0;
   const changeReturned = roundMoney(tenderedExcess - excessKeptAsCredit);
+
+  const previousBalancePaid = showsPreviousBalance
+    ? Math.min(excessKeptAsCredit, customerDue)
+    : 0;
+  const advanceFromExcess = roundMoney(excessKeptAsCredit - previousBalancePaid);
+  const dueAfterPayment = roundMoney(customerDue - previousBalancePaid);
+  const tenderedForToggle = Number.isNaN(tenderedNumeric) ? 0 : tenderedNumeric;
+  const paysSaleOnly = Math.abs(tenderedForToggle - netPayable) < 0.005;
+  const paysFullDue =
+    showsPreviousBalance &&
+    Math.abs(tenderedForToggle - roundMoney(netPayable + customerDue)) < 0.005;
 
   const totalQuantity = cart.reduce(
     (sum, item) => sum + item.quantity,
@@ -3435,7 +3458,9 @@ export function NewSale() {
             <DialogDescription>
               {paymentMethodPending === "Credit"
                 ? "Enter the amount paid by the customer. The remaining balance will be recorded as credit."
-                : "Enter the amount received to calculate the change due."}
+                : showsPreviousBalance
+                  ? "Enter the amount received. Include the previous balance if the customer is paying it now."
+                  : "Enter the amount received to calculate the change due."}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -3480,13 +3505,63 @@ export function NewSale() {
                   </div>
                 </>
               )}
+              {showsPreviousBalance && (
+                <>
+                  <div className="flex items-center justify-between text-red-600">
+                    <span>Previous Balance (Due)</span>
+                    <span className="font-semibold">Rs {formatMoney(customerDue)}</span>
+                  </div>
+                  <div className="flex items-center justify-between border-t border-slate-200 pt-2 font-bold text-blue-700">
+                    <span>Total with Previous Balance</span>
+                    <span>Rs {formatMoney(roundMoney(netPayable + customerDue))}</span>
+                  </div>
+                  {/* Segmented choice: the dark button is always the one currently in effect,
+                      derived from the real amounts — and neither is dark when the cashier has
+                      typed a custom amount, so the selection never lies. */}
+                  <div className="grid grid-cols-2 gap-1.5" role="group" aria-label="What is being paid">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={paysSaleOnly ? "default" : "outline"}
+                      aria-pressed={paysSaleOnly}
+                      className="h-8 text-xs"
+                      onClick={() => {
+                        setTenderedAmount(netPayable.toFixed(2));
+                        setPaymentError("");
+                      }}
+                    >
+                      {paysSaleOnly && <CheckCircle2 className="mr-1 h-3.5 w-3.5" />}
+                      This sale only
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={paysFullDue ? "default" : "outline"}
+                      aria-pressed={paysFullDue}
+                      className="h-8 text-xs"
+                      onClick={() => {
+                        setTenderedAmount(roundMoney(netPayable + customerDue).toFixed(2));
+                        setPaymentError("");
+                      }}
+                    >
+                      {paysFullDue && <CheckCircle2 className="mr-1 h-3.5 w-3.5" />}
+                      Collect full due
+                    </Button>
+                  </div>
+                  {!paysSaleOnly && !paysFullDue && (
+                    <p className="text-xs text-slate-500">
+                      Custom amount — anything above the sale goes to the previous balance first.
+                    </p>
+                  )}
+                </>
+              )}
               {paymentMethodPending === "Credit" && calculatedCredit > 0 && (
                 <div className="flex items-center justify-between text-amber-600 font-semibold">
                   <span>Credit Balance</span>
                   <span>Rs {calculatedCredit.toFixed(2)}</span>
                 </div>
               )}
-              {canKeepExcessAsCredit && (
+              {canKeepExcessAsCredit && !showsPreviousBalance && (
                 <div className="rounded-md border border-slate-200 bg-white p-2 space-y-2">
                   <div className="flex items-center justify-between font-semibold text-slate-700">
                     <span>Extra Received</span>
@@ -3514,10 +3589,26 @@ export function NewSale() {
                   </div>
                 </div>
               )}
-              {excessKeptAsCredit > 0 && (
+              {previousBalancePaid > 0 && (
+                <div className="flex items-center justify-between text-emerald-600 font-semibold">
+                  <span>Paid toward Previous Balance</span>
+                  <span>Rs {formatMoney(previousBalancePaid)}</span>
+                </div>
+              )}
+              {advanceFromExcess > 0 && (
                 <div className="flex items-center justify-between text-emerald-600 font-semibold">
                   <span>Added to Advance Credit</span>
-                  <span>Rs {formatMoney(excessKeptAsCredit)}</span>
+                  <span>Rs {formatMoney(advanceFromExcess)}</span>
+                </div>
+              )}
+              {showsPreviousBalance && (
+                <div
+                  className={`flex items-center justify-between font-semibold ${
+                    dueAfterPayment > 0 ? "text-red-600" : "text-emerald-600"
+                  }`}
+                >
+                  <span>Remaining Due</span>
+                  <span>Rs {formatMoney(dueAfterPayment)}</span>
                 </div>
               )}
               {calculatedChange > 0 && (

@@ -970,7 +970,12 @@ class SaleService {
               customer_id: customerId,
               entry_type: LedgerEntryType.PAYMENT_RECEIVED,
               amount: new Prisma.Decimal(parkedAsCredit),
-              description: advanceReceivedDescription(saleNumber),
+              // A customer who owed us is paying that debt down, not building up advance
+              // credit — label it for what it is so the ledger reads correctly.
+              description:
+                ledgerBalance > 0
+                  ? `Previous balance received with ${saleNumber}`
+                  : advanceReceivedDescription(saleNumber),
               reference_no: saleNumber,
               balance_after: 0,
               created_by: createdBy,
