@@ -65,7 +65,11 @@ app.use(cors({
       'http://localhost:5173',
       'https://manpasandstore.com',
       'https://www.manpasandstore.com',
-      'https://sarwat-traders-pos-six.vercel.app'
+      'https://sarwat-traders-pos-six.vercel.app',
+      'https://sarwat-traders-pos-88a9.vercel.app',
+      'http://169.58.4.58:8085',
+      'http://sarwattrader.acestudiosus.com',
+      'https://sarwattrader.acestudiosus.com',
     ];
     
     // Check if origin matches (with or without trailing slash)
