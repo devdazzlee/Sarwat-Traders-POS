@@ -36,7 +36,6 @@ import {
   Receipt,
   ChevronUp,
   ChevronDown,
-  ChevronRight,
   Info,
   DollarSign,
   Plus,
@@ -216,6 +215,36 @@ function getSaleBillRef(entry: LedgerEntry): string | null {
   return entry.saleId || extractSaleRef(entry);
 }
 
+function getSaleOriginalAmount(entry: LedgerEntry): number {
+  if (entry.adjustmentHistory && entry.adjustmentHistory.length > 0) {
+    if (entry.originalLedgerAmount != null) return Number(entry.originalLedgerAmount);
+    return Number(entry.adjustmentHistory[0].previousAmount);
+  }
+  return Number(entry.amount ?? entry.debit ?? 0);
+}
+
+function formatLedgerDateLabel(d: string) {
+  try {
+    const dt = new Date(d);
+    return isNaN(dt.getTime()) ? "N/A" : format(dt, "dd MMM yyyy");
+  } catch {
+    return "N/A";
+  }
+}
+
+function paymentDisplayDescription(entry: LedgerEntry, relatedSale: LedgerEntry | null): string {
+  const ref = extractSaleRef(entry) || entry.reference_no;
+  if (relatedSale && ref) {
+    return `Payment for ${ref} (${formatLedgerDateLabel(relatedSale.date)} bill)`;
+  }
+  const raw = cleanDisplayText(entry.description).toLowerCase();
+  if (raw.includes("account balance") || raw.includes("toward account")) {
+    return "Payment toward account balance";
+  }
+  if (!ref) return "Payment toward account balance";
+  return cleanDisplayText(entry.description) || "Payment toward account balance";
+}
+
 function enrichLedgerEntry(entry: LedgerEntry, allEntries: LedgerEntry[]): EnrichedLedgerEntry {
   const balanceBefore = Number((entry.balance - entry.debit + entry.credit).toFixed(2));
   const changeAmount =
@@ -330,7 +359,7 @@ function enrichLedgerEntry(entry: LedgerEntry, allEntries: LedgerEntry[]): Enric
   }
 
   if (hasAdjustmentHistory && (entry.type === "CREDIT_SALE" || entry.type === "CASH_SALE")) {
-    humanExplanation = "Sale amount reflects all edits. Open details to view adjustment history.";
+    humanExplanation = "Sale amount reflects all edits. Related adjustments appear as their own rows.";
   }
 
   const humanChangeLabel =
@@ -354,6 +383,362 @@ function enrichLedgerEntry(entry: LedgerEntry, allEntries: LedgerEntry[]): Enric
     relatedRef,
     relatedEntries,
   };
+}
+
+type FlatLedgerRow = {
+  key: string;
+  kind: "entry" | "adjustment";
+  date: string;
+  sortTime: number;
+  entry: EnrichedLedgerEntry | null;
+  adjustment: SaleAdjustmentHistoryItem | null;
+  parentEntry: EnrichedLedgerEntry | null;
+  balanceBefore: number;
+  balanceAfter: number;
+  changeAmount: number;
+  changeDirection: "increase" | "decrease" | "none";
+  humanChangeLabel: string;
+  description: string;
+  humanType: string;
+  statusLabel: string;
+  statusClass: string;
+  changeClass: string;
+  borderClass: string;
+  reference: string;
+  relatedPaymentKeys: string[];
+  paidOnLabels: string[];
+  invoicePaid: number;
+  invoiceReturned: number;
+  invoiceDue: number;
+  isAdjustmentRow: boolean;
+};
+
+function compareLedgerTime(a: { sortTime: number; key: string }, b: { sortTime: number; key: string }) {
+  const diff = a.sortTime - b.sortTime;
+  return diff !== 0 ? diff : a.key.localeCompare(b.key);
+}
+
+function buildFlatChronologicalRows(
+  allEntries: LedgerEntry[],
+  opts?: { expectedBalance?: number },
+): FlatLedgerRow[] {
+  const salesByRef = new Map<string, LedgerEntry>();
+  for (const e of allEntries) {
+    if (e.type !== "CREDIT_SALE" && e.type !== "CASH_SALE") continue;
+    const ref = extractSaleRef(e);
+    if (ref) salesByRef.set(ref, e);
+    if (e.saleId) salesByRef.set(e.saleId, e);
+    if (e.reference_no?.trim()) salesByRef.set(e.reference_no.trim(), e);
+  }
+
+  type Draft = {
+    key: string;
+    kind: "entry" | "adjustment";
+    date: string;
+    sortTime: number;
+    entry: LedgerEntry | null;
+    adjustment: SaleAdjustmentHistoryItem | null;
+    parentEntry: LedgerEntry | null;
+    signedDelta: number;
+    displayChangeAmount: number;
+    changeDirection: "increase" | "decrease" | "none";
+    description: string;
+    humanType: string;
+    statusLabel: string;
+    statusClass: string;
+    changeClass: string;
+    borderClass: string;
+    reference: string;
+    humanChangeLabel: string;
+  };
+
+  const drafts: Draft[] = [];
+
+  for (const entry of allEntries) {
+    const relatedRef = extractSaleRef(entry);
+    const adjustments = [...(entry.adjustmentHistory ?? [])].sort(
+      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+    );
+    const isSale = entry.type === "CREDIT_SALE" || entry.type === "CASH_SALE";
+    const splitAdjustments = isSale && adjustments.length > 0;
+
+    if (entry.type === "PAYMENT_RECEIVED") {
+      const relatedSale =
+        (relatedRef ? salesByRef.get(relatedRef) : null) ||
+        (entry.saleId ? salesByRef.get(entry.saleId) : null) ||
+        (entry.reference_no ? salesByRef.get(entry.reference_no) : null) ||
+        null;
+      const amount = Number(entry.credit > 0.009 ? entry.credit : entry.amount ?? 0);
+      drafts.push({
+        key: entry.id,
+        kind: "entry",
+        date: entry.date,
+        sortTime: new Date(entry.date).getTime(),
+        entry,
+        adjustment: null,
+        parentEntry: null,
+        signedDelta: -amount,
+        displayChangeAmount: amount,
+        changeDirection: amount > 0.009 ? "decrease" : "none",
+        description: paymentDisplayDescription(entry, relatedSale),
+        humanType: "Payment Received",
+        statusLabel: "Received",
+        statusClass: "text-emerald-600",
+        changeClass: "text-emerald-700",
+        borderClass: "border-l-emerald-400",
+        reference: relatedRef || entry.reference_no || "—",
+        humanChangeLabel: formatSignedMoney(amount, amount > 0.009 ? "decrease" : "none"),
+      });
+      continue;
+    }
+
+    if (splitAdjustments) {
+      const original = getSaleOriginalAmount(entry);
+      const affectsBalance = entry.type === "CREDIT_SALE";
+      const saleDelta = affectsBalance ? original : 0;
+      const saleDirection: "increase" | "decrease" | "none" =
+        entry.type === "CASH_SALE" ? "none" : original > 0.009 ? "increase" : "none";
+
+      drafts.push({
+        key: entry.id,
+        kind: "entry",
+        date: entry.date,
+        sortTime: new Date(entry.date).getTime(),
+        entry,
+        adjustment: null,
+        parentEntry: null,
+        signedDelta: saleDelta,
+        displayChangeAmount: original,
+        changeDirection: saleDirection,
+        description: cleanDisplayText(entry.description),
+        humanType: entry.type === "CREDIT_SALE" ? "Credit Sale" : entryTypeLabel(entry.type),
+        statusLabel: "Recorded",
+        statusClass: "text-slate-500",
+        changeClass: entry.type === "CREDIT_SALE" ? "text-rose-700" : "text-slate-600",
+        borderClass: entry.type === "CREDIT_SALE" ? "border-l-rose-400" : "border-l-slate-300",
+        reference: relatedRef || entry.reference_no || "—",
+        humanChangeLabel:
+          entry.type === "CASH_SALE"
+            ? money(original)
+            : formatSignedMoney(original, saleDirection),
+      });
+
+      for (const adj of adjustments) {
+        const affectsAdjBalance = affectsBalance && adj.field !== "CASH_TOTAL";
+        const delta = affectsAdjBalance ? Number(adj.signedDelta) : 0;
+        const abs = Math.abs(Number(adj.signedDelta));
+        const direction: "increase" | "decrease" | "none" =
+          Number(adj.signedDelta) > 0.009
+            ? "increase"
+            : Number(adj.signedDelta) < -0.009
+              ? "decrease"
+              : "none";
+        drafts.push({
+          key: `${entry.id}-adj-${adj.id}`,
+          kind: "adjustment",
+          date: adj.createdAt,
+          sortTime: new Date(adj.createdAt).getTime(),
+          entry: null,
+          adjustment: adj,
+          parentEntry: entry,
+          signedDelta: delta,
+          displayChangeAmount: abs,
+          changeDirection: direction,
+          description: cleanDisplayText(adj.reason || "Sale amount updated"),
+          humanType: "Edit",
+          statusLabel: "Adjustment",
+          statusClass: "text-amber-600",
+          changeClass:
+            direction === "increase"
+              ? "text-rose-700"
+              : direction === "decrease"
+                ? "text-emerald-700"
+                : "text-slate-700",
+          borderClass: "border-l-amber-200",
+          reference: relatedRef || entry.reference_no || "—",
+          humanChangeLabel: formatSignedMoney(abs, direction),
+        });
+      }
+      continue;
+    }
+
+    // Standard entry (no split): use API debit/credit as the signed impact.
+    let signedDelta = Number((entry.debit - entry.credit).toFixed(2));
+    if (entry.type === "CASH_SALE") signedDelta = 0;
+    const changeAmount =
+      entry.debit > 0.009 ? entry.debit : entry.credit > 0.009 ? entry.credit : entry.amount ?? 0;
+    const changeDirection: "increase" | "decrease" | "none" =
+      signedDelta > 0.009 ? "increase" : signedDelta < -0.009 ? "decrease" : "none";
+
+    drafts.push({
+      key: entry.id,
+      kind: "entry",
+      date: entry.date,
+      sortTime: new Date(entry.date).getTime(),
+      entry,
+      adjustment: null,
+      parentEntry: null,
+      signedDelta,
+      displayChangeAmount: changeAmount,
+      changeDirection,
+      description: cleanDisplayText(entry.description),
+      humanType: entryTypeLabel(entry.type),
+      statusLabel: "Recorded",
+      statusClass: "text-slate-500",
+      changeClass:
+        changeDirection === "decrease"
+          ? "text-emerald-700"
+          : changeDirection === "increase"
+            ? "text-rose-700"
+            : "text-slate-700",
+      borderClass: "border-l-slate-200",
+      reference: relatedRef || entry.reference_no || "—",
+      humanChangeLabel:
+        entry.type === "CASH_SALE"
+          ? money(entry.amount ?? changeAmount)
+          : formatSignedMoney(changeAmount, changeDirection),
+    });
+  }
+
+  drafts.sort(compareLedgerTime);
+
+  // Opening balance: true balance before the chronologically first loaded ledger entry.
+  const baseAsc = [...allEntries].sort((a, b) => {
+    const diff = new Date(a.date).getTime() - new Date(b.date).getTime();
+    return diff !== 0 ? diff : a.id.localeCompare(b.id);
+  });
+  let running = 0;
+  if (baseAsc.length > 0) {
+    const first = baseAsc[0];
+    running = Number((first.balance - first.debit + first.credit).toFixed(2));
+  }
+
+  const paymentsBySaleRef = new Map<string, { key: string; date: string }[]>();
+  for (const d of drafts) {
+    if (d.kind !== "entry" || d.entry?.type !== "PAYMENT_RECEIVED") continue;
+    const refs = [
+      extractSaleRef(d.entry),
+      d.entry.reference_no,
+      d.entry.saleId,
+    ].filter((v): v is string => Boolean(v && v.trim()));
+    const uniqueRefs = Array.from(new Set(refs.map((r) => r.trim())));
+    for (const ref of uniqueRefs) {
+      const list = paymentsBySaleRef.get(ref) ?? [];
+      list.push({ key: d.key, date: d.date });
+      paymentsBySaleRef.set(ref, list);
+    }
+  }
+
+  const rows: FlatLedgerRow[] = drafts.map((d) => {
+    const balanceBefore = running;
+    running = Number((running + d.signedDelta).toFixed(2));
+    const balanceAfter = running;
+
+    const sourceEntry = d.entry ?? d.parentEntry;
+    const enriched = sourceEntry ? enrichLedgerEntry(sourceEntry, allEntries) : null;
+
+    let humanType = d.humanType;
+    let statusLabel = d.statusLabel;
+    let statusClass = d.statusClass;
+    let changeClass = d.changeClass;
+    let borderClass = d.borderClass;
+    let humanChangeLabel = d.humanChangeLabel;
+
+    if (d.kind === "entry" && enriched && d.entry) {
+      humanType = enriched.humanType;
+      statusLabel = enriched.statusLabel;
+      statusClass = enriched.statusClass;
+      // Keep split-sale change label/amount (original), but reuse status badges from enrich.
+      if (!(d.entry.adjustmentHistory && d.entry.adjustmentHistory.length > 0 && (d.entry.type === "CREDIT_SALE" || d.entry.type === "CASH_SALE"))) {
+        changeClass = enriched.changeClass;
+        borderClass = enriched.borderClass;
+        humanChangeLabel = enriched.humanChangeLabel;
+      } else {
+        borderClass = enriched.borderClass;
+        changeClass = d.changeClass;
+      }
+    }
+
+    const saleKeys =
+      d.entry && (d.entry.type === "CREDIT_SALE" || d.entry.type === "CASH_SALE")
+        ? [extractSaleRef(d.entry), d.entry.reference_no, d.entry.saleId].filter(
+            (v): v is string => Boolean(v && v.trim()),
+          )
+        : [];
+    const linkedPayments = saleKeys.flatMap((k) => paymentsBySaleRef.get(k.trim()) ?? []);
+    // De-dupe in case the same payment was indexed under multiple keys
+    const seenPay = new Set<string>();
+    const uniquePayments = linkedPayments.filter((p) => {
+      if (seenPay.has(p.key)) return false;
+      seenPay.add(p.key);
+      return true;
+    });
+
+    return {
+      key: d.key,
+      kind: d.kind,
+      date: d.date,
+      sortTime: d.sortTime,
+      entry:
+        d.kind === "entry" && enriched && d.entry
+          ? {
+              ...enriched,
+              description: d.description,
+              relatedRef: extractSaleRef(d.entry) || enriched.relatedRef,
+              balanceBefore,
+              balance: balanceAfter,
+              changeAmount: d.displayChangeAmount,
+              changeDirection: d.changeDirection,
+              humanChangeLabel,
+              humanType,
+              statusLabel,
+              statusClass,
+              changeClass,
+              borderClass,
+            }
+          : null,
+      adjustment: d.adjustment,
+      parentEntry: d.parentEntry && enriched ? enriched : null,
+      balanceBefore,
+      balanceAfter,
+      changeAmount: d.displayChangeAmount,
+      changeDirection: d.changeDirection,
+      humanChangeLabel,
+      description: d.description,
+      humanType,
+      statusLabel,
+      statusClass,
+      changeClass,
+      borderClass,
+      reference: d.reference,
+      relatedPaymentKeys: uniquePayments.map((p) => p.key),
+      paidOnLabels: uniquePayments.map((p) => formatLedgerDateLabel(p.date)),
+      invoicePaid: Number(sourceEntry?.invoicePaid ?? 0),
+      invoiceReturned: Number(sourceEntry?.invoiceReturned ?? 0),
+      invoiceDue: Number(sourceEntry?.invoiceDue ?? 0),
+      isAdjustmentRow: d.kind === "adjustment",
+    };
+  });
+
+  if (opts?.expectedBalance != null && rows.length > 0) {
+    const lastAfter = rows[rows.length - 1].balanceAfter;
+    const amountDue = Math.max(0, Number(opts.expectedBalance));
+    // Amount Due card shows max(0, balance); running After should match net balance.
+    if (Math.abs(lastAfter - opts.expectedBalance) > 0.02) {
+      console.warn("[Statement of Account] Last running After does not match account balance:", {
+        lastAfter,
+        accountBalance: opts.expectedBalance,
+        amountDue,
+      });
+    } else if (opts.expectedBalance > 0.009 && Math.abs(lastAfter - amountDue) > 0.02) {
+      console.warn("[Statement of Account] Last running After does not match Amount Due:", {
+        lastAfter,
+        amountDue,
+      });
+    }
+  }
+
+  return rows;
 }
 
 function BalanceFlow({
@@ -439,8 +824,8 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
   const [deleteReason, setDeleteReason] = useState("");
   const [isDeletingEntry, setIsDeletingEntry] = useState(false);
   const [viewEntry, setViewEntry] = useState<EnrichedLedgerEntry | null>(null);
-  const [expandedInvoices, setExpandedInvoices] = useState<Set<string>>(new Set());
-  const [expandedAdjustments, setExpandedAdjustments] = useState<Set<string>>(new Set());
+  const [highlightedRowKey, setHighlightedRowKey] = useState<string | null>(null);
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showCreditInfo, setShowCreditInfo] = useState(false);
   const [breakdownType, setBreakdownType] = useState<null | "charged" | "paid">(null);
   const [billSaleRef, setBillSaleRef] = useState<string | null>(null);
@@ -474,14 +859,12 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
 
     const request = (async () => {
       try {
+        // Fetch full history (no server date filter) so running balances stay correct
+        // when the UI From/To filter is applied client-side.
         const [custRes, ledgerRes] = await Promise.all([
           apiClient.get(`${API_BASE}/customer/${customerId}`),
           apiClient.get(`${API_BASE}/customer-ledger/${customerId}`, {
-            params: {
-              limit: 200,
-              ...(dateFrom ? { startDate: format(dateFrom, "yyyy-MM-dd") } : {}),
-              ...(dateTo ? { endDate: format(dateTo, "yyyy-MM-dd") } : {}),
-            },
+            params: { limit: 500 },
           }),
         ]);
 
@@ -518,7 +901,13 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
 
     fetchInFlightRef.current = request;
     return request;
-  }, [customerId, dateFrom, dateTo, toast]);
+  }, [customerId, toast]);
+
+  useEffect(() => {
+    return () => {
+      if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     void fetchLedgerData();
@@ -537,113 +926,54 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
     };
   }, [customerId, fetchLedgerData]);
 
-  const filteredEntries = entries
-    .filter((e) => {
-      if (!search.trim()) return true;
-      const q = search.toLowerCase();
-      return (
-        e.description.toLowerCase().includes(q) ||
-        (e.reference_no || "").toLowerCase().includes(q) ||
-        (e.type || "").toLowerCase().includes(q)
-      );
-    })
-    .sort((a, b) => {
-      const da = new Date(a.date).getTime();
-      const db = new Date(b.date).getTime();
-      return sortOrder === "desc" ? db - da : da - db;
-    });
-
-  const enrichedEntries = useMemo(
-    () => filteredEntries.map((e) => enrichLedgerEntry(e, entries)),
-    [filteredEntries, entries],
+  const chronologicalRows = useMemo(
+    () => buildFlatChronologicalRows(entries, { expectedBalance: summary.balance }),
+    [entries, summary.balance],
   );
 
-  // Group each credit sale together with the payments/refunds made against it, so the
-  // statement reads one row per invoice (expandable) instead of scattered payment rows.
-  // Cash sales, opening balances, manual adjustments and account-level (unlinked) payments
-  // stay as their own standalone rows.
-  type LedgerRow =
-    | { kind: "single"; key: string; entry: EnrichedLedgerEntry }
-    | {
-        kind: "invoice";
-        key: string;
-        parent: EnrichedLedgerEntry;
-        children: EnrichedLedgerEntry[];
-        charged: number;
-        // Cash/credit actually handed over by the customer.
-        paid: number;
-        // Reduced because the item was returned/exchanged — no money changed hands, the
-        // charge was cancelled. Kept apart from `paid` so the UI never claims the
-        // customer "paid" for something they returned unpaid.
-        returned: number;
-        remaining: number;
-      };
+  const displayRows = useMemo(() => {
+    const fromMs = dateFrom ? new Date(format(dateFrom, "yyyy-MM-dd") + "T00:00:00").getTime() : null;
+    const toMs = dateTo ? new Date(format(dateTo, "yyyy-MM-dd") + "T23:59:59.999").getTime() : null;
+    const q = search.trim().toLowerCase();
 
-  const groupedRows = useMemo<LedgerRow[]>(() => {
-    const byRef = new Map<string, EnrichedLedgerEntry[]>();
-    for (const e of enrichedEntries) {
-      if (!e.relatedRef) continue;
-      const arr = byRef.get(e.relatedRef);
-      if (arr) arr.push(e);
-      else byRef.set(e.relatedRef, [e]);
-    }
-
-    // Pass 1: pair each credit-sale parent with its sale-linked payments/refunds.
-    const childIds = new Set<string>();
-    const childrenByParent = new Map<string, EnrichedLedgerEntry[]>();
-    for (const entry of enrichedEntries) {
-      if (entry.type !== "CREDIT_SALE" || !entry.relatedRef) continue;
-      const children = (byRef.get(entry.relatedRef) ?? []).filter(
-        (e) =>
-          e.id !== entry.id &&
-          !childIds.has(e.id) &&
-          (e.type === "PAYMENT_RECEIVED" || e.type === "REFUND"),
+    const filtered = chronologicalRows.filter((row) => {
+      if (fromMs != null && row.sortTime < fromMs) return false;
+      if (toMs != null && row.sortTime > toMs) return false;
+      if (!q) return true;
+      return (
+        row.description.toLowerCase().includes(q) ||
+        row.reference.toLowerCase().includes(q) ||
+        row.humanType.toLowerCase().includes(q) ||
+        row.statusLabel.toLowerCase().includes(q) ||
+        (row.entry?.type || "").toLowerCase().includes(q)
       );
-      if (children.length > 0) {
-        childrenByParent.set(entry.id, children);
-        children.forEach((c) => childIds.add(c.id));
-      }
-    }
-
-    // Pass 2: emit rows in the existing sorted order, skipping entries that are now nested.
-    const rows: LedgerRow[] = [];
-    for (const entry of enrichedEntries) {
-      if (childIds.has(entry.id)) continue;
-      const children = childrenByParent.get(entry.id);
-      if (children && children.length > 0) {
-        const charged = Number(entry.amount ?? entry.changeAmount ?? 0);
-        const paid = children
-          .filter((c) => c.type === "PAYMENT_RECEIVED")
-          .reduce((sum, c) => sum + Number(c.changeAmount ?? 0), 0);
-        const returned = children
-          .filter((c) => c.type === "REFUND")
-          .reduce((sum, c) => sum + Number(c.changeAmount ?? 0), 0);
-        const remaining = Math.max(0, Number((charged - paid - returned).toFixed(2)));
-        rows.push({ kind: "invoice", key: entry.id, parent: entry, children, charged, paid, returned, remaining });
-      } else {
-        rows.push({ kind: "single", key: entry.id, entry });
-      }
-    }
-    return rows;
-  }, [enrichedEntries]);
-
-  const toggleInvoice = (id: string) => {
-    setExpandedInvoices((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
     });
-  };
 
-  const toggleAdjustments = (id: string) => {
-    setExpandedAdjustments((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
+    return [...filtered].sort((a, b) => {
+      const diff = sortOrder === "desc" ? b.sortTime - a.sortTime : a.sortTime - b.sortTime;
+      return diff !== 0 ? diff : sortOrder === "desc" ? b.key.localeCompare(a.key) : a.key.localeCompare(b.key);
     });
-  };
+  }, [chronologicalRows, dateFrom, dateTo, search, sortOrder]);
+
+  const enrichedEntries = useMemo(
+    () =>
+      chronologicalRows
+        .filter((r) => r.kind === "entry" && r.entry)
+        .map((r) => r.entry!)
+        // Keep newest-first for breakdown dialogs that previously used sorted enriched entries.
+        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()),
+    [chronologicalRows],
+  );
+
+  const scrollToLedgerRow = useCallback((rowKey: string) => {
+    const el = document.getElementById(`ledger-row-${rowKey}`);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    setHighlightedRowKey(rowKey);
+    highlightTimerRef.current = setTimeout(() => setHighlightedRowKey(null), 2200);
+  }, []);
 
   // When the customer is in credit (paid more than charged), trace which entries created
   // that advance: walk the ledger oldest→newest and record every step where the running
@@ -651,19 +981,17 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
   // NOTE: declared before any early return so the hook order stays stable across renders.
   const creditSources = useMemo(() => {
     if (summary.balance >= -0.009) return [] as { entry: EnrichedLedgerEntry; credit: number }[];
-    const chrono = [...enrichedEntries].sort(
-      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
-    );
     const sources: { entry: EnrichedLedgerEntry; credit: number }[] = [];
     let creditBefore = 0;
-    for (const e of chrono) {
-      const creditAfter = Math.max(0, -Number(e.balance));
+    for (const row of chronologicalRows) {
+      if (!row.entry) continue;
+      const creditAfter = Math.max(0, -Number(row.balanceAfter));
       const delta = Number((creditAfter - creditBefore).toFixed(2));
-      if (delta > 0.009) sources.push({ entry: e, credit: delta });
+      if (delta > 0.009) sources.push({ entry: row.entry, credit: delta });
       creditBefore = creditAfter;
     }
     return sources;
-  }, [enrichedEntries, summary.balance]);
+  }, [chronologicalRows, summary.balance]);
 
   type PaymentTarget = {
     key: string;
@@ -873,14 +1201,15 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
       100
     );
 
-    // Table
-    const tableData = filteredEntries.map(entry => [
-      `${formatDate(entry.date)}\n${formatTime(entry.date)}`,
-      entry.description,
-      entry.reference_no || "",
-      entry.debit > 0 ? `Rs ${entry.debit.toLocaleString()}` : "",
-      entry.credit > 0 ? `Rs ${entry.credit.toLocaleString()}` : "",
-      formatRunningBalance(entry.balance).text
+    // Table — same flat chronological ledger as the on-screen statement
+    const pdfRows = [...displayRows];
+    const tableData = pdfRows.map((row) => [
+      `${formatDate(row.date)}\n${formatTime(row.date)}`,
+      `${row.humanType}\n${row.description}`,
+      row.reference === "—" ? "" : row.reference,
+      row.changeDirection === "increase" ? `Rs ${row.changeAmount.toLocaleString()}` : "",
+      row.changeDirection === "decrease" ? `Rs ${row.changeAmount.toLocaleString()}` : "",
+      formatRunningBalance(row.balanceAfter).text,
     ]);
 
     autoTable(doc, {
@@ -1109,194 +1438,190 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
   const selectedTarget = paymentTargets.find((t) => t.key === paymentSaleKey);
   const isLedgerBusy = isSubmittingPayment || isSubmittingEdit || isDeletingEntry;
 
-  // Renders one transaction row. `indented` is used for payment rows nested under an invoice.
-  const renderEntryRow = (entry: EnrichedLedgerEntry, opts?: { indented?: boolean }) => {
-    const indented = opts?.indented ?? false;
-    const adjustments = entry.adjustmentHistory ?? [];
-    const hasAdjustments = adjustments.length > 0 && !indented;
-    const adjExpanded = expandedAdjustments.has(entry.id);
+  // Renders one flat chronological ledger row (sale, payment, refund, or adjustment).
+  const renderFlatRow = (row: FlatLedgerRow) => {
+    const entry = row.isAdjustmentRow ? null : row.entry;
+    const isSale = entry?.type === "CREDIT_SALE" || entry?.type === "CASH_SALE";
+    const paid = row.invoicePaid;
+    const returned = row.invoiceReturned;
+    const remaining = row.invoiceDue;
+    const showInvoiceBadges = !row.isAdjustmentRow && entry?.type === "CREDIT_SALE";
+    const relatedCount =
+      entry && !row.isAdjustmentRow
+        ? entry.relatedEntries.length + (entry.adjustmentHistory?.length ?? 0)
+        : 0;
+
     return (
-      <React.Fragment key={entry.id}>
       <tr
+        key={row.key}
+        id={`ledger-row-${row.key}`}
         className={cn(
-          "border-b border-slate-100 hover:bg-slate-50/80 border-l-[3px]",
-          entry.borderClass,
-          indented && "bg-slate-50/60",
+          "border-b border-slate-100 hover:bg-slate-50/80 border-l-[3px] transition-colors",
+          row.borderClass,
+          row.isAdjustmentRow && "bg-amber-50/40",
+          highlightedRowKey === row.key && "bg-sky-50 ring-2 ring-inset ring-sky-300",
         )}
       >
-        <td className={cn("px-3 py-3 align-middle", indented && "pl-7")}>
-          <div className="flex items-center gap-2">
-            {indented && <span className="text-slate-300 leading-none">└</span>}
-            <div>
-              <p className="text-xs font-medium text-slate-800 leading-tight whitespace-nowrap">
-                {formatDate(entry.date)}
-              </p>
-              <p className="text-[11px] text-slate-500 mt-0.5 leading-tight whitespace-nowrap">
-                {formatTime(entry.date)}
-              </p>
-            </div>
+        <td className="px-3 py-3 align-middle">
+          <div>
+            <p className="text-xs font-medium text-slate-800 leading-tight whitespace-nowrap">
+              {formatDate(row.date)}
+            </p>
+            <p className="text-[11px] text-slate-500 mt-0.5 leading-tight whitespace-nowrap">
+              {formatTime(row.date)}
+            </p>
           </div>
         </td>
         <td className="px-3 py-3 align-middle whitespace-nowrap">
-          <p className="text-xs font-medium text-slate-800">{entry.humanType}</p>
-          <p className={cn("text-[11px] mt-0.5 whitespace-nowrap", entry.statusClass)}>
-            {entry.statusLabel}
+          <p className="text-xs font-medium text-slate-800">{row.humanType}</p>
+          <p className={cn("text-[11px] mt-0.5 whitespace-nowrap", row.statusClass)}>
+            {row.statusLabel}
           </p>
         </td>
         <td className="px-3 py-3 align-middle">
-          <p className="text-sm text-slate-800 leading-snug truncate" title={cleanDisplayText(entry.description)}>
-            {cleanDisplayText(entry.description)}
+          <p className="text-sm text-slate-800 leading-snug truncate" title={row.description}>
+            {row.description}
           </p>
-          {hasAdjustments && (
-            <button
-              type="button"
-              onClick={() => toggleAdjustments(entry.id)}
-              className="mt-0.5 inline-flex items-center gap-1 text-[11px] font-medium text-blue-600 hover:text-blue-800"
-            >
-              {adjExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-              {adjustments.length} adjustment{adjustments.length === 1 ? "" : "s"} · {adjExpanded ? "hide" : "show"}
-            </button>
+          {showInvoiceBadges && (
+            <div className="flex flex-wrap items-center gap-1.5 mt-1">
+              {paid > 0.009 && (
+                <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 tabular-nums whitespace-nowrap">
+                  Paid {money(paid)}
+                </span>
+              )}
+              {returned > 0.009 && (
+                <span className="rounded bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700 tabular-nums whitespace-nowrap">
+                  Returned {money(returned)}
+                </span>
+              )}
+              <span
+                className={cn(
+                  "rounded px-1.5 py-0.5 text-[10px] font-semibold tabular-nums whitespace-nowrap",
+                  remaining > 0.009 ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700",
+                )}
+              >
+                {remaining > 0.009
+                  ? `Due ${money(remaining)}`
+                  : paid > 0.009 && returned <= 0.009
+                    ? "Settled"
+                    : returned > 0.009
+                      ? "Cancelled"
+                      : entry?.paymentStatus === "PAID"
+                        ? "Settled"
+                        : "Unpaid"}
+              </span>
+            </div>
           )}
-          {!indented && entry.relatedEntries.length > 0 && (entry.adjustmentHistory?.length ?? 0) === 0 && (
+          {isSale && row.paidOnLabels.length > 0 && (
+            <div className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5">
+              {row.paidOnLabels.map((label, idx) => (
+                <button
+                  key={`${row.key}-paid-${idx}`}
+                  type="button"
+                  className="text-[11px] font-medium text-sky-700 hover:text-sky-900 hover:underline"
+                  onClick={() => {
+                    const targetKey = row.relatedPaymentKeys[idx];
+                    if (targetKey) scrollToLedgerRow(targetKey);
+                  }}
+                >
+                  Paid on {label}
+                </button>
+              ))}
+            </div>
+          )}
+          {relatedCount > 0 && !row.isAdjustmentRow && (
             <p className="text-[11px] text-slate-400 mt-0.5 whitespace-nowrap">
-              {entry.relatedEntries.length} related
+              {relatedCount} related
             </p>
           )}
         </td>
         <td className="px-3 py-3 align-middle whitespace-nowrap">
-          <span className="text-[11px] font-mono text-slate-600">
-            {entry.relatedRef || entry.reference_no || "—"}
-          </span>
+          <span className="text-[11px] font-mono text-slate-600">{row.reference}</span>
         </td>
         <td className="px-3 py-3 text-right align-middle tabular-nums text-slate-700 whitespace-nowrap">
-          {money(entry.balanceBefore)}
+          {money(row.balanceBefore)}
         </td>
         <td className="px-3 py-3 text-right align-middle tabular-nums font-semibold whitespace-nowrap">
-          <span className={entry.changeClass}>{entry.humanChangeLabel}</span>
+          <span className={row.changeClass}>{row.humanChangeLabel}</span>
         </td>
         <td className="px-3 py-3 text-right align-middle tabular-nums font-semibold whitespace-nowrap">
-          <span className={formatRunningBalance(entry.balance).className}>
-            {formatRunningBalance(entry.balance).text}
+          <span className={formatRunningBalance(row.balanceAfter).className}>
+            {formatRunningBalance(row.balanceAfter).text}
           </span>
         </td>
         <td className="px-3 py-3 align-middle">
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <div className="inline-flex items-stretch rounded-md border border-slate-200 bg-white shadow-sm overflow-hidden shrink-0">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 rounded-none px-2.5 text-xs text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-                onClick={() => setViewEntry(entry)}
-                disabled={isLedgerBusy}
-              >
-                View
-              </Button>
-              {getSaleBillRef(entry) && (
+          {row.isAdjustmentRow || !entry ? (
+            <span className="text-[11px] text-slate-400">—</span>
+          ) : (
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <div className="inline-flex items-stretch rounded-md border border-slate-200 bg-white shadow-sm overflow-hidden shrink-0">
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-8 rounded-none px-2.5 text-xs text-sky-700 border-l border-slate-200 hover:bg-sky-50"
-                  onClick={() => openSaleBill(entry)}
+                  className="h-8 rounded-none px-2.5 text-xs text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                  onClick={() => setViewEntry(entry)}
                   disabled={isLedgerBusy}
                 >
-                  <FileText className="h-3.5 w-3.5 mr-1" />
-                  Bill
+                  View
+                </Button>
+                {getSaleBillRef(entry) && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 rounded-none px-2.5 text-xs text-sky-700 border-l border-slate-200 hover:bg-sky-50"
+                    onClick={() => openSaleBill(entry)}
+                    disabled={isLedgerBusy}
+                  >
+                    <FileText className="h-3.5 w-3.5 mr-1" />
+                    Bill
+                  </Button>
+                )}
+              </div>
+              {entry.isCollectable && (entry.invoiceDue ?? 0) > 0 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 px-2 text-xs text-emerald-700 border-emerald-200 hover:bg-emerald-50"
+                  onClick={() => openPaymentModal(entry)}
+                  disabled={isLedgerBusy}
+                >
+                  Collect
+                </Button>
+              )}
+              {(entry.isEditable ??
+                (entry.type !== "CREDIT_SALE" &&
+                  entry.type !== "CASH_SALE" &&
+                  entry.type !== "REFUND")) && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 w-8 p-0 text-slate-500 hover:text-slate-800"
+                  title="Edit"
+                  onClick={() => openEditModal(entry)}
+                  disabled={isLedgerBusy}
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </Button>
+              )}
+              {(entry.isDeletable ??
+                (entry.type !== "CREDIT_SALE" &&
+                  entry.type !== "CASH_SALE" &&
+                  entry.type !== "REFUND")) && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 w-8 p-0 text-slate-500 hover:text-slate-800"
+                  title="Delete"
+                  onClick={() => setDeleteTarget(entry)}
+                  disabled={isLedgerBusy}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
                 </Button>
               )}
             </div>
-            {entry.isCollectable && (entry.invoiceDue ?? 0) > 0 && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 px-2 text-xs text-emerald-700 border-emerald-200 hover:bg-emerald-50"
-                onClick={() => openPaymentModal(entry)}
-                disabled={isLedgerBusy}
-              >
-                Collect
-              </Button>
-            )}
-            {(entry.isEditable ??
-              (entry.type !== "CREDIT_SALE" &&
-                entry.type !== "CASH_SALE" &&
-                entry.type !== "REFUND")) && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 w-8 p-0 text-slate-500 hover:text-slate-800"
-                title="Edit"
-                onClick={() => openEditModal(entry)}
-                disabled={isLedgerBusy}
-              >
-                <Pencil className="h-3.5 w-3.5" />
-              </Button>
-            )}
-            {(entry.isDeletable ??
-              (entry.type !== "CREDIT_SALE" &&
-                entry.type !== "CASH_SALE" &&
-                entry.type !== "REFUND")) && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 w-8 p-0 text-slate-500 hover:text-slate-800"
-                title="Delete"
-                onClick={() => setDeleteTarget(entry)}
-                disabled={isLedgerBusy}
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </Button>
-            )}
-          </div>
+          )}
         </td>
       </tr>
-      {hasAdjustments && adjExpanded &&
-        adjustments.map((adj) => (
-          <tr
-            key={`${entry.id}-adj-${adj.id}`}
-            className="border-b border-slate-100 bg-amber-50/40 border-l-[3px] border-l-amber-200"
-          >
-            <td className="px-3 py-2 align-middle pl-7">
-              <div className="flex items-center gap-2">
-                <span className="text-slate-300 leading-none">└</span>
-                <div>
-                  <p className="text-[11px] font-medium text-slate-700 whitespace-nowrap">
-                    {formatDate(adj.createdAt)}
-                  </p>
-                  <p className="text-[10px] text-slate-400 whitespace-nowrap">
-                    {formatTime(adj.createdAt)}
-                  </p>
-                </div>
-              </div>
-            </td>
-            <td className="px-3 py-2 align-middle whitespace-nowrap">
-              <p className="text-[11px] font-medium text-slate-700">Edit</p>
-              <p className="text-[10px] text-amber-600 mt-0.5">Adjustment</p>
-            </td>
-            <td className="px-3 py-2 align-middle">
-              <p className="text-xs text-slate-700 leading-snug">
-                {cleanDisplayText(adj.reason || "Sale amount updated")}
-              </p>
-            </td>
-            <td className="px-3 py-2 align-middle whitespace-nowrap">
-              <span className="text-[11px] font-mono text-slate-400">—</span>
-            </td>
-            <td className="px-3 py-2 text-right align-middle tabular-nums text-xs text-slate-600 whitespace-nowrap">
-              {money(adj.previousAmount)}
-            </td>
-            <td className="px-3 py-2 text-right align-middle tabular-nums text-xs font-semibold whitespace-nowrap">
-              <span className={adj.signedDelta >= 0 ? "text-rose-700" : "text-emerald-700"}>
-                {formatSignedMoney(
-                  Math.abs(adj.signedDelta),
-                  adj.signedDelta >= 0 ? "increase" : "decrease",
-                )}
-              </span>
-            </td>
-            <td className="px-3 py-2 text-right align-middle tabular-nums text-xs font-semibold text-slate-700 whitespace-nowrap">
-              {money(adj.newAmount)}
-            </td>
-            <td />
-          </tr>
-        ))}
-      </React.Fragment>
     );
   };
 
@@ -1419,12 +1744,12 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
           <div className="px-4 py-3 border-b border-slate-200">
             <div className="flex items-center justify-between gap-2">
               <h2 className="text-sm font-semibold text-slate-900">Statement of Account</h2>
-              <span className="text-xs text-slate-500">{entries.length} transactions</span>
+              <span className="text-xs text-slate-500">{displayRows.length} transactions</span>
             </div>
           </div>
 
           <div className="px-4 py-3 border-b border-slate-100 bg-slate-50/50">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2">
               <div className="relative sm:col-span-2 lg:col-span-1">
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
                 <Input
@@ -1444,6 +1769,19 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
               >
                 {sortOrder === "desc" ? <ChevronDown className="h-4 w-4 mr-1" /> : <ChevronUp className="h-4 w-4 mr-1" />}
                 {sortOrder === "desc" ? "Newest" : "Oldest"}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9 w-full justify-center text-slate-600 bg-white disabled:opacity-40"
+                disabled={!search && !dateFrom && !dateTo}
+                onClick={() => {
+                  setSearch("");
+                  setDateFrom(undefined);
+                  setDateTo(undefined);
+                }}
+              >
+                Clear
               </Button>
             </div>
           </div>
@@ -1473,7 +1811,7 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                 </tr>
               </thead>
               <tbody>
-                {enrichedEntries.length === 0 ? (
+                {displayRows.length === 0 ? (
                   <tr>
                     <td colSpan={8} className="py-16 text-center text-slate-400">
                       <Receipt className="h-8 w-8 opacity-20 mx-auto mb-2" />
@@ -1481,138 +1819,10 @@ export function CustomerLedger({ customerId, onBack }: CustomerLedgerProps) {
                     </td>
                   </tr>
                 ) : (
-                  groupedRows.map((row) => {
-                    if (row.kind === "single") {
-                      return renderEntryRow(row.entry);
-                    }
-                    const { parent, children, paid, returned, remaining } = row;
-                    const expanded = expandedInvoices.has(parent.id);
-                    return (
-                      <React.Fragment key={parent.id}>
-                        <tr
-                          className={cn(
-                            "border-b border-slate-100 hover:bg-slate-50/80 border-l-[3px] cursor-pointer",
-                            parent.borderClass,
-                          )}
-                          onClick={() => toggleInvoice(parent.id)}
-                        >
-                          <td className="px-3 py-3 align-middle">
-                            <p className="text-xs font-medium text-slate-800 leading-tight whitespace-nowrap">
-                              {formatDate(parent.date)}
-                            </p>
-                            <p className="text-[11px] text-slate-500 mt-0.5 leading-tight whitespace-nowrap">
-                              {formatTime(parent.date)}
-                            </p>
-                          </td>
-                          <td className="px-3 py-3 align-middle whitespace-nowrap">
-                            <p className="text-xs font-medium text-slate-800">{parent.humanType}</p>
-                            <p className={cn("text-[11px] mt-0.5 whitespace-nowrap", parent.statusClass)}>
-                              {parent.statusLabel}
-                            </p>
-                          </td>
-                          <td className="px-3 py-3 align-middle">
-                            <p className="text-sm text-slate-800 leading-snug truncate" title={cleanDisplayText(parent.description)}>
-                              {cleanDisplayText(parent.description)}
-                            </p>
-                            <div className="flex flex-wrap items-center gap-1.5 mt-1">
-                              {paid > 0.009 && (
-                                <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 tabular-nums whitespace-nowrap">
-                                  Paid {money(paid)}
-                                </span>
-                              )}
-                              {returned > 0.009 && (
-                                <span className="rounded bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700 tabular-nums whitespace-nowrap">
-                                  Returned {money(returned)}
-                                </span>
-                              )}
-                              <span
-                                className={cn(
-                                  "rounded px-1.5 py-0.5 text-[10px] font-semibold tabular-nums whitespace-nowrap",
-                                  remaining > 0.009 ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700",
-                                )}
-                              >
-                                {remaining > 0.009
-                                  ? `Due ${money(remaining)}`
-                                  : paid > 0.009 && returned <= 0.009
-                                    ? "Settled"
-                                    : "Cancelled"}
-                              </span>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                toggleInvoice(parent.id);
-                              }}
-                              className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-sky-700 hover:text-sky-900"
-                            >
-                              {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                              {children.length} {children.every((c) => c.type === "REFUND") ? "return" : children.every((c) => c.type === "PAYMENT_RECEIVED") ? "payment" : "entry"}
-                              {children.length === 1 ? "" : "s"} · {expanded ? "hide" : "show"}
-                            </button>
-                          </td>
-                          <td className="px-3 py-3 align-middle whitespace-nowrap">
-                            <span className="text-[11px] font-mono text-slate-600">
-                              {parent.relatedRef || parent.reference_no || "—"}
-                            </span>
-                          </td>
-                          <td className="px-3 py-3 text-right align-middle tabular-nums text-slate-700 whitespace-nowrap">
-                            {money(parent.balanceBefore)}
-                          </td>
-                          <td className="px-3 py-3 text-right align-middle tabular-nums font-semibold whitespace-nowrap">
-                            <span className={parent.changeClass}>{parent.humanChangeLabel}</span>
-                          </td>
-                          <td className="px-3 py-3 text-right align-middle tabular-nums font-semibold whitespace-nowrap">
-                            <span className={formatRunningBalance(parent.balance).className}>
-                              {formatRunningBalance(parent.balance).text}
-                            </span>
-                          </td>
-                          <td className="px-3 py-3 align-middle">
-                            <div className="flex items-center gap-1.5 flex-wrap" onClick={(e) => e.stopPropagation()}>
-                              <div className="inline-flex items-stretch rounded-md border border-slate-200 bg-white shadow-sm overflow-hidden shrink-0">
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-8 rounded-none px-2.5 text-xs text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-                                  onClick={() => setViewEntry(parent)}
-                                  disabled={isLedgerBusy}
-                                >
-                                  View
-                                </Button>
-                                {getSaleBillRef(parent) && (
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-8 rounded-none px-2.5 text-xs text-sky-700 border-l border-slate-200 hover:bg-sky-50"
-                                    onClick={() => openSaleBill(parent)}
-                                    disabled={isLedgerBusy}
-                                  >
-                                    <FileText className="h-3.5 w-3.5 mr-1" />
-                                    Bill
-                                  </Button>
-                                )}
-                              </div>
-                              {parent.isCollectable && (parent.invoiceDue ?? 0) > 0 && (
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  className="h-8 px-2 text-xs text-emerald-700 border-emerald-200 hover:bg-emerald-50"
-                                  onClick={() => openPaymentModal(parent)}
-                                  disabled={isLedgerBusy}
-                                >
-                                  Collect
-                                </Button>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                        {expanded && children.map((child) => renderEntryRow(child, { indented: true }))}
-                      </React.Fragment>
-                    );
-                  })
+                  displayRows.map((row) => renderFlatRow(row))
                 )}
               </tbody>
-              {enrichedEntries.length > 0 && (
+              {displayRows.length > 0 && (
                 <tfoot>
                   <tr className="border-t-2 border-slate-300 bg-slate-100/80">
                     <td colSpan={8} className="px-4 py-4">
