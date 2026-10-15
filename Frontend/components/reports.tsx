@@ -424,30 +424,29 @@ export function Reports() {
     <div className="min-h-full bg-gradient-to-b from-slate-100 via-slate-50 to-white">
       <div className="p-4 md:p-6 space-y-5 max-w-[1400px] mx-auto">
         {/* Header */}
-        <div className="rounded-2xl border border-slate-200 bg-slate-900 text-white overflow-hidden shadow-lg">
-          <div className="relative px-5 py-5 md:px-7 md:py-6">
-            <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_rgba(16,185,129,0.25),_transparent_55%)]" />
-            <div className="relative flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
+        <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-sm">
+          <div className="px-5 py-5 md:px-7 md:py-6">
+            <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
               <div>
-                <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-[11px] font-medium tracking-wide uppercase text-emerald-200 mb-2">
+                <div className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-medium tracking-wide uppercase text-emerald-700 mb-2">
                   <BarChart3 className="h-3.5 w-3.5" />
                   Business Insights
                 </div>
-                <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Reports & Analytics</h1>
-                <p className="text-sm text-slate-300 mt-1">
-                  Showing <span className="text-white font-medium">{dateRangeLabel}</span>
+                <h1 className="text-2xl md:text-3xl font-bold tracking-tight text-slate-900">Reports & Analytics</h1>
+                <p className="text-sm text-slate-500 mt-1">
+                  Showing <span className="text-slate-800 font-medium">{dateRangeLabel}</span>
                   {appliedPayment !== "ALL" ? (
                     <>
                       {" "}
-                      · Payment <span className="text-emerald-300 font-medium">{appliedPayment}</span>
+                      · Payment <span className="text-emerald-700 font-medium">{appliedPayment}</span>
                     </>
                   ) : null}
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
                 <Button
-                  variant="secondary"
-                  className="h-9 bg-white/10 text-white border-white/20 hover:bg-white/20"
+                  variant="outline"
+                  className="h-9"
                   onClick={() => fetchReportsData(appliedFrom, appliedTo, appliedPayment)}
                   disabled={loading || !!exporting}
                 >
@@ -455,8 +454,8 @@ export function Reports() {
                   Refresh
                 </Button>
                 <Button
-                  variant="secondary"
-                  className="h-9 bg-white/10 text-white border-white/20 hover:bg-white/20"
+                  variant="outline"
+                  className="h-9"
                   onClick={emailReport}
                   disabled={!!exporting || loading}
                 >
@@ -469,7 +468,7 @@ export function Reports() {
                 </Button>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button className="h-9 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold" disabled={!!exporting || loading}>
+                    <Button className="h-9 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold" disabled={!!exporting || loading}>
                       {exporting === "pdf" || exporting === "excel" ? (
                         <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                       ) : (
@@ -582,6 +581,7 @@ export function Reports() {
                   onClick={handleApplyFilters}
                   disabled={loading}
                 >
+                  {loading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
                   Apply filters
                 </Button>
                 <Button variant="outline" className="h-10" onClick={handleClearFilters} disabled={loading}>
@@ -592,6 +592,25 @@ export function Reports() {
           </CardContent>
         </Card>
 
+        {/* Results: reaching this point means a prior load already succeeded (the
+            all-empty case returns the full-page PageLoader above), so `loading` here
+            only ever means "refetching after Apply filters/Refresh" — dim the existing
+            numbers and show a spinner instead of silently swapping them with no cue. */}
+        <div className="relative space-y-5">
+          {loading && (
+            <div className="absolute inset-0 z-10 flex items-start justify-center pt-24 rounded-2xl bg-white/60 backdrop-blur-[1px]">
+              <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 shadow-sm text-sm font-medium text-slate-600">
+                <Loader2 className="h-4 w-4 animate-spin text-emerald-600" />
+                Updating report…
+              </div>
+            </div>
+          )}
+          <div
+            className={cn(
+              "space-y-5 transition-opacity",
+              loading && "opacity-50 pointer-events-none",
+            )}
+          >
         {/* KPI cards */}
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
           <Card className="border-emerald-100 bg-gradient-to-br from-emerald-50 to-white shadow-sm">
@@ -840,6 +859,8 @@ export function Reports() {
             </div>
           </CardContent>
         </Card>
+          </div>
+        </div>
       </div>
     </div>
   )
