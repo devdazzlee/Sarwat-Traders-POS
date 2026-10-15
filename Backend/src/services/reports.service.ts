@@ -1,17 +1,50 @@
 import { prisma } from '../prisma/client';
 import { Prisma } from '@prisma/client';
 
+type ReportsQuery = {
+  branchId?: string;
+  userRole?: string;
+  startDate?: Date;
+  endDate?: Date;
+  paymentMethod?: string;
+  limit?: number;
+};
+
+function buildSaleWhere({
+  branchId,
+  userRole,
+  startDate,
+  endDate,
+  paymentMethod,
+}: Omit<ReportsQuery, 'limit'>): Prisma.SaleWhereInput {
+  const where: Prisma.SaleWhereInput = {
+    status: 'COMPLETED',
+  };
+
+  if (userRole !== 'ADMIN' && userRole !== 'SUPER_ADMIN' && branchId) {
+    where.branch_id = branchId;
+  }
+
+  if (startDate || endDate) {
+    where.sale_date = {
+      ...(startDate ? { gte: startDate } : {}),
+      ...(endDate ? { lte: endDate } : {}),
+    };
+  }
+
+  if (paymentMethod && paymentMethod !== 'ALL') {
+    where.payment_method = paymentMethod as any;
+  }
+
+  return where;
+}
+
 export class ReportsService {
   /**
    * Get all sales for reports (admin sees all, branch users see only their branch)
    */
-  async getSalesForReports({ branchId, userRole }: { branchId?: string; userRole?: string }) {
-    const where: Prisma.SaleWhereInput = {};
-    
-    // Only filter by branch if user is not admin
-    if (userRole !== 'ADMIN' && userRole !== 'SUPER_ADMIN' && branchId) {
-      where.branch_id = branchId;
-    }
+  async getSalesForReports(query: ReportsQuery) {
+    const where = buildSaleWhere(query);
 
     return prisma.sale.findMany({
       where,
@@ -26,6 +59,12 @@ export class ReportsService {
           },
         },
         customer: true,
+        user: {
+          select: {
+            id: true,
+            email: true,
+          },
+        },
       },
       orderBy: { sale_date: 'desc' },
     });
@@ -34,15 +73,11 @@ export class ReportsService {
   /**
    * Get best selling products
    */
-  async getBestSellingProducts({ branchId, userRole, limit = 10 }: { branchId?: string; userRole?: string; limit?: number }) {
-    const where: Prisma.SaleItemWhereInput = {};
-    
-    // Only filter by branch if user is not admin
-    if (userRole !== 'ADMIN' && userRole !== 'SUPER_ADMIN' && branchId) {
-      where.sale = {
-        branch_id: branchId,
-      };
-    }
+  async getBestSellingProducts(query: ReportsQuery) {
+    const saleWhere = buildSaleWhere(query);
+    const where: Prisma.SaleItemWhereInput = {
+      sale: saleWhere,
+    };
 
     const products = await prisma.saleItem.groupBy({
       by: ['product_id'],
@@ -58,11 +93,10 @@ export class ReportsService {
           quantity: 'desc',
         },
       },
-      take: limit,
+      take: query.limit ?? 10,
     });
 
-    // Get product details
-    const productIds = products.map(p => p.product_id);
+    const productIds = products.map((p) => p.product_id);
     const productDetails = await prisma.product.findMany({
       where: {
         id: { in: productIds },
@@ -72,9 +106,8 @@ export class ReportsService {
       },
     });
 
-    // Combine data
-    return products.map(item => {
-      const product = productDetails.find(p => p.id === item.product_id);
+    return products.map((item) => {
+      const product = productDetails.find((p) => p.id === item.product_id);
       return {
         id: item.product_id,
         name: product?.name || 'Unknown',
@@ -91,13 +124,8 @@ export class ReportsService {
   /**
    * Get dashboard stats for reports
    */
-  async getReportsStats({ branchId, userRole }: { branchId?: string; userRole?: string }) {
-    const where: Prisma.SaleWhereInput = {};
-    
-    // Only filter by branch if user is not admin
-    if (userRole !== 'ADMIN' && userRole !== 'SUPER_ADMIN' && branchId) {
-      where.branch_id = branchId;
-    }
+  async getReportsStats(query: ReportsQuery) {
+    const where = buildSaleWhere(query);
 
     const [totalSales, totalRevenue, uniqueCustomers, salesForCogs] = await Promise.all([
       prisma.sale.count({ where }),
@@ -120,16 +148,16 @@ export class ReportsService {
           sale_items: {
             select: {
               quantity: true,
-              product: { select: { purchase_rate: true } }
-            }
-          }
-        }
+              product: { select: { purchase_rate: true } },
+            },
+          },
+        },
       }),
     ]);
 
     let totalCogs = 0;
-    salesForCogs.forEach(sale => {
-      sale.sale_items.forEach(item => {
+    salesForCogs.forEach((sale) => {
+      sale.sale_items.forEach((item) => {
         totalCogs += Number(item.quantity || 0) * Number(item.product?.purchase_rate || 0);
       });
     });
@@ -142,8 +170,7 @@ export class ReportsService {
       totalRevenue: revenueNum,
       totalCogs,
       grossMargin,
-      uniqueCustomers: uniqueCustomers.filter(c => c.customer_id).length,
+      uniqueCustomers: uniqueCustomers.filter((c) => c.customer_id).length,
     };
   }
 }
-
