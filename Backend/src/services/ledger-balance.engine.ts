@@ -476,6 +476,74 @@ export class LedgerBalanceEngine {
   }
 
   /**
+   * The only two ways syncSaleLedgerEntries is allowed to touch an existing row —
+   * every update/delete in that function must go through one of these, so a revision
+   * is logged unconditionally and a future branch can't silently skip the audit trail
+   * (two separate branches already did, until this was added).
+   */
+  private async updateSaleLedgerRow(
+    tx: TxClient,
+    params: {
+      customerId: string;
+      saleNumber: string;
+      entry: { id: string; amount: Prisma.Decimal | number };
+      field: SaleLedgerRevisionField;
+      newAmount: number;
+      description?: string;
+      reason: string;
+      createdBy?: string;
+    },
+  ) {
+    const previousAmount = Number(params.entry.amount);
+    if (Math.abs(previousAmount - params.newAmount) > 0.009) {
+      await this.recordSaleLedgerRevision(tx, {
+        customerId: params.customerId,
+        saleNumber: params.saleNumber,
+        ledgerEntryId: params.entry.id,
+        field: params.field,
+        previousAmount,
+        newAmount: params.newAmount,
+        reason: params.reason,
+        createdBy: params.createdBy,
+      });
+    }
+    await tx.customerLedger.update({
+      where: { id: params.entry.id },
+      data: {
+        amount: new Prisma.Decimal(params.newAmount),
+        ...(params.description !== undefined ? { description: params.description } : {}),
+      },
+    });
+  }
+
+  private async deleteSaleLedgerRow(
+    tx: TxClient,
+    params: {
+      customerId: string;
+      saleNumber: string;
+      entry: { id: string; amount: Prisma.Decimal | number };
+      field: SaleLedgerRevisionField;
+      reason: string;
+      createdBy?: string;
+    },
+  ) {
+    const previousAmount = Number(params.entry.amount);
+    if (previousAmount > 0.009) {
+      await this.recordSaleLedgerRevision(tx, {
+        customerId: params.customerId,
+        saleNumber: params.saleNumber,
+        ledgerEntryId: params.entry.id,
+        field: params.field,
+        previousAmount,
+        newAmount: 0,
+        reason: params.reason,
+        createdBy: params.createdBy,
+      });
+    }
+    await tx.customerLedger.delete({ where: { id: params.entry.id } });
+  }
+
+  /**
    * Keep one ledger row per sale (CREDIT_SALE / CASH_SALE / upfront PAYMENT_RECEIVED).
    * Sale edits update those rows in place — never append delta ADJUSTMENT rows.
    */
@@ -544,22 +612,15 @@ export class LedgerBalanceEngine {
 
       if (grossCharge > 0.009) {
         if (creditSale) {
-          const previousAmount = Number(creditSale.amount);
-          if (Math.abs(previousAmount - grossCharge) > 0.009) {
-            await this.recordSaleLedgerRevision(tx, {
-              customerId,
-              saleNumber,
-              ledgerEntryId: creditSale.id,
-              field: SaleLedgerRevisionField.CREDIT_OWED,
-              previousAmount,
-              newAmount: grossCharge,
-              reason: revisionReason,
-              createdBy: params.createdBy,
-            });
-          }
-          await tx.customerLedger.update({
-            where: { id: creditSale.id },
-            data: { amount: new Prisma.Decimal(grossCharge), description: creditDesc },
+          await this.updateSaleLedgerRow(tx, {
+            customerId,
+            saleNumber,
+            entry: creditSale,
+            field: SaleLedgerRevisionField.CREDIT_OWED,
+            newAmount: grossCharge,
+            description: creditDesc,
+            reason: revisionReason,
+            createdBy: params.createdBy,
           });
         } else {
           await this.postCreditSale(tx, {
@@ -571,43 +632,27 @@ export class LedgerBalanceEngine {
           });
         }
       } else if (creditSale) {
-        const previousAmount = Number(creditSale.amount);
-        if (previousAmount > 0.009) {
-          await this.recordSaleLedgerRevision(tx, {
-            customerId,
-            saleNumber,
-            ledgerEntryId: creditSale.id,
-            field: SaleLedgerRevisionField.CREDIT_OWED,
-            previousAmount,
-            newAmount: 0,
-            reason: revisionReason,
-            createdBy: params.createdBy,
-          });
-        }
-        await tx.customerLedger.delete({ where: { id: creditSale.id } });
+        await this.deleteSaleLedgerRow(tx, {
+          customerId,
+          saleNumber,
+          entry: creditSale,
+          field: SaleLedgerRevisionField.CREDIT_OWED,
+          reason: revisionReason,
+          createdBy: params.createdBy,
+        });
       }
 
       if (paid > 0.009) {
         if (upfrontPayment) {
-          const previousAmount = Number(upfrontPayment.amount);
-          if (Math.abs(previousAmount - paid) > 0.009) {
-            await this.recordSaleLedgerRevision(tx, {
-              customerId,
-              saleNumber,
-              ledgerEntryId: upfrontPayment.id,
-              field: SaleLedgerRevisionField.UPFRONT_PAYMENT,
-              previousAmount,
-              newAmount: paid,
-              reason: revisionReason,
-              createdBy: params.createdBy,
-            });
-          }
-          await tx.customerLedger.update({
-            where: { id: upfrontPayment.id },
-            data: {
-              amount: new Prisma.Decimal(paid),
-              description: salePaymentDescription(upfrontPayment.description),
-            },
+          await this.updateSaleLedgerRow(tx, {
+            customerId,
+            saleNumber,
+            entry: upfrontPayment,
+            field: SaleLedgerRevisionField.UPFRONT_PAYMENT,
+            newAmount: paid,
+            description: salePaymentDescription(upfrontPayment.description),
+            reason: revisionReason,
+            createdBy: params.createdBy,
           });
         } else {
           await this.postPayment(tx, {
@@ -619,24 +664,25 @@ export class LedgerBalanceEngine {
           });
         }
       } else if (upfrontPayment) {
-        const previousAmount = Number(upfrontPayment.amount);
-        if (previousAmount > 0.009) {
-          await this.recordSaleLedgerRevision(tx, {
-            customerId,
-            saleNumber,
-            ledgerEntryId: upfrontPayment.id,
-            field: SaleLedgerRevisionField.UPFRONT_PAYMENT,
-            previousAmount,
-            newAmount: 0,
-            reason: revisionReason,
-            createdBy: params.createdBy,
-          });
-        }
-        await tx.customerLedger.delete({ where: { id: upfrontPayment.id } });
+        await this.deleteSaleLedgerRow(tx, {
+          customerId,
+          saleNumber,
+          entry: upfrontPayment,
+          field: SaleLedgerRevisionField.UPFRONT_PAYMENT,
+          reason: revisionReason,
+          createdBy: params.createdBy,
+        });
       }
 
       if (cashSale) {
-        await tx.customerLedger.delete({ where: { id: cashSale.id } });
+        await this.deleteSaleLedgerRow(tx, {
+          customerId,
+          saleNumber,
+          entry: cashSale,
+          field: SaleLedgerRevisionField.CASH_TOTAL,
+          reason: revisionReason,
+          createdBy: params.createdBy,
+        });
       }
     } else {
       const cashTotal = Math.max(0, params.cashSaleAmount);
@@ -644,25 +690,15 @@ export class LedgerBalanceEngine {
 
       if (cashTotal > 0.009) {
         if (cashSale) {
-          const previousAmount = Number(cashSale.amount);
-          if (Math.abs(previousAmount - cashTotal) > 0.009) {
-            await this.recordSaleLedgerRevision(tx, {
-              customerId,
-              saleNumber,
-              ledgerEntryId: cashSale.id,
-              field: SaleLedgerRevisionField.CASH_TOTAL,
-              previousAmount,
-              newAmount: cashTotal,
-              reason: revisionReason,
-              createdBy: params.createdBy,
-            });
-          }
-          await tx.customerLedger.update({
-            where: { id: cashSale.id },
-            data: {
-              amount: new Prisma.Decimal(cashTotal),
-              description: `${paidLabel} sale - ${saleNumber}`,
-            },
+          await this.updateSaleLedgerRow(tx, {
+            customerId,
+            saleNumber,
+            entry: cashSale,
+            field: SaleLedgerRevisionField.CASH_TOTAL,
+            newAmount: cashTotal,
+            description: `${paidLabel} sale - ${saleNumber}`,
+            reason: revisionReason,
+            createdBy: params.createdBy,
           });
         } else {
           await this.postCashSale(tx, {
@@ -674,27 +710,35 @@ export class LedgerBalanceEngine {
           });
         }
       } else if (cashSale) {
-        const previousAmount = Number(cashSale.amount);
-        if (previousAmount > 0.009) {
-          await this.recordSaleLedgerRevision(tx, {
-            customerId,
-            saleNumber,
-            ledgerEntryId: cashSale.id,
-            field: SaleLedgerRevisionField.CASH_TOTAL,
-            previousAmount,
-            newAmount: 0,
-            reason: revisionReason,
-            createdBy: params.createdBy,
-          });
-        }
-        await tx.customerLedger.delete({ where: { id: cashSale.id } });
+        await this.deleteSaleLedgerRow(tx, {
+          customerId,
+          saleNumber,
+          entry: cashSale,
+          field: SaleLedgerRevisionField.CASH_TOTAL,
+          reason: revisionReason,
+          createdBy: params.createdBy,
+        });
       }
 
       if (creditSale) {
-        await tx.customerLedger.delete({ where: { id: creditSale.id } });
+        await this.deleteSaleLedgerRow(tx, {
+          customerId,
+          saleNumber,
+          entry: creditSale,
+          field: SaleLedgerRevisionField.CREDIT_OWED,
+          reason: revisionReason,
+          createdBy: params.createdBy,
+        });
       }
       if (upfrontPayment) {
-        await tx.customerLedger.delete({ where: { id: upfrontPayment.id } });
+        await this.deleteSaleLedgerRow(tx, {
+          customerId,
+          saleNumber,
+          entry: upfrontPayment,
+          field: SaleLedgerRevisionField.UPFRONT_PAYMENT,
+          reason: revisionReason,
+          createdBy: params.createdBy,
+        });
       }
     }
 

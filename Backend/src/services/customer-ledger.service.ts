@@ -2,7 +2,7 @@ import { Prisma, LedgerEntryType } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { AppError } from '../utils/apiError';
 import { ledgerBalanceEngine, TxClient } from './ledger-balance.engine';
-import { isSaleLinkedShadowAdjustment, saleUpfrontPaymentDescription } from '../utils/sale-ledger-revision';
+import { saleUpfrontPaymentDescription } from '../utils/sale-ledger-revision';
 import {
   buildDisplayLedgerEntries,
   buildSaleLedgerSnapshot,
@@ -470,12 +470,13 @@ class CustomerLedgerService {
       const dbEntries = ledgerByCustomer.get(customerId) ?? [];
       const creditSales = salesByCustomer.get(customerId) ?? [];
       const displayAsc = buildDisplayLedgerEntries(customerId, dbEntries, creditSales);
-      const visibleAsc = displayAsc
-        .filter((e) => !isSaleLinkedShadowAdjustment(e))
-        .sort((a, b) => {
-          const diff = a.created_at.getTime() - b.created_at.getTime();
-          return diff !== 0 ? diff : a.id.localeCompare(b.id);
-        });
+      // Same reasoning as getCustomerLedger: a present shadow-adjustment row has not
+      // yet been folded into its sale's own ledger row, so it must still count toward
+      // the balance — excluding it silently understates what the customer owes.
+      const visibleAsc = [...displayAsc].sort((a, b) => {
+        const diff = a.created_at.getTime() - b.created_at.getTime();
+        return diff !== 0 ? diff : a.id.localeCompare(b.id);
+      });
       const { currentBalance } = this.computeLedgerTotals(visibleAsc);
       result.set(customerId, currentBalance);
     }
@@ -545,10 +546,19 @@ class CustomerLedgerService {
     const displayAsc = buildDisplayLedgerEntries(customerId, dbEntries, creditSales);
     const saleSnapshots = buildSaleLedgerSnapshots(displayAsc, creditSales);
 
-    const filteredAsc = displayAsc.filter((e) =>
+    // Do NOT filter out isSaleLinkedShadowAdjustment rows here. A "shadow" adjustment
+    // is only safe to exclude from the balance walk once consolidateSaleLinkedAdjustments
+    // has folded its delta into the parent sale's own ledger row AND deleted the shadow
+    // row itself — both happen atomically in one transaction, so a shadow row's mere
+    // presence here always means that hasn't happened yet. Excluding it unconditionally
+    // (the old behavior) silently dropped real money from the balance for any sale edit
+    // whose shadow row was still waiting on a future edit to trigger consolidation —
+    // which may never come. Counting it here instead makes the displayed balance
+    // correct regardless of whether/when consolidation has run; consolidation remains
+    // useful for tidying the stored rows, but is no longer required for correctness.
+    const visibleAllAsc = displayAsc.filter((e) =>
       this.entryInDateRange(e.created_at, startDate, endDate),
     );
-    const visibleAllAsc = filteredAsc.filter((e) => !isSaleLinkedShadowAdjustment(e));
     const visibleDesc = [...visibleAllAsc].sort((a, b) => {
       const diff = b.created_at.getTime() - a.created_at.getTime();
       return diff !== 0 ? diff : b.id.localeCompare(a.id);
@@ -573,6 +583,25 @@ class CustomerLedgerService {
       totalPayments,
       totalRefunds,
     } = this.computeLedgerTotals(visibleAllAsc);
+
+    // Integrity check, not a correctness dependency: two independently-reachable
+    // calculations (this display walk vs. the engine's raw walk used to stamp
+    // customer.outstanding_balance) should always agree, by construction. They only
+    // disagree if a future change makes one of them select a different set of rows
+    // than the other — exactly the class of bug that caused the June 2026 balance
+    // mismatch this check exists to catch. Only meaningful over the unfiltered full
+    // history, so skip it when a date range narrows what's being displayed.
+    if (!startDate && !endDate) {
+      const authoritativeBalance = await ledgerBalanceEngine.getRunningBalance(prisma, customerId);
+      if (Math.abs(authoritativeBalance - currentBalance) > 0.01) {
+        console.error(
+          `[LEDGER INTEGRITY] customer ${customerId} (${customer.name}): Statement-of-Account ` +
+          `balance (${currentBalance}) disagrees with the authoritative engine balance ` +
+          `(${authoritativeBalance}) — these should never diverge. Investigate row selection ` +
+          `in getCustomerLedger vs. LedgerBalanceEngine.getRunningBalance.`,
+        );
+      }
+    }
 
     type SaleRow = {
       id: string;
@@ -730,6 +759,83 @@ class CustomerLedgerService {
       totalOutstanding: new Prisma.Decimal(totalOutstanding),
       topDebtors: debtors.slice(0, 10),
     };
+  }
+
+  /**
+   * Nightly sweep: compare every customer's Statement-of-Account balance (the same
+   * display computation getCustomerLedger uses) against customer.outstanding_balance
+   * — the column every other screen (dashboards, customer list) trusts, kept correct
+   * by LedgerBalanceEngine.recalculateRunningBalances on every ledger-affecting write.
+   * The two must always agree; a divergence here means some write path skipped the
+   * engine or a display-layer rule (e.g. the shadow-adjustment filter bug fixed
+   * earlier) is silently excluding rows again. Any mismatch is written to
+   * LedgerIntegrityAlert so it shows up in the admin UI instead of an easily-missed inbox.
+   */
+  async reconcileAllCustomerBalances(): Promise<
+    Array<{ customerId: string; customerName: string; storedBalance: number; computedBalance: number }>
+  > {
+    const customers = await prisma.customer.findMany({
+      select: { id: true, name: true, outstanding_balance: true },
+    });
+    const computed = await this.computeDisplayBalances(customers.map((c) => c.id));
+
+    const mismatches: Array<{
+      customerId: string;
+      customerName: string;
+      storedBalance: number;
+      computedBalance: number;
+    }> = [];
+
+    for (const customer of customers) {
+      const storedBalance = Number(customer.outstanding_balance);
+      const computedBalance = computed.get(customer.id) ?? 0;
+      if (Math.abs(storedBalance - computedBalance) > 0.01) {
+        mismatches.push({
+          customerId: customer.id,
+          customerName: customer.name ?? 'Unknown',
+          storedBalance,
+          computedBalance,
+        });
+      }
+    }
+
+    if (mismatches.length > 0) {
+      console.error(
+        `[LEDGER INTEGRITY] Nightly reconciliation found ${mismatches.length} customer(s) with ` +
+          `a Statement-of-Account balance that disagrees with the stored balance:`,
+        mismatches,
+      );
+      await prisma.ledgerIntegrityAlert.createMany({
+        data: mismatches.map((m) => ({
+          customer_id: m.customerId,
+          customer_name: m.customerName,
+          stored_balance: m.storedBalance,
+          computed_balance: m.computedBalance,
+        })),
+      });
+    } else {
+      console.log(`[LEDGER INTEGRITY] Nightly reconciliation: all ${customers.length} customers match.`);
+    }
+
+    return mismatches;
+  }
+
+  /** Unresolved integrity alerts for the admin UI, most recent first. */
+  async getLedgerIntegrityAlerts() {
+    return prisma.ledgerIntegrityAlert.findMany({
+      where: { resolved: false },
+      orderBy: { detected_at: 'desc' },
+    });
+  }
+
+  async resolveLedgerIntegrityAlert(alertId: string, resolvedBy: string) {
+    const alert = await prisma.ledgerIntegrityAlert.findUnique({ where: { id: alertId } });
+    if (!alert) throw new AppError(404, 'Alert not found');
+
+    return prisma.ledgerIntegrityAlert.update({
+      where: { id: alertId },
+      data: { resolved: true, resolved_at: new Date(), resolved_by: resolvedBy },
+    });
   }
 }
 

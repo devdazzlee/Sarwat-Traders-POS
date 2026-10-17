@@ -105,3 +105,22 @@ export const deleteLedgerEntry = asyncHandler(async (req: Request, res: Response
 
   new ApiResponse(result, 'Ledger entry deleted successfully').send(res);
 });
+
+/**
+ * GET /customer-ledger/integrity-alerts
+ * Unresolved balance mismatches found by the nightly reconciliation job
+ */
+export const getLedgerIntegrityAlerts = asyncHandler(async (_req: Request, res: Response) => {
+  const alerts = await ledgerService.getLedgerIntegrityAlerts();
+  new ApiResponse(alerts, 'Ledger integrity alerts fetched').send(res);
+});
+
+/**
+ * PATCH /customer-ledger/integrity-alerts/:alertId/resolve
+ * Mark an integrity alert as reviewed/resolved
+ */
+export const resolveLedgerIntegrityAlert = asyncHandler(async (req: Request, res: Response) => {
+  const { alertId } = req.params;
+  const result = await ledgerService.resolveLedgerIntegrityAlert(alertId, req.user!.id);
+  new ApiResponse(result, 'Alert resolved').send(res);
+});

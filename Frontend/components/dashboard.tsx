@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 
 import { Customers } from "@/components/customers";
 import { Reports } from "@/components/reports";
+import { LedgerIntegrityAlerts } from "@/components/ledger-integrity-alerts";
 import { Settings } from "@/components/settings";
 import { Profile } from "@/components/profile";
 import { SalesHistory } from "@/components/sales-history";
@@ -262,6 +263,8 @@ export function Dashboard({ onLogout }: DashboardProps) {
         return <TaxManagement />;
       case "reports":
         return <Reports />;
+      case "ledger-alerts":
+        return <LedgerIntegrityAlerts />;
       case "audit":
         return <Audit />;
       case "multi-location":

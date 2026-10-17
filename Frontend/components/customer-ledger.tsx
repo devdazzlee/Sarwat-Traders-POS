@@ -602,15 +602,42 @@ function buildFlatChronologicalRows(
 
   drafts.sort(compareLedgerTime);
 
-  // Opening balance: true balance before the chronologically first loaded ledger entry.
-  const baseAsc = [...allEntries].sort((a, b) => {
-    const diff = new Date(a.date).getTime() - new Date(b.date).getTime();
-    return diff !== 0 ? diff : a.id.localeCompare(b.id);
-  });
-  let running = 0;
-  if (baseAsc.length > 0) {
-    const first = baseAsc[0];
-    running = Number((first.balance - first.debit + first.credit).toFixed(2));
+  // Running balance per visible row. "entry" rows use the server's own authoritative
+  // balance for that ledger row (computed once, correctly, by the backend from the
+  // full history) directly — never re-accumulated locally. Re-deriving a running total
+  // in the browser meant a stale or partially-loaded fetch could silently drift every
+  // number after it; reading the server's per-entry balance makes that class of bug
+  // impossible, since each row is anchored to its own known-correct value.
+  //
+  // Split "adjustment" virtual sub-rows (shown under an edited sale) have no ledger
+  // row of their own, so there's nothing server-authoritative to read for them — their
+  // balance is interpolated backward from their parent entry's real balance, so the
+  // sequence still lands exactly on a true value even though the intermediate steps
+  // are locally derived.
+  const groups: { parent: Draft; children: Draft[] }[] = [];
+  let currentGroup: { parent: Draft; children: Draft[] } | null = null;
+  for (const d of drafts) {
+    if (d.kind === "entry") {
+      currentGroup = { parent: d, children: [] };
+      groups.push(currentGroup);
+    } else if (currentGroup) {
+      currentGroup.children.push(d);
+    }
+  }
+
+  const balanceAfterByKey = new Map<string, number>();
+  for (const g of groups) {
+    const parentBalance = g.parent.entry?.balance ?? 0;
+    if (g.children.length === 0) {
+      balanceAfterByKey.set(g.parent.key, parentBalance);
+      continue;
+    }
+    let running = parentBalance;
+    for (let i = g.children.length - 1; i >= 0; i--) {
+      balanceAfterByKey.set(g.children[i].key, running);
+      running = Number((running - g.children[i].signedDelta).toFixed(2));
+    }
+    balanceAfterByKey.set(g.parent.key, running);
   }
 
   const paymentsBySaleRef = new Map<string, { key: string; date: string }[]>();
@@ -630,9 +657,8 @@ function buildFlatChronologicalRows(
   }
 
   const rows: FlatLedgerRow[] = drafts.map((d) => {
-    const balanceBefore = running;
-    running = Number((running + d.signedDelta).toFixed(2));
-    const balanceAfter = running;
+    const balanceAfter = balanceAfterByKey.get(d.key) ?? 0;
+    const balanceBefore = Number((balanceAfter - d.signedDelta).toFixed(2));
 
     const sourceEntry = d.entry ?? d.parentEntry;
     const enriched = sourceEntry ? enrichLedgerEntry(sourceEntry, allEntries) : null;

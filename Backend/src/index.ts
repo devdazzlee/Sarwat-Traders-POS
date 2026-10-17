@@ -43,6 +43,7 @@ import guestOrderRoutes from './routes/guestOrder.routes';
 import customerLedgerRoutes from './routes/customer-ledger.routes';
 import supplierLedgerRoutes from './routes/supplier-ledger.routes';
 import cron from 'node-cron';
+import CustomerLedgerService from './services/customer-ledger.service';
 
 const vAPI = process.env.vAPI || '/api/v1';
 const app = express();
@@ -184,6 +185,18 @@ cron.schedule('0 * * * *', async () => {
   
   if (openDrawers.length === 0) {
     console.log("✅ No drawers needed auto-closing");
+  }
+});
+
+// Nightly cron job to catch any customer whose Statement-of-Account balance has
+// drifted from their stored running balance, and email the admin if so.
+const customerLedgerService = new CustomerLedgerService();
+cron.schedule('0 3 * * *', async () => {
+  console.log("🧾 Ledger integrity reconciliation running at:", new Date().toISOString());
+  try {
+    await customerLedgerService.reconcileAllCustomerBalances();
+  } catch (error) {
+    console.error('❌ Ledger integrity reconciliation failed:', error);
   }
 });
 

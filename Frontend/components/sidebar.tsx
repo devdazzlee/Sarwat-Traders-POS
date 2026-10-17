@@ -37,8 +37,11 @@ import {
   Download,
   User,
   BookOpen,
+  AlertTriangle,
   type LucideIcon,
 } from "lucide-react";
+import apiClient from "@/lib/apiClient";
+import { API_BASE } from "@/config/constants";
 
 const ADMIN_ROLES: UserRole[] = ["SUPER_ADMIN", "ADMIN"];
 const SALES_ROLES: UserRole[] = ["SUPER_ADMIN", "ADMIN", "BRANCH_MANAGER"];
@@ -286,6 +289,12 @@ const menuSections: SidebarMenuSection[] = [
         roles: ADMIN_ROLES,
       },
       {
+        id: "ledger-alerts",
+        label: "Ledger Alerts",
+        icon: AlertTriangle,
+        roles: ADMIN_ROLES,
+      },
+      {
         id: "expenses",
         label: "Expenses",
         icon: Receipt,
@@ -365,6 +374,7 @@ export function Sidebar({
     "system",
   ]);
   const [role, setRole] = useState<UserRole | null>(null);
+  const [ledgerAlertCount, setLedgerAlertCount] = useState(0);
 
   useEffect(() => {
     const syncRole = () => {
@@ -376,6 +386,15 @@ export function Sidebar({
 
     return () => window.removeEventListener("storage", syncRole);
   }, []);
+
+  useEffect(() => {
+    if (role !== "SUPER_ADMIN" && role !== "ADMIN") return;
+
+    apiClient
+      .get(`${API_BASE}/customer-ledger/integrity-alerts`)
+      .then((res) => setLedgerAlertCount((res.data?.data ?? []).length))
+      .catch(() => {});
+  }, [role]);
 
   const filteredMenuSections = filterMenuSectionsByRole(role);
 
@@ -402,6 +421,9 @@ export function Sidebar({
         : [...prev, section]
     );
   };
+
+  const getBadgeText = (item: SidebarMenuItem) =>
+    item.id === "ledger-alerts" && ledgerAlertCount > 0 ? String(ledgerAlertCount) : item.badge;
 
   const handleMenuClick = (itemId: string) => {
     setActiveTab(itemId);
@@ -484,16 +506,16 @@ export function Sidebar({
                             >
                               <Icon className="mr-3 h-4 w-4" />
                               {item.label}
-                              {item.badge && (
+                              {getBadgeText(item) && (
                                 <Badge
                                   variant={
-                                    item.badge === "Live"
+                                    getBadgeText(item) === "Live" || item.id === "ledger-alerts"
                                       ? "destructive"
                                       : "secondary"
                                   }
                                   className="ml-auto text-xs"
                                 >
-                                  {item.badge}
+                                  {getBadgeText(item)}
                                 </Badge>
                               )}
                             </Button>

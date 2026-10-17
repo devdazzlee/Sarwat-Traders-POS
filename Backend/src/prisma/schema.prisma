@@ -661,6 +661,7 @@ model Customer {
   device             DeviceIdentity?
   ledger_entries     CustomerLedger[]
   sale_ledger_revisions CustomerSaleLedgerRevision[]
+  ledger_integrity_alerts LedgerIntegrityAlert[]
   sessions           CustomerSession[]
   created_at         DateTime        @default(now())
   updated_at         DateTime        @default(now()) @updatedAt
@@ -983,6 +984,25 @@ model CustomerSaleLedgerRevision {
   @@index([customer_id, sale_number])
   @@index([ledger_entry_id])
   @@index([created_at])
+}
+
+/// Nightly reconciliation findings — a customer whose Statement-of-Account balance
+/// disagreed with their stored running balance. Surfaced in the admin UI instead of email.
+model LedgerIntegrityAlert {
+  id               String    @id @default(uuid())
+  customer_id      String
+  customer         Customer  @relation(fields: [customer_id], references: [id])
+  customer_name    String
+  stored_balance   Decimal
+  computed_balance Decimal
+  detected_at      DateTime  @default(now())
+  resolved         Boolean   @default(false)
+  resolved_at      DateTime?
+  resolved_by      String?
+
+  @@index([customer_id])
+  @@index([resolved])
+  @@index([detected_at])
 }
 
 // Supplier Payables Ledger

@@ -7,6 +7,8 @@ import {
   getCreditSummary,
   updateLedgerEntry,
   deleteLedgerEntry,
+  getLedgerIntegrityAlerts,
+  resolveLedgerIntegrityAlert,
 } from '../controllers/customer-ledger.controller';
 
 const router = express.Router();
@@ -14,6 +16,8 @@ const router = express.Router();
 router.use(authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'BRANCH_MANAGER', 'WAREHOUSE_MANAGER']));
 
 router.get('/summary', getCreditSummary);
+router.get('/integrity-alerts', getLedgerIntegrityAlerts);
+router.patch('/integrity-alerts/:alertId/resolve', resolveLedgerIntegrityAlert);
 router.patch('/:customerId/entries/:entryId', updateLedgerEntry);
 router.delete('/:customerId/entries/:entryId', deleteLedgerEntry);
 router.get('/:customerId', getCustomerLedger);
