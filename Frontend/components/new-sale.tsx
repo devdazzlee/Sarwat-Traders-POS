@@ -45,6 +45,12 @@ import {
   Users,
   Printer,
   Mail,
+  Phone,
+  ArrowDownNarrowWide,
+  ArrowUpNarrowWide,
+  ArrowDownAZ,
+  ArrowUpZA,
+  UserRound,
 } from "lucide-react";
 import { downloadA4Invoice, shareOnWhatsApp, shareOnEmail, printA4Invoice, type InvoiceData } from "@/lib/pdf-generator";
 import apiClient from "@/lib/apiClient";
@@ -2633,10 +2639,12 @@ export function NewSale() {
                   variant="outline"
                   role="combobox"
                   aria-expanded={customerSearchOpen}
-                  className="w-full justify-between font-medium text-left bg-white border-gray-200 hover:bg-slate-50 overflow-hidden"
+                  className="w-full h-11 justify-between font-medium text-left bg-white border-slate-200 rounded-xl hover:bg-slate-50 hover:border-slate-300 overflow-hidden"
                 >
-                  <div className="flex items-center gap-2 truncate">
-                    <Users className="h-4 w-4 text-slate-400" />
+                  <div className="flex items-center gap-2.5 truncate">
+                    <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-100">
+                      <Users className="h-3.5 w-3.5 text-slate-500" />
+                    </div>
                     <span className="truncate">
                       {selectedCustomer
                         ? customers.find((c) => c.id === selectedCustomer)?.name
@@ -2646,7 +2654,7 @@ export function NewSale() {
                   <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                 </Button>
               </PopoverTrigger>
-              <PopoverContent className="w-[min(420px,92vw)] p-0" align="start">
+              <PopoverContent className="w-[min(420px,92vw)] p-0 rounded-xl shadow-lg border-slate-200 overflow-hidden" align="start">
                 <Command
                   className="border-none shadow-none"
                   // Equal scores keep our balance/name sort order (cmdk would otherwise re-rank).
@@ -2655,9 +2663,9 @@ export function NewSale() {
                     return value.toLowerCase().includes(search.toLowerCase()) ? 1 : 0;
                   }}
                 >
-                  <CommandInput placeholder="Search customer by name or phone..." className="h-10" />
+                  <CommandInput placeholder="Search customer by name or phone..." className="h-11" />
                   <div
-                    className="border-b border-slate-100 px-3 py-2 bg-slate-50/80 space-y-1.5"
+                    className="border-b border-slate-100 px-3 py-2.5 bg-slate-50/80 space-y-1.5"
                     onPointerDown={(e) => e.stopPropagation()}
                     onMouseDown={(e) => e.stopPropagation()}
                     onClick={(e) => e.stopPropagation()}
@@ -2668,20 +2676,20 @@ export function NewSale() {
                     <div className="grid grid-cols-2 gap-1.5">
                       {(
                         [
-                          ["balance-desc", "Highest due"],
-                          ["balance-asc", "Lowest due"],
-                          ["name-asc", "Name A–Z"],
-                          ["name-desc", "Name Z–A"],
+                          ["balance-desc", "Highest due", ArrowDownNarrowWide],
+                          ["balance-asc", "Lowest due", ArrowUpNarrowWide],
+                          ["name-asc", "Name A–Z", ArrowDownAZ],
+                          ["name-desc", "Name Z–A", ArrowUpZA],
                         ] as const
-                      ).map(([value, label]) => (
+                      ).map(([value, label, Icon]) => (
                         <button
                           key={value}
                           type="button"
                           className={cn(
-                            "h-8 rounded-md border px-2 text-[11px] font-semibold transition-colors",
+                            "flex h-8 items-center justify-center gap-1.5 rounded-lg border px-2 text-[11px] font-semibold transition-all",
                             customerSort === value
-                              ? "border-slate-900 bg-slate-900 text-white"
-                              : "border-slate-200 bg-white text-slate-600 hover:border-slate-400",
+                              ? "border-slate-900 bg-slate-900 text-white shadow-sm"
+                              : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50",
                           )}
                           onMouseDown={(e) => {
                             // Keep the customer popover open; Select-in-Popover was swallowing clicks.
@@ -2690,6 +2698,7 @@ export function NewSale() {
                             setCustomerSort(value);
                           }}
                         >
+                          <Icon className="h-3 w-3 opacity-70" />
                           {label}
                         </button>
                       ))}
@@ -2704,24 +2713,29 @@ export function NewSale() {
                           setSelectedCustomer(null);
                           setCustomerSearchOpen(false);
                         }}
-                        className="flex items-center gap-2 py-2.5"
+                        className="flex items-center gap-2.5 py-2.5 px-2.5 rounded-lg mx-1"
                       >
+                        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-100">
+                          <UserRound className="h-3.5 w-3.5 text-slate-400" />
+                        </div>
+                        <span className="italic text-slate-500 font-medium flex-1">Walk-in Customer</span>
                         <Check
                           className={cn(
-                            "h-4 w-4 text-blue-600 shrink-0",
+                            "h-4 w-4 text-emerald-600 shrink-0",
                             !selectedCustomer ? "opacity-100" : "opacity-0"
                           )}
                         />
-                        <span className="italic text-gray-500 font-medium">Walk-in Customer</span>
                       </CommandItem>
                       {sortedCustomers.map((customer: any) => {
                         const balance = Number(customer.outstanding_balance || 0);
-                        const balanceLabel =
-                          Math.abs(balance) < 0.009
-                            ? "Settled"
-                            : balance > 0
-                              ? `Due Rs ${balance.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
-                              : `Credit Rs ${Math.abs(balance).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+                        const isSettled = Math.abs(balance) < 0.009;
+                        const isDue = balance > 0;
+                        const balanceLabel = isSettled
+                          ? "Settled"
+                          : isDue
+                            ? `Due Rs ${balance.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+                            : `Credit Rs ${Math.abs(balance).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+                        const initial = String(customer.name || "?").trim().charAt(0).toUpperCase();
                         return (
                           <CommandItem
                             key={customer.id}
@@ -2730,36 +2744,45 @@ export function NewSale() {
                               setSelectedCustomer(customer.id);
                               setCustomerSearchOpen(false);
                             }}
-                            className="flex items-center gap-2 py-2.5"
+                            className="flex items-center gap-2.5 py-2.5 px-2.5 rounded-lg mx-1"
                           >
-                            <Check
+                            <div
                               className={cn(
-                                "h-4 w-4 text-blue-600 shrink-0",
-                                selectedCustomer === customer.id ? "opacity-100" : "opacity-0"
+                                "flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white",
+                                isDue ? "bg-amber-500" : !isSettled ? "bg-emerald-500" : "bg-slate-400",
                               )}
-                            />
+                            >
+                              {initial}
+                            </div>
                             <div className="flex flex-1 items-start justify-between gap-3 min-w-0">
                               <div className="flex flex-col min-w-0">
                                 <span className="font-semibold text-slate-900 truncate">{customer.name}</span>
                                 {customer.phone_number && (
-                                  <span className="text-[10px] text-blue-600 font-medium tracking-tight">
-                                    📞 {customer.phone_number}
+                                  <span className="flex items-center gap-1 text-[11px] text-slate-400 font-medium tracking-tight">
+                                    <Phone className="h-2.5 w-2.5" />
+                                    {customer.phone_number}
                                   </span>
                                 )}
                               </div>
                               <span
                                 className={cn(
-                                  "shrink-0 text-[11px] font-bold tabular-nums text-right",
-                                  Math.abs(balance) < 0.009
-                                    ? "text-slate-400"
-                                    : balance > 0
-                                      ? "text-amber-700"
-                                      : "text-emerald-700",
+                                  "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold tabular-nums text-right whitespace-nowrap",
+                                  isSettled
+                                    ? "bg-slate-100 text-slate-500"
+                                    : isDue
+                                      ? "bg-amber-50 text-amber-700"
+                                      : "bg-emerald-50 text-emerald-700",
                                 )}
                               >
                                 {balanceLabel}
                               </span>
                             </div>
+                            <Check
+                              className={cn(
+                                "h-4 w-4 text-emerald-600 shrink-0",
+                                selectedCustomer === customer.id ? "opacity-100" : "opacity-0"
+                              )}
+                            />
                           </CommandItem>
                         );
                       })}
