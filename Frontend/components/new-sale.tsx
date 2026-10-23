@@ -289,6 +289,10 @@ export function NewSale() {
   const cartItemRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const cartScrollContainerRef = useRef<HTMLDivElement | null>(null);
   const [customerSearchOpen, setCustomerSearchOpen] = useState(false);
+  /** Default: customers who owe the most appear first in the picker. */
+  const [customerSort, setCustomerSort] = useState<
+    "balance-desc" | "balance-asc" | "name-asc" | "name-desc"
+  >("balance-desc");
   // Ref to track scan timeout for rapid scanning
   const scanTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   // Ref to prevent duplicate processing of the same scan
@@ -1425,6 +1429,30 @@ export function NewSale() {
   const selectedCustomerBalance = selectedCustomer
     ? Number(customers.find((c) => c.id === selectedCustomer)?.outstanding_balance || 0)
     : 0;
+
+  const sortedCustomers = useMemo(() => {
+    const list = [...customers];
+    list.sort((a: any, b: any) => {
+      const balA = Number(a.outstanding_balance || 0);
+      const balB = Number(b.outstanding_balance || 0);
+      const nameA = String(a.name || "");
+      const nameB = String(b.name || "");
+      switch (customerSort) {
+        case "balance-asc":
+          return balA - balB || nameA.localeCompare(nameB);
+        case "name-asc":
+          return nameA.localeCompare(nameB);
+        case "name-desc":
+          return nameB.localeCompare(nameA);
+        case "balance-desc":
+        default:
+          // Highest due (positive balance) first; advances (negative) sink to the bottom.
+          return balB - balA || nameA.localeCompare(nameB);
+      }
+    });
+    return list;
+  }, [customers, customerSort]);
+
   const advanceAvailable = Math.max(0, -selectedCustomerBalance);
   const advanceApplicable = Math.min(advanceAvailable, total);
   const advanceApplied =
@@ -2618,14 +2646,60 @@ export function NewSale() {
                   <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                 </Button>
               </PopoverTrigger>
-              <PopoverContent className="w-[300px] p-0" align="start">
-                <Command className="border-none shadow-none">
+              <PopoverContent className="w-[min(420px,92vw)] p-0" align="start">
+                <Command
+                  className="border-none shadow-none"
+                  // Equal scores keep our balance/name sort order (cmdk would otherwise re-rank).
+                  filter={(value, search) => {
+                    if (!search.trim()) return 1;
+                    return value.toLowerCase().includes(search.toLowerCase()) ? 1 : 0;
+                  }}
+                >
                   <CommandInput placeholder="Search customer by name or phone..." className="h-10" />
-                  <CommandList className="max-h-[300px]">
+                  <div
+                    className="border-b border-slate-100 px-3 py-2 bg-slate-50/80 space-y-1.5"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                      Sort
+                    </span>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {(
+                        [
+                          ["balance-desc", "Highest due"],
+                          ["balance-asc", "Lowest due"],
+                          ["name-asc", "Name A–Z"],
+                          ["name-desc", "Name Z–A"],
+                        ] as const
+                      ).map(([value, label]) => (
+                        <button
+                          key={value}
+                          type="button"
+                          className={cn(
+                            "h-8 rounded-md border px-2 text-[11px] font-semibold transition-colors",
+                            customerSort === value
+                              ? "border-slate-900 bg-slate-900 text-white"
+                              : "border-slate-200 bg-white text-slate-600 hover:border-slate-400",
+                          )}
+                          onMouseDown={(e) => {
+                            // Keep the customer popover open; Select-in-Popover was swallowing clicks.
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setCustomerSort(value);
+                          }}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <CommandList className="max-h-[320px]">
                     <CommandEmpty>No customer found.</CommandEmpty>
                     <CommandGroup>
                       <CommandItem
-                        value="none"
+                        value="none walk-in customer"
                         onSelect={() => {
                           setSelectedCustomer(null);
                           setCustomerSearchOpen(false);
@@ -2634,38 +2708,61 @@ export function NewSale() {
                       >
                         <Check
                           className={cn(
-                            "h-4 w-4 text-blue-600",
+                            "h-4 w-4 text-blue-600 shrink-0",
                             !selectedCustomer ? "opacity-100" : "opacity-0"
                           )}
                         />
                         <span className="italic text-gray-500 font-medium">Walk-in Customer</span>
                       </CommandItem>
-                      {customers.map((customer: any) => (
-                        <CommandItem
-                          key={customer.id}
-                          value={`${customer.name} ${customer.phone_number || ""}`}
-                          onSelect={() => {
-                            setSelectedCustomer(customer.id);
-                            setCustomerSearchOpen(false);
-                          }}
-                          className="flex items-center gap-2 py-2.5"
-                        >
-                          <Check
-                            className={cn(
-                              "h-4 w-4 text-blue-600",
-                              selectedCustomer === customer.id ? "opacity-100" : "opacity-0"
-                            )}
-                          />
-                          <div className="flex flex-col">
-                            <span className="font-semibold text-slate-900">{customer.name}</span>
-                            {customer.phone_number && (
-                              <span className="text-[10px] text-blue-600 font-medium tracking-tight">
-                                📞 {customer.phone_number}
+                      {sortedCustomers.map((customer: any) => {
+                        const balance = Number(customer.outstanding_balance || 0);
+                        const balanceLabel =
+                          Math.abs(balance) < 0.009
+                            ? "Settled"
+                            : balance > 0
+                              ? `Due Rs ${balance.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+                              : `Credit Rs ${Math.abs(balance).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+                        return (
+                          <CommandItem
+                            key={customer.id}
+                            value={`${customer.name} ${customer.phone_number || ""} ${balance}`}
+                            onSelect={() => {
+                              setSelectedCustomer(customer.id);
+                              setCustomerSearchOpen(false);
+                            }}
+                            className="flex items-center gap-2 py-2.5"
+                          >
+                            <Check
+                              className={cn(
+                                "h-4 w-4 text-blue-600 shrink-0",
+                                selectedCustomer === customer.id ? "opacity-100" : "opacity-0"
+                              )}
+                            />
+                            <div className="flex flex-1 items-start justify-between gap-3 min-w-0">
+                              <div className="flex flex-col min-w-0">
+                                <span className="font-semibold text-slate-900 truncate">{customer.name}</span>
+                                {customer.phone_number && (
+                                  <span className="text-[10px] text-blue-600 font-medium tracking-tight">
+                                    📞 {customer.phone_number}
+                                  </span>
+                                )}
+                              </div>
+                              <span
+                                className={cn(
+                                  "shrink-0 text-[11px] font-bold tabular-nums text-right",
+                                  Math.abs(balance) < 0.009
+                                    ? "text-slate-400"
+                                    : balance > 0
+                                      ? "text-amber-700"
+                                      : "text-emerald-700",
+                                )}
+                              >
+                                {balanceLabel}
                               </span>
-                            )}
-                          </div>
-                        </CommandItem>
-                      ))}
+                            </div>
+                          </CommandItem>
+                        );
+                      })}
                     </CommandGroup>
                   </CommandList>
                 </Command>

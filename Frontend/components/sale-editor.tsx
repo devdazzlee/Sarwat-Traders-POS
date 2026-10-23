@@ -167,6 +167,9 @@ export function SaleEditor({ sale, open, loading = false, onOpenChange, onSucces
   const [notes, setNotes] = useState<string>("");
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
   const [customerSearchOpen, setCustomerSearchOpen] = useState(false);
+  const [customerSort, setCustomerSort] = useState<
+    "balance-desc" | "balance-asc" | "name-asc" | "name-desc"
+  >("balance-desc");
   const [productSearch, setProductSearch] = useState("");
   const [productDropdownOpen, setProductDropdownOpen] = useState(false);
   const [highlightedProductIndex, setHighlightedProductIndex] = useState(0);
@@ -220,6 +223,28 @@ export function SaleEditor({ sale, open, loading = false, onOpenChange, onSucces
     document.addEventListener("mousedown", onPointerDown);
     return () => document.removeEventListener("mousedown", onPointerDown);
   }, [open]);
+
+  const sortedCustomers = useMemo(() => {
+    const list = [...customers];
+    list.sort((a, b) => {
+      const balA = Number((a as any).outstanding_balance || 0);
+      const balB = Number((b as any).outstanding_balance || 0);
+      const nameA = String(a.name || "");
+      const nameB = String(b.name || "");
+      switch (customerSort) {
+        case "balance-asc":
+          return balA - balB || nameA.localeCompare(nameB);
+        case "name-asc":
+          return nameA.localeCompare(nameB);
+        case "name-desc":
+          return nameB.localeCompare(nameA);
+        case "balance-desc":
+        default:
+          return balB - balA || nameA.localeCompare(nameB);
+      }
+    });
+    return list;
+  }, [customers, customerSort]);
 
   const stockMap = useMemo(() => new Map(products.map((p) => [p.id, p])), [products]);
 
@@ -497,9 +522,52 @@ export function SaleEditor({ sale, open, loading = false, onOpenChange, onSucces
                         <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                       </Button>
                     </PopoverTrigger>
-                    <PopoverContent className="w-[min(320px,90vw)] p-0" align="start">
-                      <Command>
+                    <PopoverContent className="w-[min(420px,92vw)] p-0" align="start">
+                      <Command
+                        filter={(value, search) => {
+                          if (!search.trim()) return 1;
+                          return value.toLowerCase().includes(search.toLowerCase()) ? 1 : 0;
+                        }}
+                      >
                         <CommandInput placeholder="Search customer..." className="h-10" />
+                        <div
+                          className="border-b px-3 py-2 bg-slate-50/80 space-y-1.5"
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                            Sort
+                          </span>
+                          <div className="grid grid-cols-2 gap-1.5">
+                            {(
+                              [
+                                ["balance-desc", "Highest due"],
+                                ["balance-asc", "Lowest due"],
+                                ["name-asc", "Name A–Z"],
+                                ["name-desc", "Name Z–A"],
+                              ] as const
+                            ).map(([value, label]) => (
+                              <button
+                                key={value}
+                                type="button"
+                                className={cn(
+                                  "h-8 rounded-md border px-2 text-[11px] font-semibold transition-colors",
+                                  customerSort === value
+                                    ? "border-slate-900 bg-slate-900 text-white"
+                                    : "border-slate-200 bg-white text-slate-600 hover:border-slate-400",
+                                )}
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setCustomerSort(value);
+                                }}
+                              >
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
                         <CommandList className="max-h-[280px]">
                           <CommandEmpty>No customer found.</CommandEmpty>
                           <CommandGroup>
@@ -513,29 +581,52 @@ export function SaleEditor({ sale, open, loading = false, onOpenChange, onSucces
                               <Check className={cn("h-4 w-4 mr-2", !selectedCustomerId ? "opacity-100" : "opacity-0")} />
                               <span className="italic text-gray-500">Walk-in Customer</span>
                             </CommandItem>
-                            {customers.map((customer) => (
-                              <CommandItem
-                                key={customer.id}
-                                value={`${customer.name} ${customer.phone_number || ""}`}
-                                onSelect={() => {
-                                  setSelectedCustomerId(customer.id);
-                                  setCustomerSearchOpen(false);
-                                }}
-                              >
-                                <Check
-                                  className={cn(
-                                    "h-4 w-4 mr-2",
-                                    selectedCustomerId === customer.id ? "opacity-100" : "opacity-0",
-                                  )}
-                                />
-                                <div className="flex flex-col">
-                                  <span className="font-medium">{customer.name}</span>
-                                  {customer.phone_number ? (
-                                    <span className="text-xs text-gray-500">{customer.phone_number}</span>
-                                  ) : null}
-                                </div>
-                              </CommandItem>
-                            ))}
+                            {sortedCustomers.map((customer) => {
+                              const balance = Number((customer as any).outstanding_balance || 0);
+                              const balanceLabel =
+                                Math.abs(balance) < 0.009
+                                  ? "Settled"
+                                  : balance > 0
+                                    ? `Due Rs ${balance.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+                                    : `Credit Rs ${Math.abs(balance).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+                              return (
+                                <CommandItem
+                                  key={customer.id}
+                                  value={`${customer.name} ${customer.phone_number || ""} ${balance}`}
+                                  onSelect={() => {
+                                    setSelectedCustomerId(customer.id);
+                                    setCustomerSearchOpen(false);
+                                  }}
+                                >
+                                  <Check
+                                    className={cn(
+                                      "h-4 w-4 mr-2 shrink-0",
+                                      selectedCustomerId === customer.id ? "opacity-100" : "opacity-0",
+                                    )}
+                                  />
+                                  <div className="flex flex-1 items-start justify-between gap-3 min-w-0">
+                                    <div className="flex flex-col min-w-0">
+                                      <span className="font-medium truncate">{customer.name}</span>
+                                      {customer.phone_number ? (
+                                        <span className="text-xs text-gray-500">{customer.phone_number}</span>
+                                      ) : null}
+                                    </div>
+                                    <span
+                                      className={cn(
+                                        "shrink-0 text-[11px] font-bold tabular-nums text-right",
+                                        Math.abs(balance) < 0.009
+                                          ? "text-slate-400"
+                                          : balance > 0
+                                            ? "text-amber-700"
+                                            : "text-emerald-700",
+                                      )}
+                                    >
+                                      {balanceLabel}
+                                    </span>
+                                  </div>
+                                </CommandItem>
+                              );
+                            })}
                           </CommandGroup>
                         </CommandList>
                       </Command>
